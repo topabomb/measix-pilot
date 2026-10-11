@@ -263,7 +263,7 @@ class UserSettingsMigrationTest {
             SettingsStore.PROVIDERS to JsonInstant.encodeToString(settings.providers),
             SettingsStore.ASSISTANTS to JsonInstant.encodeToString(settings.assistants),
             SettingsStore.DISPLAY_SETTING to JsonInstant.encodeToString(settings.displaySetting),
-            SettingsStore.WEBDAV_CONFIG to JsonInstant.encodeToString(settings.webDavConfig),
+            SettingsStore.WEBDAV_CONFIG to "{}",
             SettingsStore.SELECT_MODEL to settings.chatModelId.toString(),
             SettingsStore.SELECT_ASSISTANT to settings.assistantId.toString(),
             SettingsStore.PENDING_ASSISTANT_DELETIONS to JsonInstant.encodeToString(listOf(tombstone)),
@@ -279,7 +279,7 @@ class UserSettingsMigrationTest {
         )
         val document = JsonInstant.decodeFromString<UserSettingsDocument>(migrated[SettingsStore.USER_SETTINGS]!!)
         assertEquals(JsonInstant.encodeToString(settings.providers), JsonInstant.encodeToString(document.configuration.providers))
-        assertEquals(settings.webDavConfig, document.configuration.webDavConfig)
+        assertEquals(null, document.personalSettings().webDavBackup.resourceId)
         assertEquals(settings.chatModelId, document.personalSettings().chatModelId)
         assertEquals(listOf(tombstone), document.internalState.pendingAssistantDeletions)
         assertEquals("catalog-owned-staging", migrated[SettingsStore.PENDING_MCP_CATALOG_MIGRATION])

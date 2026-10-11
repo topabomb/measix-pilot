@@ -72,7 +72,12 @@ val appModule = module {
 
     single { ApplicationRecoveryGate() }
     single { ConfigurationApplicationService(get(), get(), get(), get(), get(), get()) }
-    single { ConfigurationQueryService(get(), get(), get()) }
+    single { net.weero.measix.pilot.data.webdav.WebDavClient() }
+    single { net.weero.measix.pilot.service.webdav.WebDavApplicationService(get(), get(), get<AppScope>(), get(), get(), get()) }
+    single { net.weero.measix.pilot.service.webdav.WebDavTransferService(get(), get(), get()) }
+    single { net.weero.measix.pilot.service.webdav.WebDavBrowserService(get(), get(), get(), get<AppScope>(),
+        java.io.File(get<android.content.Context>().cacheDir, "webdav-files")) }
+    single { ConfigurationQueryService(get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get(), get<AppScope>(), get(), get()) }
     single { net.weero.measix.pilot.service.MemoryService(get(), get(), get(), get(), get()) }
     single { ArtifactUseCase(get(), get(), get()) }
@@ -81,7 +86,8 @@ val appModule = module {
     single { MediaExportService(get()) }
     single { StatsQueryService(get(), get(), get(), get(), get()) }
     single { ChatErrorStore() }
-    single { BackupRestoreApplicationService(get(), get(), get()) }
+    single { net.weero.measix.pilot.service.webdav.WebDavBackupService(get(), get(), get(), get()) }
+    single { BackupRestoreApplicationService(get(), get(), get(), get()) }
     single { ProviderSettingsApplicationService(get(), get()) }
     single { WorkspaceTerminalRuntime(get(), get(), get()) }
     single { WorkspaceApplicationService(get(), get(), get(), get(), java.io.File(get<Context>().cacheDir, "temp"), get()) }
@@ -215,6 +221,7 @@ val appModule = module {
             providerManager = get(),
             artifactStore = get(),
             toolOutputStore = get(),
+            webDavTransfers = get(),
         )
     }
 
@@ -314,6 +321,7 @@ val appModule = module {
                 net.weero.measix.pilot.data.sync.PendingBackupRestore.complete(get())
             },
             postRecoveryMaintenance = {
+                kotlinx.coroutines.runInterruptible { get<me.rerere.workspace.WorkspaceManager>().cleanupAllTempDirs() }
                 get<net.weero.measix.pilot.service.CustomChatFontService>().reconcile()
                 get<net.weero.measix.pilot.data.repository.WorkspaceRepository>().checkIntegrity()
                 get<net.weero.measix.pilot.data.files.ArtifactStore>().collectGarbage()
@@ -353,7 +361,7 @@ val appModule = module {
     single { net.weero.measix.pilot.service.EnterpriseIdentityDataDisposer(get(), get(), get(), get(), get()) }
     single { net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService(get(), get(), get(), get(), get<AppScope>(),
         java.io.File(get<Context>().cacheDir, "remote_workspace")) }
-    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get(), get(), get()) { get<PlatformEnterpriseService>().logout(it) } }
+    single { net.weero.measix.pilot.service.EnterpriseExitService(get(), get(), get(), get(), get<AppScope>(), get(), get(), get(), get(), get(), get(), get(), get()) { get<PlatformEnterpriseService>().logout(it) } }
     single {
         net.weero.measix.pilot.service.EnterpriseDataResetService(
             get(), get(), get(), get(), get(), get(), get(), get(), get(), get<AppScope>(),
@@ -361,7 +369,7 @@ val appModule = module {
     }
     single(createdAtStart = true) { net.weero.measix.pilot.service.EnterpriseApplicationService(
         sessions = get(), synchronization = get(), exit = get(), dataReset = get(), portals = get(), recovery = get(),
-        scope = get<AppScope>(), media = get(), terminals = get(), speech = get(), platform = get(), remoteWorkspace = get(),
+        scope = get<AppScope>(), media = get(), terminals = get(), speech = get(), platform = get(), remoteWorkspace = get(), webDav = get(),
     ) }
 
     single {

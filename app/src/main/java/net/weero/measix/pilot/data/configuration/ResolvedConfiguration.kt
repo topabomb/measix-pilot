@@ -89,6 +89,9 @@ internal data class ResolvedConfiguration(
     val storedSelections: ResourceSelections,
     val inheritedSubAssistantIds: Map<ConfigurationReference, Set<ConfigurationReference>> = emptyMap(),
     val assistantModelPreferences: Map<ConfigurationReference, AssistantModelPreference>,
+    val personalWebDavConnections: List<WebDavConnection> = emptyList(),
+    val currentPersonalWebDavConnectionId: kotlin.uuid.Uuid? = null,
+    val webDavBackup: WebDavBackupPreferences = WebDavBackupPreferences(),
 ) {
     fun availableStarters(assistantId: ConfigurationReference? = null): List<net.weero.measix.pilot.data.enterprise.EnterpriseStarter> {
         val identity = enterpriseIdentity ?: return emptyList()
@@ -352,6 +355,9 @@ internal object ConfigurationResolver {
             }
         }
         return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections, selected,
-            inheritedSubAssistants, assistantModelPreferences)
+            inheritedSubAssistants, assistantModelPreferences,
+            personalWebDavConnections = if (scope == ConfigurationScope.Personal) user.webDavConnections else emptyList(),
+            currentPersonalWebDavConnectionId = if (scope == ConfigurationScope.Personal) user.currentWebDavConnectionId else null,
+            webDavBackup = document.preferences.scopes.singleOrNull { it.scope == scope }?.webDavBackup ?: WebDavBackupPreferences())
     }
 }

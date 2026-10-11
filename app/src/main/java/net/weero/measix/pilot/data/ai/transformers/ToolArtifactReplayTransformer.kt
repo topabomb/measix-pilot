@@ -21,7 +21,10 @@ class ToolArtifactReplayTransformer(
     private suspend fun rematerializePart(part: UIMessagePart, reads: ArtifactReadLease, origins: RequestMessageOriginTracker): UIMessagePart {
         return when (part) {
             is UIMessagePart.Tool -> part.copy(
-                output = rewriter.materializeToolOutput(reads, part.output, part.metadata, origins::rememberOriginalPart)
+                output = rewriter.materializeToolOutput(reads, part.output, part.metadata) { original, rewritten ->
+                    origins.rememberOriginalPart(original, rewritten)
+                    origins.transferPartSource(original, rewritten)
+                }
                     .map { rematerializePart(it, reads, origins) },
             )
             else -> part

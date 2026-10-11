@@ -19,6 +19,9 @@
 JVM 适合先验证 UI 决策和投影，设备测试验证平台适配与真实页面交互。节点存在不等于可见、可点击或流程可完成；
 Activity 重开不等于数据库关闭重开或进程重启，Repository ACK 不等于已落盘，确定性 HTTP adapter 不等于真实 Provider。
 
+`app` 的 JVM 测试进程显式使用 2 GiB 堆，供整套 Robolectric sandbox 和 MockK instrumentation 使用；
+Gradle daemon 的堆配置不影响测试进程。超时报告须检查 suppressed 异常，内存耗尽不能按协程超时处理或放宽等待。
+
 测试放在对应模块和生产 package 下，类名用 `*Test` 与领域术语，不新增仅为分层服务的 Gradle module。
 `app/src/test/.../pilot/architecture/` 保存静态边界测试，`ai/src/test/.../provider/providers/` 保存 adapter 线协议测试；
 其余行为测试随 service、runtime、data 等现有目录归属。
@@ -34,10 +37,12 @@ Activity 重开不等于数据库关闭重开或进程重启，Repository ACK �
 | 工具压缩与缓存 | `ToolOutputCompactionPlannerTest`、`ToolOutputProtocolTest`、`ClaudeProviderPromptCacheTest` | 只处理本次成功请求可见且已消费的历史结果；三种保留策略、保护窗口和净回收阈值由 `ContextBudget` 约束，缓存稳定不能阻止必要压缩 |
 | 工具交互与子助手 | `ToolApprovalReducerTest`、`ToolCallRuntimeTest`、`TurnInteractionContinuationIntegrationTest`、`SubAssistantRunCoordinatorTest` | Mock Runner 委托只证明入口；continuation、Parent/Child 终态与正式页面需观察真实边界 |
 | Settings 与启动恢复 | `SettingsStartupTest`、`ApplicationRecoveryCoordinatorTest` | 真实 DataStore 文件/migration 的保全重试、observer 归属，以及恢复顺序、门禁、取消与 retry |
+| WebDAV 配置与传输 | `WebDavSettingsTest`、`WebDavSettingsMigrationTest`、`WebDavClientTest`、`WebDavApplicationServiceTest`、`WebDavTransferServiceTest`、`ArtifactStreamingTest` | 旧凭据及备份偏好迁移保全、个人引用及备份 round-trip、标准 DAV HTTP/207、根目录隔离、任意附件流式传输、条件写、资源交接和取消；本机服务测试不代替真实服务器、大文件与设备界面验收 |
+| WebDAV 企业备份 | `EnterpriseWebDavServiceTest`、`ConfigurationApplicationServiceTest` | 显式资源选择与按域持久化、企业 Bearer/条件上传、只读提前拒绝、绑定变化禁止恢复发布且清理临时文件 |
+| WebDAV 原生界面 | `WebDavPageAndroidTest` | 企业受管设置及备份的大字体布局、未下发资源说明、显式备份选择、矮窗口大字体下浏览器改选不改当前配置、原资源被删除后可选择剩余授权资源；保存截图供人工检查 |
 | 企业 Session、退出与页面恢复 | `RealmAccessTest`、`EnterpriseExitServiceTest`、`PlatformSessionNetworkTest`、`RemoteWorkspaceServiceTest`、`ConversationQueryServiceTest`、`ChatPageLifecycleTest` | 旧到期事件、撤权、迟到结果和重试不误用新 Session；读失败保留原异常与输入，真实撤权关闭原 lease |
 | Starter 与平台合同 | `StarterOpeningSelectionTest`、`StarterOpeningConcurrencyTest`、`ConversationPageAccessTest`；`PlatformContractSourceTest`、`PlatformCoreStarterContractTest`、`PlatformWireTest`、`EnterpriseStarterAppliedStoreTest` | 完整定义比较、原发布身份、选择 CAS、精确补偿、v4/v5 消费、ETag/304 与 Applied 重开 |
 | Android 上下文与首发 | `EnterpriseStarterPersistenceAndroidTest`、`StarterSubmissionOwnershipAndroidTest`；`ChatContextFlowAndroidTest`、`ChatDocumentContextFlowAndroidTest`、`ConversationContextAndroidTest`、`StarterEntryFlowAndroidTest`、`StarterV5ChatFlowAndroidTest` | Keystore/AtomicFile、Room、附件归还、取消和页面重开；分别标明 Mock 的配置、网络与 Provider 边界 |
-| JavaScript 工具 | `JavascriptToolTest`、`JavascriptRuntimeAndroidTest` | 前者使用桌面 QuickJS 验证截止、取消、格式化陷阱及限额；Android JNI、双 ABI 和 Release R8 需独立证据 |
 
 Artifact、GeneratedMedia、备份、MCP、Workspace 与 Speech 的行为测试随各自 Store、service 或 runtime 定位。
 Portal 的 JVM/本机 HTTP 测试观察文档及 Session 绑定、迟到请求、一次性兑换和媒体额度；WebView detach、
@@ -72,6 +77,8 @@ JVM 竞态测试用 `runTest`、`CompletableDeferred`、`Channel`、`Mutex` barr
 
 设备或外部进程可用有界条件等待真实状态。负行为允许明确的观察窗口，如暂停期间不得播放；
 窗口不能证明合成或 collector 已结束。Compose 持锁 IO 通过后台交接，不嵌套 `runBlocking` 阻断持锁协程。
+跨原生弹窗的选择菜单测试在弹窗移除和剪贴板清空后等待 `UiAutomation` 事件空闲，再执行单次长按；
+Compose 节点消失不能代替系统窗口同步，复制动作仍通过真实系统触摸和剪贴板结果验证。
 失败后重跑通过只证明该次重跑，不得用自动 retry、扩大等待或放宽断言代替根因分析。
 
 保留能保护数据完整性、wire、授权/路径边界、关键用户行为、并发恢复或真实兼容性的测试，观察稳定结果并给出可定位失败。
@@ -97,6 +104,11 @@ Windows PowerShell 使用以下命令，macOS/Linux 将入口换为 `./gradlew`�
 
 定向任务按实际模块替换。关键测试不能永久忽略、隔离或自动重试；需要外部资源的 opt-in 场景按下一节单独记录。
 
+依赖 Android DataStore 磁盘行为的 JVM 测试使用 Robolectric 指定实际 API 级别，避免 mock Android 的
+`SDK_INT=0` 选中旧文件替换分支。`robolectric.properties` 统一注册 `WindowsAtomicFileShadow`，
+仅将 AtomicFile 的 rename 替换为宿主原子覆盖，以保持 Android 在 Windows 上的测试语义；
+`WindowsAtomicFileShadowTest` 验证首次发布、覆盖和失败回滚，设备测试仍验证真实 Android IO。
+
 `.github/workflows/verify.yml` 在 PR、主分支 push、手动或复用调用时运行全模块 JVM、Debug/Release 构建、lint、diff
 和 Room schema 生成一致性检查，再运行模拟器 `connectedDebugAndroidTest`，失败仍上传报告。
 `release.yml` 复用该门禁，通过后才签名与发布。CI 关闭模拟器硬键盘；普通 CI 不提供下述 opt-in live 环境。
@@ -114,12 +126,22 @@ Windows PowerShell 使用以下命令，macOS/Linux 将入口换为 `./gradlew`�
 | Starter v5 Core | `starterV5CoreLive=true` 与 `coreStarterInput` | 真实 Snapshot/Starter/临时接入资料，输入读取后删除；区分确定性 adapter 和实际 Provider |
 | 已接入平台上下文 | `platformContextLive=true`；可选 `platformContextModelSwitch=true` | 记录发布身份、实际版本与 Provider 结果；v4 不证明 v5 opening |
 | 远程文件 | `remoteWorkspaceInput`；未接入专用设备和独立 Core/Agent Space | 配置文件与主机配合步骤见下文，普通门禁无输入时跳过 |
+| 个人 DAV 大文件 | `WebDavLargeTransferLiveAndroidTest`；`webdavLargeLive=true`、`webdavLiveRoot`、`webdavLiveUser`、`webdavLivePassword`、`webdavServerVersion`；专用标准 DAV 与至少 5 GiB 空闲设备空间 | 4 GiB / 4 GiB + 1 MiB 完整上传下载摘要、已知/未知长度、尾部 Range、临时文件流与 Java 堆增长；不代替播放器 seek 或 Core 验收 |
+| 个人 DAV 视频与取消 | `WebDavPreviewLiveAndroidTest`；`webdavPreviewLive=true`、同上连接参数、根目录下的 `webdavPreviewPath` 视频，至少 4 GiB | 正式管理器播放/近尾解码/关闭；取消下载不发布附件并回滚本次 Artifact 创建；临时连接清理，恢复原当前项并核验备份选择未改 |
+| 企业 DAV Core | `EnterpriseWebDavLiveAndroidTest`；`coreWebDavInput` 指向未接入专用设备 app cache 内的一次性接入文件，含 enrollment、resourceId、agentSpaceId、server；隔离 Core 使用 15 秒 access token | 正式接入/同步/当前绑定、特殊文件名、分块上传/摘要、覆盖冲突、跨短 token 到期的已准入长流、令牌刷新、实时只读切换与正式退出；管理 adapter 为 fixture 时不声称真实 Agent Space 验收 |
+| 已接入企业 DAV 托管附件 | `WebDavManagedTransferLiveAndroidTest`；`webDavManagedTransfersLive=true`；专用且已接入企业设备、当前 DAV 可写，保留数据安装与直接 instrumentation | 正式工具定义/执行、真实 DAV、任意二进制/PNG/文本摘要、重复下载独立身份、先提交引用后发布、下载后再次上传；不包含 Provider 自主调用，清理仅本次目录和测试会话 |
 | Linux Rootfs | `prootRootfsUrl`；匹配 ABI 的已核验镜像 | `WorkspaceProotAndroidTest` 使用临时 Workspace；native PTY 不证明 PRoot，页大小和 ABI 分别记录 |
 | HTTP ASR 控制器录音与交接 | `httpAsrLiveAudio=true`；持续有效麦克风输入 | `HttpAsrLifecycleInstrumentedTest` 使用转写替身，证明 WAV、有效信号、取消与清理，不证明真实 HTTP 上传或服务器识别 |
 | MCP 目录冷启动 | `McpLifecycleUiAndroidTest#confirmedDirectoryRestoresWithoutFailureAfterProcessRestart`，先 `mcpColdSeed=true`，停止目标进程后再 `mcpColdVerify=true` | 同一专用设备保留安装和数据；真实 Catalog 持久化与正式设置页，HTTP 为本地 fixture |
 
 Gradle 参数用 `'-Pandroid.testInstrumentationRunnerArguments.<name>=<value>'`，避免 PowerShell 拆分。
 缺 Rootfs fixture 明确跳过；ASR 录音取消与准入撤销可独立验证，真实上传和识别另需服务端证据。
+DAV 大文件 live 只修改随机生成的测试目录，逐例删除已完成源文件再下载，最终清理自有目录。
+结果保存在目标应用 cache 的 `webdav-large-live-evidence.json`；记录真实服务版本、摘要、字节数和清理结果，
+不要把只启动 instrumentation 或生成证据文件视为通过，应同时核对 runner 终态与每个 case。
+企业 DAV 用例通过 cache 的 `core-webdav-phase` 请求本轮隔离管理端切换 `read-only`、`full`；
+主机仅在 Core 确认生效后将对应值写入 `core-webdav-ack`，不得向设备下发管理员凭据。
+结果位于 `core-webdav-live-evidence.json`；主机控制证据与设备终态共同证明权限场景，未完成握手会失败。
 `McpLifecycleUiAndroidTest` 的普通用例通过真实 HTTP/SSE、Koin owners 和正式设置页验证连接、刷新失败保留目录、
 通知退化仍能调用及显式恢复，并保存截图。冷启动两阶段用直接 instrumentation 运行，阶段之间不能卸载包；
 验证阶段删除自己创建的配置、目录及 marker。`SettingMcpPageAndroidTest` 的企业暗色大字体截图使用受控 query 投影，

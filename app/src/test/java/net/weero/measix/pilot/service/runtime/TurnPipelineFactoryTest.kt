@@ -19,7 +19,7 @@ import org.junit.Test
 
 /**
  * TurnPipelineFactory 装配等价性测试。
- * 锁定单一 owner 下按 TurnKind 给出的输入顺序与共享输出顺序。
+ * 锁定主、子助手共享的输入与输出顺序。
  */
 class TurnPipelineFactoryTest {
 
@@ -44,8 +44,8 @@ class TurnPipelineFactoryTest {
     }
 
     @Test
-    fun `USER input appends template replay then projection`() {
-        val classes = factory().input(TurnKind.USER).map { it::class }
+    fun `shared input appends template replay then projection`() {
+        val classes = factory().input().map { it::class }
         assertEquals(
             listOf(
                 TimeReminderTransformer::class,
@@ -60,20 +60,4 @@ class TurnPipelineFactoryTest {
         )
     }
 
-    @Test
-    fun `SUB_ASSISTANT input omits artifact replay`() {
-        val classes = factory().input(TurnKind.SUB_ASSISTANT).map { it::class }
-        assertTrue(ToolArtifactReplayTransformer::class !in classes)
-        assertEquals(
-            listOf(
-                TimeReminderTransformer::class,
-                PromptInjectionTransformer::class,
-                PlaceholderTransformer::class,
-                DocumentAsPromptTransformer::class,
-                TemplateTransformer::class,
-                AttachmentProjectionTransformer::class,
-            ),
-            classes,
-        )
-    }
 }

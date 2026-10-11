@@ -34,6 +34,7 @@
 |------|------|
 | 用户上传 / 编辑消息 | `ConversationApplicationService` / `ConversationTurnService` 提交前 |
 | `generate_image` 产出 | 工具成功时对 Image part 写入附件元数据 |
+| `webdav_download` 产出 | 工具结果保留 Artifact metadata 与 Image/Document 附件，沿同一结果检查点发布 |
 | MCP 图片内容 | `McpToolCallExecutor` 转本地文件时 |
 | base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并写入附件元数据 |
 | `assistant_call` 注入 Child | 为新 Image part 写入附件元数据；原文件身份不变，不复制 payload |
@@ -56,7 +57,7 @@ MCP 图片、生成结果、配置图片及生成预览在各专用入口执行�
 | 身份 | 标识 | 用途 | 交付方式 |
 |------|------|------|----------|
 | 逻辑身份 | `attachment:<uuid>` | durable metadata、克隆与 UI 稳定 handle 索引 | 仅内部使用，不作为工具入参或模型披露 |
-| 托管文件路径 | `/upload/<file>` | 识别、委托与 workspace 读取使用同一路径；前两者不依赖工作区 | `[Attachment path=...]`、Tool Result `file.path`、子助手 `artifacts[].path` |
+| 托管文件路径 | `/upload/<file>` | 识别、委托、DAV 传输与 workspace 读取使用同一路径；只有 workspace 读取需要工作区 | `[Attachment path=...]`、Tool Result `file.path`、子助手 `artifacts[].path` |
 | 工作产物路径 | `/workspace/...` | workspace 工具族读写 | workspace 工具结果；不属于附件识别输入 |
 
 `/upload` 是受管文件的工具访问路径，读取由 ArtifactStore 授权。Shell 只获得本次 `uploads` 显式列出的本域授权副本，PTY 不挂载 upload；具体见 [Workspace](workspace-architecture.md)。内部数据库 ID 不进入模型可见 JSON。
@@ -133,7 +134,7 @@ Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadS
 并为 `inspect_attachments` / `assistant_call` 顶层 `attachments` 中的合法路径补充预览。
 `inspect_attachments` 的 HTTP(S) 输入另投影为页面绑定的网络 `ImageSource`，缩略图和大图复用现有查看器；按需读取时使用与识别相同的 Basic、LAN 和大小限制，不新增持久附件或临时文件。
 UI 只查询该 map，不扫描 metadata；map 不是持久引用或读取授权，`file:` 资源没有有效投影时不能回退原路径。
-Fork/Child clone 仅按已取得的文件复制映射重写这两个工具的入参路径，不改其他字段或正文，不建立旧路径别名。
+Fork/Child clone 仅按已取得的文件复制映射重写 `inspect_attachments` / `assistant_call` 的 `attachments` 与 `webdav_upload.file_path`，不改其他字段或正文，不建立旧路径别名。
 
 ### 导出与生成预览
 
@@ -204,12 +205,12 @@ Fork/Child clone 仅按已取得的文件复制映射重写这两个工具的入
 
 `role` 只存在于消息层；`parts` 内没有第二层 role。投影器因此不创建伪造的 USER 消息，而是在已有来源容器内替换或前置对应 Image 的事实文本。工具结果在 Claude/Gemini 外层虽然使用 user role，但由 typed `tool_result` / `functionResponse` 在线协议中明确标为工具结果；客户端不据此保证模型的理解或遵循行为。
 
-- `ToolArtifactReplayTransformer` 按 artifact metadata 重新物化历史工具产物路径与 Image URL。
+- `ToolArtifactReplayTransformer` 按 artifact metadata 重新物化历史工具产物路径与 Image/Document URL。
 - 历史 Assistant 的 replay-safe 投影移除未持久化图片与媒体保存失败占位；Tool.output 中以媒体失败文本表达，不伪造可读取路径。识图工具的内存 data URI 输入属于独立请求，不受此历史回放规则限制。
 - `resultStatus` 表示 Tool Result 存在，合法空 output 原样保留。媒体缺失不改变执行事实，也不能触发自动重执行。
 - 未成功 Assistant 的完整 Step 前缀、尾部处理及 Provider 严格回放策略见 [turn-step-execution.md](turn-step-execution.md) 和 [protocol-reference.md](protocol-reference.md)。
 
-主、子助手共用文档、模板和附件投影；主助手额外执行 `ToolArtifactReplayTransformer`。
+主、子助手共用文档、模板、工具附件重放和附件投影。DAV 下载非图片文件只交付类型与路径，不自动解析正文。
 `generate_image` 的 Image 保存在 Tool.output，后续 Step 按本次能力回放。完整输入和输出顺序由
 [模型输入格式](prompts-and-tools.md)维护，本投影不创建状态披露或会话摘要。
 

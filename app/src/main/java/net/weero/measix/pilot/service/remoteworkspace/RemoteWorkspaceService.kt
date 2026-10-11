@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.remoteworkspace
 
+import net.weero.measix.pilot.service.files.*
+
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -33,17 +35,12 @@ internal data class RemoteWorkspaceQueryState(
     val refreshing: Boolean,
     val diagnostic: String? = null,
 )
-internal data class RemoteFile(
-    val path: String, val directory: Boolean, val size: Long?, val modifiedAt: String?, val etag: String?,
-) {
-    val name: String get() = path.substringAfterLast('/')
-    val versioned: Boolean get() = WorkspaceFileRules.strongEtag(etag)
-}
-internal data class RemoteDirectory(val path: String, val files: List<RemoteFile>, val usedBytes: Long?, val availableBytes: Long?)
-internal enum class RemoteOutcome { SUCCEEDED, FAILED, PARTIAL, UNKNOWN, NOT_STARTED, CANCELLED }
-internal data class RemoteOperationResult(val path: String, val outcome: RemoteOutcome, val diagnostic: String? = null)
-internal enum class RemoteFileAction { DELETE, MOVE, COPY }
-
+internal data class WorkspaceDavSnapshot(
+    val access: RealmAccess.Enterprise,
+    val connection: PlatformConnection,
+    val projection: PlatformWorkspaceProjection?,
+    val diagnostic: String? = null,
+)
 /** A transient capability, never serialized into navigation, saved state, or a durable draft. */
 internal class RemoteWorkspaceHandle internal constructor(
     internal val id: Uuid,
@@ -52,16 +49,9 @@ internal class RemoteWorkspaceHandle internal constructor(
     internal val space: String,
     internal val binding: Long,
 )
-internal data class RemoteTextDocument(val file: RemoteFile, val content: WorkspaceText)
 internal class RemoteWorkspaceRevocation internal constructor(private val jobs: List<Job>, private val cleanup: suspend () -> Unit = {}) {
     suspend fun awaitClosed() { jobs.joinAll(); cleanup() }
 }
-internal interface RemoteExportDestination {
-    val description: String
-    fun open(): OutputStream
-    fun delete(): Boolean
-}
-
 /** Owns only client requests and unpublished local copies, never the remote persistent file tree. */
 internal class RemoteWorkspaceService(
     private val sessions: EnterpriseSessionController,
@@ -76,6 +66,7 @@ internal class RemoteWorkspaceService(
     private data class Pending(val selection: RealmSelection, val handle: RemoteWorkspaceHandle?, val job: Job)
     private val monitor = Any()
     private val jobs = mutableSetOf<Pending>()
+    private val davQueries = mutableSetOf<Pair<RealmAccess.Enterprise, Job>>()
     private val handles = mutableSetOf<RemoteWorkspaceHandle>()
     private data class WriteTarget(val access: RealmAccess, val connection: PlatformConnection, val space: String)
     private fun RemoteWorkspaceHandle.writeTarget() = WriteTarget(selection.access, connection, space)
@@ -83,13 +74,59 @@ internal class RemoteWorkspaceService(
     private val verified = mutableMapOf<RemoteWorkspaceHandle, MutableSet<String>>()
     private val copies = mutableMapOf<File, RemoteWorkspaceHandle>()
     private val changingConnections = mutableSetOf<RealmAccess>()
-    private var current: State? = null
+    private val state = MutableStateFlow<State?>(null)
+    private var current: State?
+        get() = state.value
+        set(value) { state.value = value }
     private var generation = 0L
+    private var davQueryRevision = 0L
     private var refreshing: Pair<Identity, Deferred<Unit>>? = null
     private val _summary = MutableStateFlow<RemoteWorkspaceSummary?>(null)
     val summary: StateFlow<RemoteWorkspaceSummary?> = _summary.asStateFlow()
     private val _queryState = MutableStateFlow<RemoteWorkspaceQueryState?>(null)
     val queryState = _queryState.asStateFlow()
+
+    fun observeDavProjection(): Flow<WorkspaceDavSnapshot?> = combine(state, queryState) { value, query ->
+        value?.let { WorkspaceDavSnapshot(it.identity.selection.access as RealmAccess.Enterprise,
+            it.identity.connection, it.projection, query?.takeIf { q -> q.selection == it.identity.selection }?.diagnostic) }
+    }
+
+    /** A Turn query retains its original Session and does not require a selected Files page. */
+    suspend fun readDavProjection(access: RealmAccess.Enterprise): WorkspaceDavSnapshot = coroutineScope {
+        recovery.awaitReady()
+        sessions.withRealmAccess(access) {}
+        val connection = sessions.platformContext(access.sessionId).platform.connection
+        val registration = access to currentCoroutineContext().job
+        val revision = synchronized(monitor) {
+            check(access !in changingConnections) { "workspace_connection_change_in_progress" }
+            davQueries += registration
+            ++davQueryRevision
+        }
+        try {
+            val projection = try {
+                platform.read(access.sessionId) { original, token ->
+                    check(original == connection) { "workspace_connection_changed" }
+                    client.state(original, token)
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) {
+                synchronized(monitor) {
+                    current?.takeIf { davQueryRevision == revision && it.identity.selection.access == access && it.identity.connection == connection }?.let {
+                        _queryState.value = RemoteWorkspaceQueryState(it.identity.selection, refreshing = false, diagnostic = failure.userVisibleDiagnostic())
+                    }
+                }
+                throw failure
+            }
+            sessions.withRealmAccess(access) {}
+            check(sessions.platformContext(access.sessionId).platform.connection == connection) { "workspace_connection_changed" }
+            synchronized(monitor) {
+                current?.takeIf { davQueryRevision == revision && it.identity.selection.access == access && it.identity.connection == connection }?.let {
+                    _queryState.value = RemoteWorkspaceQueryState(it.identity.selection, refreshing = false)
+                }
+            }
+            WorkspaceDavSnapshot(access, connection, projection)
+        } finally { synchronized(monitor) { davQueries -= registration } }
+    }
 
     init {
         scope.launch {
@@ -116,10 +153,11 @@ internal class RemoteWorkspaceService(
     /** Called under the Session lock during switching: no suspend, IO, or re-entry to Session. */
     fun revoke(access: RealmAccess): RemoteWorkspaceRevocation = synchronized(monitor) {
         generation++
+        davQueryRevision++
         handles.removeAll { it.selection.access == access }
         verified.keys.removeAll { it.selection.access == access }
         if (current?.identity?.selection?.access == access) { current = null; _summary.value = null; _queryState.value = null; refreshing = null }
-        val captured = jobs.filter { it.selection.access == access }.map { it.job }
+        val captured = jobs.filter { it.selection.access == access }.map { it.job } + davQueries.filter { it.first == access }.map { it.second }
         captured.forEach { it.cancel() }
         RemoteWorkspaceRevocation(captured) { cleanupCopies { it.selection.access == access } }
     }
@@ -148,6 +186,7 @@ internal class RemoteWorkspaceService(
                 check(selection.access !in changingConnections) { "workspace_connection_change_in_progress" }
                 refreshing?.takeIf { it.first == identity && it.second.isActive }?.second ?: run {
                     val stamp = ++generation
+                    davQueryRevision++
                     val old = current?.takeIf { it.identity == identity }
                     current = old ?: State(identity, null)
                     _summary.value = old?.let(::project)?.copy(status = RemoteWorkspaceStatus.CHECKING)
@@ -264,7 +303,7 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    suspend fun list(handle: RemoteWorkspaceHandle, path: String): RemoteDirectory = operation(handle, retryRejectedToken = true) { token ->
+    suspend fun list(handle: RemoteWorkspaceHandle, path: String): BrowserDirectory = operation(handle, retryRejectedToken = true) { token ->
         val result = client.list(handle.connection, token, handle.space, path)
         validate(handle)
         synchronized(monitor) {
@@ -275,11 +314,11 @@ internal class RemoteWorkspaceService(
                 }
             }
         }
-        RemoteDirectory(path, result.entries.map { RemoteFile(it.path, it.kind == PlatformWorkspaceFileEntryKind.DIRECTORY,
+        BrowserDirectory(path, result.entries.map { BrowserFile(it.path, it.kind == PlatformWorkspaceFileEntryKind.DIRECTORY,
             it.size, it.modifiedAt, it.etag) }, result.usedBytes, result.availableBytes)
     }
 
-    suspend fun mediaSource(handle: RemoteWorkspaceHandle, file: RemoteFile): net.weero.measix.pilot.service.files.MediaPreviewSource {
+    suspend fun mediaSource(handle: RemoteWorkspaceHandle, file: BrowserFile): net.weero.measix.pilot.service.files.MediaPreviewSource {
         val metadata = operation(handle, retryRejectedToken = true) { token ->
             client.mediaMetadata(handle.connection, token, handle.space, file.path)
         }
@@ -291,39 +330,42 @@ internal class RemoteWorkspaceService(
         )
     }
 
-    suspend fun readText(handle: RemoteWorkspaceHandle, file: RemoteFile): RemoteTextDocument = operation(handle, retryRejectedToken = true) { token ->
+    suspend fun readText(handle: RemoteWorkspaceHandle, file: BrowserFile): BrowserTextDocument = operation(handle, retryRejectedToken = true) { token ->
         val buffer = ByteArrayOutputStream()
         val metadata = client.download(handle.connection, token, handle.space, file.path, buffer, WorkspaceFileRules.TEXT_LIMIT.toLong())
-        RemoteTextDocument(file.copy(etag = metadata.etag, size = metadata.length), WorkspaceText.decode(buffer.toByteArray()))
+        BrowserTextDocument(
+            file.copy(etag = metadata.etag, size = metadata.length, versioned = WorkspaceFileRules.strongEtag(metadata.etag)),
+            WorkspaceText.decode(buffer.toByteArray()),
+        )
     }
 
     suspend fun upload(handle: RemoteWorkspaceHandle, path: String, etag: String?, length: Long?,
         input: () -> InputStream, progress: (Long, Long?) -> Unit = { _, _ -> },
-    ): RemoteOperationResult = write(handle, path) { token ->
+    ): BrowserOperationResult = write(handle, path) { token ->
         client.upload(handle.connection, token, handle.space, path, etag, length, input, progress)
     }
 
-    suspend fun save(handle: RemoteWorkspaceHandle, document: RemoteTextDocument, text: String,
+    suspend fun save(handle: RemoteWorkspaceHandle, document: BrowserTextDocument, text: String,
         destination: String = document.file.path,
-    ): RemoteOperationResult {
+    ): BrowserOperationResult {
         val bytes = document.content.encode(text)
         val etag = if (destination == document.file.path) WorkspaceFileRules.requireEtag(requireNotNull(document.file.etag)) else null
         return upload(handle, destination, etag, bytes.size.toLong(), { bytes.inputStream() })
     }
 
-    suspend fun createDirectory(handle: RemoteWorkspaceHandle, path: String): RemoteOperationResult = write(handle, path) {
+    suspend fun createDirectory(handle: RemoteWorkspaceHandle, path: String): BrowserOperationResult = write(handle, path) {
         client.mutate(handle.connection, it, handle.space, PlatformWorkspaceFileMutation(PlatformWorkspaceFileMutationAction.MKCOL, path))
     }
 
-    suspend fun mutate(handle: RemoteWorkspaceHandle, action: RemoteFileAction, file: RemoteFile,
-        destination: String? = null, overwrite: RemoteFile? = null, recursiveConfirmed: Boolean = false,
-    ): RemoteOperationResult {
+    suspend fun mutate(handle: RemoteWorkspaceHandle, action: BrowserFileAction, file: BrowserFile,
+        destination: String? = null, overwrite: BrowserFile? = null, recursiveConfirmed: Boolean = false,
+    ): BrowserOperationResult {
         if (!file.directory) WorkspaceFileRules.requireEtag(requireNotNull(file.etag))
-        if (action != RemoteFileAction.DELETE) {
+        if (action != BrowserFileAction.DELETE) {
             WorkspaceFileRules.path(requireNotNull(destination))
             require(destination != file.path && (!file.directory || !destination.startsWith(file.path + "/"))) { "workspace_invalid_destination" }
         }
-        if (file.directory && action == RemoteFileAction.DELETE) require(recursiveConfirmed) { "workspace_recursive_confirmation_required" }
+        if (file.directory && action == BrowserFileAction.DELETE) require(recursiveConfirmed) { "workspace_recursive_confirmation_required" }
         if (overwrite != null) {
             require(!file.directory && !overwrite.directory && overwrite.path == destination)
             WorkspaceFileRules.requireEtag(requireNotNull(overwrite.etag))
@@ -346,11 +388,11 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    fun outcomeAfterCancellation(handle: RemoteWorkspaceHandle, path: String): RemoteOutcome = synchronized(monitor) {
-        if (path in uncertain[handle.writeTarget()].orEmpty()) RemoteOutcome.UNKNOWN else RemoteOutcome.CANCELLED
+    fun outcomeAfterCancellation(handle: RemoteWorkspaceHandle, path: String): BrowserOutcome = synchronized(monitor) {
+        if (path in uncertain[handle.writeTarget()].orEmpty()) BrowserOutcome.UNKNOWN else BrowserOutcome.CANCELLED
     }
 
-    suspend fun verifyUnknown(handle: RemoteWorkspaceHandle, path: String): RemoteFile? {
+    suspend fun verifyUnknown(handle: RemoteWorkspaceHandle, path: String): BrowserFile? {
         val parent = path.substringBeforeLast('/', "")
         refresh(handle.selection)
         val directory = list(handle, parent)
@@ -359,7 +401,7 @@ internal class RemoteWorkspaceService(
         return directory.files.find { it.path == path }
     }
 
-    suspend fun download(handle: RemoteWorkspaceHandle, file: RemoteFile, output: () -> OutputStream,
+    suspend fun download(handle: RemoteWorkspaceHandle, file: BrowserFile, output: () -> OutputStream,
         progress: (Long, Long?) -> Unit = { _, _ -> },
     ) = operation(handle) { token ->
         withContext(Dispatchers.IO) {
@@ -367,22 +409,22 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    suspend fun export(handle: RemoteWorkspaceHandle, file: RemoteFile, destination: RemoteExportDestination,
+    suspend fun export(handle: RemoteWorkspaceHandle, file: BrowserFile, destination: BrowserExportDestination,
         progress: (Long, Long?) -> Unit = { _, _ -> },
     ) = exportDestination(handle, file, destination, { destination }, progress)
 
     /** Accept an already-created SAF document synchronously, before its UI owner can disappear. */
-    fun acceptExport(handle: RemoteWorkspaceHandle, file: RemoteFile, destination: RemoteExportDestination,
+    fun acceptExport(handle: RemoteWorkspaceHandle, file: BrowserFile, destination: BrowserExportDestination,
         progress: (Long, Long?) -> Unit = { _, _ -> },
     ): Deferred<Unit> = synchronized(monitor) {
         tracked(handle.selection, handle) { export(handle, file, destination, progress) }
     }
 
-    suspend fun exportCreated(handle: RemoteWorkspaceHandle, file: RemoteFile,
-        create: () -> RemoteExportDestination, progress: (Long, Long?) -> Unit = { _, _ -> },
+    suspend fun exportCreated(handle: RemoteWorkspaceHandle, file: BrowserFile,
+        create: () -> BrowserExportDestination, progress: (Long, Long?) -> Unit = { _, _ -> },
     ) = exportDestination(handle, file, null, create, progress)
 
-    fun discardExport(destination: RemoteExportDestination, onFailure: (Throwable) -> Unit) {
+    fun discardExport(destination: BrowserExportDestination, onFailure: (Throwable) -> Unit) {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable + Dispatchers.IO) {
                 try { check(destination.delete()) { "workspace_incomplete_export_remains: ${destination.description}" } }
@@ -391,8 +433,8 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    private suspend fun exportDestination(handle: RemoteWorkspaceHandle, file: RemoteFile,
-        initial: RemoteExportDestination?, create: () -> RemoteExportDestination, progress: (Long, Long?) -> Unit,
+    private suspend fun exportDestination(handle: RemoteWorkspaceHandle, file: BrowserFile,
+        initial: BrowserExportDestination?, create: () -> BrowserExportDestination, progress: (Long, Long?) -> Unit,
     ) {
         var owned = initial
         operation(handle, onFailure = { error ->
@@ -412,7 +454,7 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    suspend fun previewCopy(handle: RemoteWorkspaceHandle, file: RemoteFile, maxBytes: Long = WorkspaceFileRules.PREVIEW_LIMIT): File {
+    suspend fun previewCopy(handle: RemoteWorkspaceHandle, file: BrowserFile, maxBytes: Long = WorkspaceFileRules.PREVIEW_LIMIT): File {
         var owned: File? = null
         return operation(handle, onFailure = { error ->
             withContext(NonCancellable + Dispatchers.IO) {
@@ -441,7 +483,7 @@ internal class RemoteWorkspaceService(
     }
 
     /** The callback is the system handoff boundary; returned shares remain readable for 24 hours. */
-    suspend fun share(handle: RemoteWorkspaceHandle, file: RemoteFile, deliver: (File) -> Unit) {
+    suspend fun share(handle: RemoteWorkspaceHandle, file: BrowserFile, deliver: (File) -> Unit) {
         operation(handle) { token ->
             var owned: File? = null
             try {
@@ -474,7 +516,7 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    fun imageSource(handle: RemoteWorkspaceHandle, file: RemoteFile, maxBytes: Long = net.weero.measix.pilot.service.workspace.MAX_WORKSPACE_IMAGE_BYTES.toLong()) =
+    fun imageSource(handle: RemoteWorkspaceHandle, file: BrowserFile, maxBytes: Long = net.weero.measix.pilot.service.workspace.MAX_WORKSPACE_IMAGE_BYTES.toLong()) =
         net.weero.measix.pilot.service.ImageSource(
             cacheIdentity = "remote:${handle.id}:${file.path}:${file.etag ?: Uuid.random()}",
             origin = net.weero.measix.pilot.service.ImageOrigin.NETWORK, displayName = file.name,
@@ -529,13 +571,13 @@ internal class RemoteWorkspaceService(
 
     private suspend fun write(handle: RemoteWorkspaceHandle, path: String,
         send: suspend (String) -> PlatformWorkspaceFileResult,
-    ): RemoteOperationResult {
+    ): BrowserOperationResult {
         var sent = false
         var confirmedRejection = false
         return try {
             operation(handle, writing = true) { token ->
                 if (synchronized(monitor) { path in uncertain[handle.writeTarget()].orEmpty() }) {
-                    return@operation RemoteOperationResult(path, RemoteOutcome.UNKNOWN, "workspace_verify_unknown_result_first")
+                    return@operation BrowserOperationResult(path, BrowserOutcome.UNKNOWN, "workspace_verify_unknown_result_first")
                 }
                 sent = true
                 val result = try {
@@ -545,9 +587,9 @@ internal class RemoteWorkspaceService(
                     confirmedRejection = !unknownWriteFailure(error)
                     throw error
                 }
-                val outcome = RemoteOutcome.valueOf(result.outcome.name)
-                if (outcome == RemoteOutcome.UNKNOWN) synchronized(monitor) { uncertain.getOrPut(handle.writeTarget()) { mutableSetOf() } += path }
-                RemoteOperationResult(path, outcome, result.failures.joinToString("\n") { "${it.path}: HTTP ${it.status} ${it.code}" }
+                val outcome = BrowserOutcome.valueOf(result.outcome.name)
+                if (outcome == BrowserOutcome.UNKNOWN) synchronized(monitor) { uncertain.getOrPut(handle.writeTarget()) { mutableSetOf() } += path }
+                BrowserOperationResult(path, outcome, result.failures.joinToString("\n") { "${it.path}: HTTP ${it.status} ${it.code}" }
                     .let { if (result.truncated) "$it\nworkspace_failure_details_truncated" else it }.ifBlank { null })
             }
         } catch (error: Exception) {
@@ -555,7 +597,7 @@ internal class RemoteWorkspaceService(
             if (unknown) synchronized(monitor) { uncertain.getOrPut(handle.writeTarget()) { mutableSetOf() } += path }
             if (error is CancellationException) throw error
             android.util.Log.e("RemoteWorkspace", "File write failed", error)
-            RemoteOperationResult(path, if (unknown) RemoteOutcome.UNKNOWN else RemoteOutcome.FAILED, error.userVisibleDiagnostic())
+            BrowserOperationResult(path, if (unknown) BrowserOutcome.UNKNOWN else BrowserOutcome.FAILED, error.userVisibleDiagnostic())
         }
     }
 

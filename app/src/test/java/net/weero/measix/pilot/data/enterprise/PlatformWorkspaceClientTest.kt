@@ -179,6 +179,42 @@ class PlatformWorkspaceClientTest {
         }
     }
 
+    @Test fun `optional DAV permission failure keeps the designated identity and existing Files capability`() = runBlocking {
+        val original = javaClass.getResourceAsStream("/contracts/workspace/projection-files-only.json")!!
+            .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonObject }
+        val resource = "dav_550e8400-e29b-41d4-a716-446655440000"
+        var wire = original.toString()
+        val server = server { reply(200, wire) }
+        try {
+            val absent = client.state(connection(server), "token")
+            assertNull(absent.fileExchangeWebdavResourceId)
+            assertNull(absent.webdav)
+            assertTrue(absent.filesAvailable)
+            for (mode in listOf(null, JsonNull, JsonPrimitive("FUTURE"), JsonPrimitive("READ_ONLY"), JsonPrimitive("FULL"))) {
+                val dav = buildJsonObject {
+                    put("resourceId", resource); put("available", true); put("reason", "ready"); put("bindingRevision", 7)
+                    mode?.let { put("accessMode", it) }
+                }
+                wire = JsonObject(original + mapOf("fileExchangeWebdavResourceId" to JsonPrimitive(resource), "webdav" to dav)).toString()
+                val projected = client.state(connection(server), "token")
+                assertTrue(projected.filesAvailable)
+                assertEquals(absent.agentSpaceId, projected.agentSpaceId)
+                assertEquals(resource, projected.fileExchangeWebdavResourceId)
+                val state = requireNotNull(projected.webdav)
+                assertEquals(resource, state.resourceId)
+                assertEquals(7L, state.bindingRevision)
+                if (mode == JsonPrimitive("READ_ONLY") || mode == JsonPrimitive("FULL")) {
+                    assertTrue(state.available)
+                    assertEquals(mode.jsonPrimitive.content, state.accessMode?.name)
+                } else {
+                    assertFalse(state.available)
+                    assertNull(state.accessMode)
+                    assertEquals("webdav_access_mode_unavailable", state.reason)
+                }
+            }
+        } finally { server.stop(0) }
+    }
+
     @Test fun `known missing endpoint is optional and a later refresh discovers upgraded Core`() = runBlocking {
         val current = javaClass.getResourceAsStream("/contracts/workspace/projection-files-only.json")!!.bufferedReader().use { it.readText() }
         val calls = AtomicInteger()

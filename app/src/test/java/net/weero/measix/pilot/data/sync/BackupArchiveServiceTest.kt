@@ -96,6 +96,26 @@ class BackupArchiveServiceTest {
         PendingBackupRestore.complete(context)
     }
 
+    @Test
+    fun `remote publication rejection removes staged restore without publishing pending`() = runTest {
+        val input = archive(mapOf("settings.json" to "{}".toByteArray()))
+        var reachedPublication = false
+        try {
+            service.stageRestore(input, BackupSelection(false, false)) {
+                reachedPublication = true
+                throw IllegalStateException("webdav_connection_changed")
+            }
+            error("Revoked source must not publish")
+        } catch (failure: IllegalStateException) {
+            assertEquals("webdav_connection_changed", failure.message)
+        }
+        assertTrue(reachedPublication)
+        assertFalse(PendingBackupRestore.pendingDir(context).exists())
+        assertFalse(PendingBackupRestore.stagingDir(context).exists())
+        service.stageRestore(input, BackupSelection(false, false))
+        assertTrue(PendingBackupRestore.pendingDir(context).exists())
+    }
+
     private lateinit var context: Context
     private lateinit var service: BackupArchiveService
     private lateinit var catalogStore: McpCatalogStore

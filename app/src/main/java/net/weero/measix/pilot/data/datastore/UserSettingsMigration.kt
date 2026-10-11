@@ -88,6 +88,7 @@ internal class UserSettingsMigration : DataMigration<Preferences> {
                         selectedTTSProviderId = personal.selectedTTSProviderId.takeIf { currentData.contains(SELECTED_TTS_PROVIDER) },
                         selectedASRProviderId = personal.selectedASRProviderId.takeIf { currentData.contains(SELECTED_ASR_PROVIDER) },
                     ),
+                    webDavBackup = old.webDavBackup,
                 )),
             ),
         )
@@ -138,47 +139,51 @@ internal class UserSettingsMigration : DataMigration<Preferences> {
     override suspend fun cleanUp() = Unit
 }
 
-private fun readLegacySettings(preferences: Preferences): Settings = Settings(
-    favoriteModels = preferences.json(FAVORITE_MODELS, emptyList()),
-    chatModelId = preferences[SELECT_MODEL]?.let { ConfigurationReference.parse(it) }
-        ?: DEFAULT_AUTO_MODEL_ID,
-    fastModelId = preferences[FAST_MODEL]?.let { ConfigurationReference.parse(it) }
-        ?: DEFAULT_AUTO_MODEL_ID,
-    titleModelId = preferences[TITLE_MODEL]?.let { ConfigurationReference.parse(it) },
-    enableSuggestion = preferences[ENABLE_SUGGESTION] != false,
-    suggestionModelId = preferences[SUGGESTION_MODEL]?.let { ConfigurationReference.parse(it) },
-    imageGenerationModelId = preferences[IMAGE_GENERATION_MODEL]?.let { ConfigurationReference.parse(it) }
-        ?: DEFAULT_AUTO_MODEL_ID,
-    titlePrompt = preferences[TITLE_PROMPT] ?: DEFAULT_TITLE_PROMPT,
-    suggestionPrompt = preferences[SUGGESTION_PROMPT] ?: DEFAULT_SUGGESTION_PROMPT,
-    attachmentInspectionModelId = preferences[ATTACHMENT_INSPECTION_MODEL]?.let { ConfigurationReference.parse(it) },
-    compressModelId = preferences[COMPRESS_MODEL]?.let { ConfigurationReference.parse(it) } ?: DEFAULT_AUTO_MODEL_ID,
-    compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
-    assistantId = preferences[SELECT_ASSISTANT]?.let { ConfigurationReference.parse(it) }
-        ?: DEFAULT_ASSISTANT_ID,
-    assistantTags = preferences.json(ASSISTANT_TAGS, emptyList()),
-    providers = preferences.json(PROVIDERS, emptyList()),
-    assistants = preferences.json(ASSISTANTS, emptyList()),
-    dynamicColor = preferences[DYNAMIC_COLOR] != false,
-    themeId = preferences[THEME_ID] ?: PresetThemes[0].id,
-    customThemes = preferences.json(CUSTOM_THEMES, emptyList()),
-    displaySetting = preferences.json(DISPLAY_SETTING, DisplaySetting()),
-    searchServices = preferences.json(SEARCH_SERVICES, emptyList()),
-    searchCommonOptions = preferences.json(SEARCH_COMMON, SearchCommonOptions()),
-    selectedSearchServiceId = preferences.uuid(SELECTED_SEARCH_SERVICE_ID),
-    mcpServers = preferences.json(MCP_SERVERS, emptyList()),
-    webDavConfig = preferences.json(WEBDAV_CONFIG, WebDavConfig()),
-    s3Config = preferences.json(S3_CONFIG, S3Config()),
-    ttsProviders = preferences.json(TTS_PROVIDERS, emptyList()),
-    selectedTTSProviderId = preferences[SELECTED_TTS_PROVIDER]?.let { ConfigurationReference.parse(it) }
-        ?: DEFAULT_SYSTEM_TTS_ID,
-    defaultTTSPlaybackSpeed = preferences[DEFAULT_TTS_PLAYBACK_SPEED]?.coerceIn(0.5f, 2.0f) ?: 1.0f,
-    asrProviders = preferences.json(ASR_PROVIDERS, emptyList()),
-    selectedASRProviderId = preferences[SELECTED_ASR_PROVIDER]?.let { ConfigurationReference.parse(it) },
-    modeInjections = preferences.json(MODE_INJECTIONS, DEFAULT_MODE_INJECTIONS),
-    quickMessages = preferences.json(QUICK_MESSAGES, emptyList()),
-    backupReminderConfig = preferences.json(BACKUP_REMINDER_CONFIG, BackupReminderConfig()),
-    launchCount = preferences[LAUNCH_COUNT] ?: 0,
-    ignoredUpdateVersion = preferences[IGNORED_UPDATE_VERSION] ?: "",
-    pendingAssistantDeletions = preferences.json(PENDING_ASSISTANT_DELETIONS, emptyList()),
-)
+private fun readLegacySettings(preferences: Preferences): Settings {
+    val webDav = preferences[WEBDAV_CONFIG]?.let(::migrateLegacyWebDavConfiguration)
+    return Settings(
+        favoriteModels = preferences.json(FAVORITE_MODELS, emptyList()),
+        chatModelId = preferences[SELECT_MODEL]?.let { ConfigurationReference.parse(it) }
+            ?: DEFAULT_AUTO_MODEL_ID,
+        fastModelId = preferences[FAST_MODEL]?.let { ConfigurationReference.parse(it) }
+            ?: DEFAULT_AUTO_MODEL_ID,
+        titleModelId = preferences[TITLE_MODEL]?.let { ConfigurationReference.parse(it) },
+        enableSuggestion = preferences[ENABLE_SUGGESTION] != false,
+        suggestionModelId = preferences[SUGGESTION_MODEL]?.let { ConfigurationReference.parse(it) },
+        imageGenerationModelId = preferences[IMAGE_GENERATION_MODEL]?.let { ConfigurationReference.parse(it) }
+            ?: DEFAULT_AUTO_MODEL_ID,
+        titlePrompt = preferences[TITLE_PROMPT] ?: DEFAULT_TITLE_PROMPT,
+        suggestionPrompt = preferences[SUGGESTION_PROMPT] ?: DEFAULT_SUGGESTION_PROMPT,
+        attachmentInspectionModelId = preferences[ATTACHMENT_INSPECTION_MODEL]?.let { ConfigurationReference.parse(it) },
+        compressModelId = preferences[COMPRESS_MODEL]?.let { ConfigurationReference.parse(it) } ?: DEFAULT_AUTO_MODEL_ID,
+        compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
+        assistantId = preferences[SELECT_ASSISTANT]?.let { ConfigurationReference.parse(it) }
+            ?: DEFAULT_ASSISTANT_ID,
+        assistantTags = preferences.json(ASSISTANT_TAGS, emptyList()),
+        providers = preferences.json(PROVIDERS, emptyList()),
+        assistants = preferences.json(ASSISTANTS, emptyList()),
+        dynamicColor = preferences[DYNAMIC_COLOR] != false,
+        themeId = preferences[THEME_ID] ?: PresetThemes[0].id,
+        customThemes = preferences.json(CUSTOM_THEMES, emptyList()),
+        displaySetting = preferences.json(DISPLAY_SETTING, DisplaySetting()),
+        searchServices = preferences.json(SEARCH_SERVICES, emptyList()),
+        searchCommonOptions = preferences.json(SEARCH_COMMON, SearchCommonOptions()),
+        selectedSearchServiceId = preferences.uuid(SELECTED_SEARCH_SERVICE_ID),
+        mcpServers = preferences.json(MCP_SERVERS, emptyList()),
+        webDavConnections = listOfNotNull(webDav?.connection),
+        webDavBackup = webDav?.backup ?: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences(),
+        s3Config = preferences.json(S3_CONFIG, S3Config()),
+        ttsProviders = preferences.json(TTS_PROVIDERS, emptyList()),
+        selectedTTSProviderId = preferences[SELECTED_TTS_PROVIDER]?.let { ConfigurationReference.parse(it) }
+            ?: DEFAULT_SYSTEM_TTS_ID,
+        defaultTTSPlaybackSpeed = preferences[DEFAULT_TTS_PLAYBACK_SPEED]?.coerceIn(0.5f, 2.0f) ?: 1.0f,
+        asrProviders = preferences.json(ASR_PROVIDERS, emptyList()),
+        selectedASRProviderId = preferences[SELECTED_ASR_PROVIDER]?.let { ConfigurationReference.parse(it) },
+        modeInjections = preferences.json(MODE_INJECTIONS, DEFAULT_MODE_INJECTIONS),
+        quickMessages = preferences.json(QUICK_MESSAGES, emptyList()),
+        backupReminderConfig = preferences.json(BACKUP_REMINDER_CONFIG, BackupReminderConfig()),
+        launchCount = preferences[LAUNCH_COUNT] ?: 0,
+        ignoredUpdateVersion = preferences[IGNORED_UPDATE_VERSION] ?: "",
+        pendingAssistantDeletions = preferences.json(PENDING_ASSISTANT_DELETIONS, emptyList()),
+    )
+}

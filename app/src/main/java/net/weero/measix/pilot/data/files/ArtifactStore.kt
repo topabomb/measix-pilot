@@ -465,6 +465,33 @@ class ArtifactStore(
         withLifecycleLock { payloadStore.readBytes(requireUpload(scope, path).relativePath, maxBytes) }
     }
 
+    /** A published upload is pinned under the lifecycle lock, then streamed without holding it. */
+    internal suspend fun <T> withUploadFile(
+        scope: ConfigurationScope,
+        path: String,
+        consume: suspend (java.io.InputStream, Long) -> T,
+    ): T? {
+        var retention: ArtifactRetentionLease? = null
+        try {
+            val file = withContext(Dispatchers.IO) {
+                withLifecycleLock {
+                    val name = LocalToolPath.parseUploadToolPath(path) ?: return@withLifecycleLock null
+                    val entity = getByRelativePath("${FileFolders.UPLOAD}/$name") ?: return@withLifecycleLock null
+                    if (entity.scope != scope || entity.state != ArtifactState.ACTIVE.name ||
+                        synchronized(unpublishedPins) { unpublishedPins.containsKey(entity.id) }) return@withLifecycleLock null
+                    val candidate = payloadStore.file(entity.relativePath)
+                    if (!candidate.isFile || !LocalToolPath.isInsideDirectory(candidate, payloadStore.file(FileFolders.UPLOAD)))
+                        return@withLifecycleLock null
+                    retention = retainIds(setOf(entity.id))
+                    candidate
+                }
+            } ?: return null
+            return withContext(Dispatchers.IO) { file.inputStream().use { consume(it, file.length()) } }
+        } finally {
+            retention?.close()
+        }
+    }
+
     internal suspend fun copyUploads(scope: ConfigurationScope, paths: List<String>, destination: File, maxBytes: Long) = withContext(Dispatchers.IO) {
         require(paths.distinct().size == paths.size) { "duplicate_upload_path" }
         require(maxBytes >= 0)
@@ -860,6 +887,41 @@ class ArtifactStore(
             payloadStore.stageText(reserved, text)
         }
         return activateStaged(scope, staged, displayName, mimeType, origin)
+    }
+
+    /** Streams into staging. Ownership is handed off in the caller context before returning. */
+    internal suspend fun createFromStream(
+        scope: ConfigurationScope,
+        displayName: String,
+        write: suspend (java.io.OutputStream) -> String?,
+        receive: (OwnedArtifact) -> Unit,
+    ): OwnedArtifact {
+        var declaredMime: String? = null
+        val staged = stageNamedPayload(FileFolders.UPLOAD, displayName, "application/octet-stream") { reserved ->
+            payloadStore.stageFromStream(reserved) { declaredMime = write(it) }
+        }
+        val owned = try {
+            val mime = declaredMime?.substringBefore(';')?.trim()?.lowercase(java.util.Locale.ROOT)
+                ?.takeIf { Regex("[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+").matches(it) && it != "application/octet-stream" }
+                ?: payloadStore.stagedMimeType(staged, displayName)
+            activateStaged(scope, staged, displayName, mime, ArtifactOrigin.SYSTEM)
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                try { check(payloadStore.deleteStaging(staged.stagingToken)) }
+                catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            }
+            throw error
+        }
+        try {
+            receive(owned)
+            return owned
+        } catch (error: Throwable) {
+            withContext(NonCancellable) {
+                try { discardUnpublished(owned).requireDiscarded("streamed artifact handoff") }
+                catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            }
+            throw error
+        }
     }
 
     private suspend fun stageNamedPayload(

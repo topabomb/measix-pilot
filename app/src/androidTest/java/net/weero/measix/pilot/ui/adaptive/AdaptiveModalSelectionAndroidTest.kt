@@ -69,6 +69,7 @@ class AdaptiveModalSelectionAndroidTest {
             }
             fun copyBySystemTouch(text: String) {
                 compose.runOnIdle { clipboard.clearPrimaryClip() }
+                automation.waitForIdle(200, 5_000)
                 compose.onNodeWithText(text).performTouchInput { longClick() }
                 val copy = compose.activity.getString(android.R.string.copy)
                 val bounds = Rect()
@@ -102,6 +103,8 @@ class AdaptiveModalSelectionAndroidTest {
             compose.waitUntil(5_000) {
                 compose.onAllNodesWithText("InnerSelection").fetchSemanticsNodes().isEmpty()
             }
+            // Compose removal does not wait for the native modal and accessibility windows.
+            automation.waitForIdle(200, 5_000)
             copyBySystemTouch("OuterSelection")
         } finally {
             clipboard.clearPrimaryClip()

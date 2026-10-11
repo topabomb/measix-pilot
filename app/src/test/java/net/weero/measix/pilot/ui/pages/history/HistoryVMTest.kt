@@ -53,6 +53,7 @@ class HistoryVMTest {
             every { query.conversationsInRealm(selection, ConversationSortOrder.CREATED) } returns flowOf(Result.success(emptyList()))
             val configuration = mockk<ConfigurationQueryService>()
             every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Loading)
+            every { configuration.observeWebDavConfiguration() } returns flowOf(net.weero.measix.pilot.service.WebDavConfigurationReadState.Loading)
             val history = HistoryVM(query, configuration, mockk())
             val drawer = net.weero.measix.pilot.ui.pages.chat.ChatDrawerVM(mockk(), configuration, query, mockk(), androidx.lifecycle.SavedStateHandle())
             store.put("history", history)

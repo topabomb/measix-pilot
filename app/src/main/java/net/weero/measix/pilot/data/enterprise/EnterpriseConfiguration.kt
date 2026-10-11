@@ -37,7 +37,30 @@ internal data class EnterpriseConfiguration(
     val gateways: List<EnterpriseGateway>,
     val defaults: EnterpriseDefaults,
     val providers: List<EnterpriseProvider>,
+    val webdav: List<EnterpriseWebDavResource> = emptyList(),
 )
+
+/** Platform-owned definitions; the user's workspace projection supplies the current binding. */
+@Serializable
+internal data class EnterpriseWebDavResource(
+    val id: String,
+    val name: String,
+    val enabled: Boolean,
+    val purpose: PlatformWebDAVDefinitionPurpose,
+    val clientProtocol: PlatformWebDAVDefinitionClientProtocol,
+    val authOwnership: PlatformWebDAVDefinitionAuthOwnership,
+    val rootPathTemplate: String,
+) {
+    fun validate() {
+        require(id.matches(Regex("dav_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"))) {
+            "invalid_enterprise_webdav_id"
+        }
+        require(name.isNotBlank() && name.codePointCount(0, name.length) <= 160) { "invalid_enterprise_webdav_name" }
+        require(rootPathTemplate == "/runtime/v1/resources/$id/spaces/{agentSpaceId}/dav/") {
+            "invalid_enterprise_webdav_root"
+        }
+    }
+}
 
 @Serializable
 internal data class EnterpriseProvider(

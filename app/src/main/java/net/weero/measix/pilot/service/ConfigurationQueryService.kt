@@ -21,6 +21,8 @@ import net.weero.measix.pilot.data.configuration.ResourceSelectionSlot
 import net.weero.measix.pilot.data.model.Assistant
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.PlatformDAVAccessMode
+import net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 private sealed interface ConfigurationReadFailure {
@@ -32,7 +34,34 @@ internal class ConfigurationQueryService(
     private val settings: SettingsStore,
     private val enterpriseSessions: EnterpriseSessionController,
     private val recoveryGate: ApplicationRecoveryGate,
+    private val remoteWorkspace: RemoteWorkspaceService,
 ) {
+    fun observeWebDavConfiguration(): Flow<WebDavConfigurationReadState> = observeSelected<WebDavConfigurationReadState>(
+        { WebDavConfigurationReadState.Unavailable(it.detail()) },
+        { configuration, selection ->
+            WebDavConfigurationReadState.Available(
+                selection, configuration.personalWebDavConnections, configuration.currentPersonalWebDavConnectionId, configuration.webDavBackup,
+                enterpriseResources = configuration.enterpriseConfiguration?.webdav.orEmpty().filter { it.enabled }.map {
+                    WebDavResourceSummary(it.id, it.name, false, false, it.copy(name = "").toString(), "webdav_binding_unavailable")
+                },
+            )
+        },
+    ).flatMapLatest { state ->
+        if (state !is WebDavConfigurationReadState.Available || state.selection.access == RealmAccess.Personal || state.enterpriseResources.isEmpty()) {
+            flowOf(state)
+        } else remoteWorkspace.observeDavProjection().map { snapshot ->
+            val original = snapshot?.takeIf { it.access == state.selection.access }
+            val projection = original?.projection
+            state.copy(designatedId = projection?.fileExchangeWebdavResourceId, enterpriseResources = state.enterpriseResources.map { resource ->
+                val binding = projection?.webdav?.takeIf { it.resourceId == resource.id }
+                val available = original?.diagnostic == null && binding?.available == true && binding.accessMode != null && binding.bindingRevision != null && projection.agentSpaceId != null
+                resource.copy(available = available, writable = available && binding?.accessMode == PlatformDAVAccessMode.FULL,
+                    revision = "${resource.revision}:${original?.connection}:${projection?.agentSpaceId}:${binding?.bindingRevision}:${binding?.accessMode}",
+                    detail = original?.diagnostic ?: binding?.reason ?: "webdav_binding_unavailable")
+            })
+        }
+    }
+
     private suspend fun <T> readEnterpriseResource(target: EnterpriseResourceDetailTarget, project: (ResolvedConfiguration) -> T): T {
         recoveryGate.awaitReady()
         return enterpriseSessions.withSelectedRealmSelection(target.selection) {
@@ -185,7 +214,64 @@ internal class ConfigurationQueryService(
         enterpriseSessions.withSelectedRealmSelection(selection) { }
     }
 
+    /** System handoff cannot race a committed connection edit or selected-domain change. */
+    internal suspend fun <T> withPersonalWebDavConnection(selection: RealmSelection,
+        expected: net.weero.measix.pilot.data.configuration.WebDavConnection, action: suspend () -> T): T {
+        recoveryGate.awaitReady()
+        require(selection.access == RealmAccess.Personal) { "webdav_personal_resource_required" }
+        return enterpriseSessions.withSelectedRealmSelection(selection) {
+            settings.withResolvedConfiguration(selection.access.scope, enterpriseSessions.state.value) { configuration ->
+                check(configuration.personalWebDavConnections.any { it.copy(name = expected.name) == expected }) {
+                    "webdav_connection_changed"
+                }
+                enterpriseSessions.requirePublishedSelection(selection)
+                action()
+            }
+        }
+    }
+
+    /** Publish under the original Session and resource definition; remote IO is checked before this boundary. */
+    internal suspend fun <T> withEnterpriseWebDavAccess(
+        access: RealmAccess.Enterprise,
+        selection: RealmSelection?,
+        expected: net.weero.measix.pilot.data.enterprise.EnterpriseWebDavResource,
+        connection: net.weero.measix.pilot.data.enterprise.PlatformConnection,
+        action: suspend () -> T,
+    ): T {
+        recoveryGate.awaitReady()
+        val guarded: suspend () -> T = {
+            settings.withResolvedConfiguration(access.scope, enterpriseSessions.state.value) { configuration ->
+                enterpriseSessions.requirePublishedRealmAccess(access)
+                selection?.let(enterpriseSessions::requirePublishedSelection)
+                val manifest = (enterpriseSessions.state.value as? net.weero.measix.pilot.data.enterprise.EnterpriseState.Available)?.manifest
+                check(manifest?.session?.platform?.connection == connection) { "webdav_connection_changed" }
+                check(configuration.enterpriseConfiguration?.webdav?.any { it.enabled && it.copy(name = expected.name) == expected } == true) {
+                    "webdav_connection_changed"
+                }
+                action()
+            }
+        }
+        return if (selection != null) enterpriseSessions.withSelectedRealmSelection(selection, guarded)
+        else enterpriseSessions.withRealmAccess(access, guarded)
+    }
+
     internal suspend fun read(access: RealmAccess): ResolvedConfiguration = readExecution(access).configuration
+
+    /** A Turn keeps its captured resource even when only the user's current selection changes. */
+    internal suspend fun <T> withPersonalWebDavAccess(access: RealmAccess,
+        expected: net.weero.measix.pilot.data.configuration.WebDavConnection, action: suspend () -> T): T {
+        recoveryGate.awaitReady()
+        require(access == RealmAccess.Personal) { "webdav_personal_resource_required" }
+        return enterpriseSessions.withRealmAccess(access) {
+            settings.withResolvedConfiguration(access.scope, enterpriseSessions.state.value) { configuration ->
+                check(configuration.personalWebDavConnections.any { it.copy(name = expected.name) == expected }) {
+                    "webdav_connection_changed"
+                }
+                enterpriseSessions.requirePublishedRealmAccess(access)
+                action()
+            }
+        }
+    }
 
     internal suspend fun readExecution(access: RealmAccess): net.weero.measix.pilot.data.datastore.ExecutionConfigurationSnapshot {
         recoveryGate.awaitReady()

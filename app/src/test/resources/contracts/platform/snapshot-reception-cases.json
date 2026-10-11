@@ -832,7 +832,7 @@
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "accept-v5",
@@ -968,7 +968,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440005",
       "schemaVersion": 5,
-      "snapshotHash": "sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb",
+      "snapshotHash": "sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1029,7 +1029,8 @@
           "upstreamModelKey": "tts-1",
           "voice": "alloy"
         }
-      ]
+      ],
+      "webdav": []
     }
   },
   {
@@ -1243,7 +1244,7 @@
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "future-v6",
@@ -1263,7 +1264,7 @@
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "future-v7",
@@ -1283,7 +1284,7 @@
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "null-version",
@@ -1419,7 +1420,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440005",
       "schemaVersion": null,
-      "snapshotHash": "sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb",
+      "snapshotHash": "sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1480,13 +1481,14 @@
           "upstreamModelKey": "tts-1",
           "voice": "alloy"
         }
-      ]
+      ],
+      "webdav": []
     }
   },
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "string-version",
@@ -1622,7 +1624,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440005",
       "schemaVersion": "6",
-      "snapshotHash": "sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb",
+      "snapshotHash": "sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1683,13 +1685,14 @@
           "upstreamModelKey": "tts-1",
           "voice": "alloy"
         }
-      ]
+      ],
+      "webdav": []
     }
   },
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "fractional-version",
@@ -1825,7 +1828,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440005",
       "schemaVersion": 6.5,
-      "snapshotHash": "sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb",
+      "snapshotHash": "sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -1886,13 +1889,14 @@
           "upstreamModelKey": "tts-1",
           "voice": "alloy"
         }
-      ]
+      ],
+      "webdav": []
     }
   },
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "zero-version",
@@ -2028,7 +2032,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440005",
       "schemaVersion": 0,
-      "snapshotHash": "sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb",
+      "snapshotHash": "sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2089,13 +2093,14 @@
           "upstreamModelKey": "tts-1",
           "voice": "alloy"
         }
-      ]
+      ],
+      "webdav": []
     }
   },
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "missing-version",
@@ -2230,7 +2235,7 @@
         }
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440005",
-      "snapshotHash": "sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb",
+      "snapshotHash": "sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2291,13 +2296,14 @@
           "upstreamModelKey": "tts-1",
           "voice": "alloy"
         }
-      ]
+      ],
+      "webdav": []
     }
   },
   {
     "context": {
       "deploymentId": "dep_550e8400-e29b-41d4-a716-446655440000",
-      "etag": "\"sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb\"",
+      "etag": "\"sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803\"",
       "generation": 44
     },
     "name": "known-version-unknown-field",
@@ -2440,7 +2446,7 @@
       ],
       "releaseId": "rel_550e8400-e29b-41d4-a716-446655440005",
       "schemaVersion": 5,
-      "snapshotHash": "sha256:bdea2f15be91947f92eac0b3b73d6ddc22f25f050850c2c74b175697ff9909cb",
+      "snapshotHash": "sha256:91e6b532b272cbdb09568f7098c1b4a898df3cbbb4906268f8b7a556849e7803",
       "starters": [
         {
           "assistantDefinitionId": "asd_11111111-1111-4111-8111-111111111111",
@@ -2502,7 +2508,8 @@
           "upstreamModelKey": "tts-1",
           "voice": "alloy"
         }
-      ]
+      ],
+      "webdav": []
     }
   }
 ]

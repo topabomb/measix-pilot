@@ -14,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.SerializationException
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.MessageModelInfo
@@ -28,6 +29,7 @@ import me.rerere.ai.ui.StepUsage
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.core.UsageCompleteness
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.*
@@ -37,6 +39,8 @@ import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.UsageValue
+import net.weero.measix.pilot.data.configuration.WebDavBackupPreferences
+import net.weero.measix.pilot.data.datastore.ScopedUserPreferences
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.UserSettingsMigration
 import net.weero.measix.pilot.data.db.AppDatabase
@@ -186,6 +190,74 @@ class PersonalBackupGraphAndroidTest {
         assertNull(moved.header.folderId)
         assertEquals(enterpriseBefore, repository.getConversationSnapshotById(enterpriseId))
         room.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
+    }
+
+    @Test
+    fun preparedLegacyWebDavRestorePreservesConnectionAndPersonalBackupPreferences() = runBlocking {
+        val personalId = conversation(personal, "archived personal")
+        val pending = prepareLegacyWebDavPending(
+            """{"url":"https://dav.example/root/","username":"legacy-user","password":" secret ","path":"/copies/","items":["FILES"]}""",
+        )
+        val originalSettings = File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes()
+        val originalDatabase = File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes()
+        val enterpriseId = conversation(enterprise, "live enterprise")
+        val enterpriseBackup = WebDavBackupPreferences("enterprise-resource", "enterprise-copies", false)
+        val before = settings.snapshotUserDocument()
+        val current = before.copy(preferences = before.preferences.copy(scopes = before.preferences.scopes +
+            ScopedUserPreferences(enterprise, webDavBackup = enterpriseBackup)))
+        preferences.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(current) }
+
+        room.close()
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+        assertArrayEquals(originalSettings, File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes())
+        assertArrayEquals(originalDatabase, File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes())
+        openOwners()
+        PendingBackupRestore.restoreSettingsIfPending(context, artifacts, catalogs, JsonInstant)
+        val restored = settings.snapshotLocal()
+        val connection = restored.webDavConnections.single()
+        assertEquals("https://dav.example/root/", connection.rootUrl)
+        assertEquals("legacy-user", connection.username)
+        assertEquals(" secret ", connection.password)
+        assertEquals(WebDavBackupPreferences(connection.id.toString(), "copies", true), restored.webDavBackup)
+        assertNull(restored.currentWebDavConnectionId)
+        assertEquals(enterpriseBackup, settings.snapshotUserDocument().preferences.scopes
+            .single { it.scope == enterprise }.webDavBackup)
+        assertEquals("archived personal", title(personalId))
+        assertEquals("live enterprise", title(enterpriseId))
+        PendingBackupRestore.complete(context)
+    }
+
+    @Test
+    fun invalidPreparedLegacyWebDavKeepsOriginalPendingAndLiveState() = runBlocking {
+        val personalId = conversation(personal, "archived personal")
+        artifact(1, personal, "upload/preserved.txt", "archived bytes")
+        val pending = prepareLegacyWebDavPending(
+            """{"url":"https://dav.example/root/","username":"legacy-user","password":"secret","path":"copies","items":["UNKNOWN"]}""",
+        )
+        val originalSettings = File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes()
+        val originalDatabase = File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes()
+        room.openHelper.writableDatabase.execSQL("UPDATE ConversationEntity SET title='live personal' WHERE id=?", arrayOf(personalId))
+        file("upload/preserved.txt").writeText("live bytes")
+        settings.updateLocal { it.copy(themeId = "kept-live-theme") }
+        val liveSettings = settings.snapshotUserDocument()
+        room.close()
+        try {
+            PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+            fail("Invalid prepared DAV settings accepted")
+        } catch (error: SerializationException) {
+            assertTrue(error.message.orEmpty().contains("UNKNOWN"))
+        }
+        assertArrayEquals(originalSettings, File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes())
+        assertArrayEquals(originalDatabase, File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes())
+        assertTrue(File(pending, BackupArchiveService.PREPARED_MARKER).isFile)
+        assertEquals("archived bytes", File(pending, "upload/preserved.txt").readText())
+        assertFalse(File(pending, ".apply_started").exists())
+        assertFalse(File(pending, ".apply_complete").exists())
+        assertFalse(File(pending, ".resolved_settings.json").exists())
+        openOwners()
+        assertEquals("live personal", title(personalId))
+        assertEquals("live bytes", file("upload/preserved.txt").readText())
+        assertEquals(liveSettings, settings.snapshotUserDocument())
     }
 
     @Test
@@ -495,6 +567,25 @@ class PersonalBackupGraphAndroidTest {
             check(!sidecar.exists() || sidecar.delete())
         }
         walImage.copyTo(File(live.path + "-wal"))
+    }
+
+    /** Emulates an already prepared archive from before DAV fields were replaced. */
+    private suspend fun prepareLegacyWebDavPending(legacy: String): File {
+        val archive = archiveService.prepare(BackupSelection(true, true))
+        val pending = PendingBackupRestore.pendingDir(context).apply { assertTrue(mkdirs()) }
+        ZipFile(archive).use { zip ->
+            zip.entries().asSequence().filter { it.name != BackupArchiveService.MANIFEST_ENTRY }.forEach { entry ->
+                val target = File(pending, entry.name).also { it.parentFile?.mkdirs() }
+                zip.getInputStream(entry).use { input -> target.outputStream().use(input::copyTo) }
+            }
+        }
+        val settingsFile = File(pending, BackupArchiveService.SETTINGS_ENTRY)
+        val oldFields = JsonInstant.parseToJsonElement(settingsFile.readText(Charsets.UTF_8)).jsonObject -
+            setOf("webDavConnections", "currentWebDavConnectionId", "webDavBackup")
+        settingsFile.writeText(JsonObject(oldFields + ("webDavConfig" to JsonInstant.parseToJsonElement(legacy))).toString(), Charsets.UTF_8)
+        File(pending, BackupArchiveService.PREPARED_MARKER).writeText("1", Charsets.UTF_8)
+        File(pending, BackupArchiveService.AGGREGATE_MARKER).writeText("1", Charsets.UTF_8)
+        return pending
     }
 
     private fun openOwners() {

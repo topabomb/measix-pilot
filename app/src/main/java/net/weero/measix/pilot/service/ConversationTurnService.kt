@@ -947,7 +947,7 @@ class ConversationTurnService internal constructor(
                     messages = generationMessages,
                     assistantMessageId = started.assistantMessageId,
                     providerSessionId = conversationId.toString(),
-                    inputTransformers = turnPipelineFactory.input(TurnKind.USER),
+                    inputTransformers = turnPipelineFactory.input(),
                     outputTransformers = turnPipelineFactory.output(),
                     onCheckpoint = { checkpoint ->
                         activeTurnCommitter.onCheckpoint(checkpoint)

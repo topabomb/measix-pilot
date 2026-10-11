@@ -88,6 +88,21 @@ class RootfsFileAccessTest {
     }
 
     @Test
+    fun startupCleanupNeverFollowsLinksOrUserFilenamePrefixes() {
+        File(manager.tempDir(root), ".workspace-write-abandoned").writeText("partial")
+        val protected = File(outside, "protected").apply { writeText("keep") }
+        Os.symlink(outside.path, File(manager.tempDir(root), "external").path)
+        val userFile = File(manager.filesDir(root), ".workspace-write-user").apply { writeText("user") }
+        manager.cleanupAllTempDirs()
+        assertFalse(manager.tempDir(root).exists())
+        assertEquals("keep", protected.readText())
+        assertEquals("user", userFile.readText())
+        manager.cleanupAllTempDirs()
+        manager.writeRootfsText(root, "/workspace/after-recovery", "ok", false, false)
+        assertEquals("ok", read("/workspace/after-recovery"))
+    }
+
+    @Test
     fun existingReadOnlyTargetIsNotMadeWritableByAtomicReplacement() {
         val target = File(manager.filesDir(root), "readonly").apply { writeText("original") }
         Os.chmod(target.path, 0x124)

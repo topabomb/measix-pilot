@@ -51,6 +51,9 @@ class ChatDrawerVM internal constructor(
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
+    internal val webDavConfiguration = configurationQueryService.observeWebDavConfiguration()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), net.weero.measix.pilot.service.WebDavConfigurationReadState.Loading)
+
     internal val assistantCatalog = configurationQueryService.observeAssistantCatalog()
         .stateIn(viewModelScope, SharingStarted.Eagerly, AssistantCatalogReadState.Loading)
 

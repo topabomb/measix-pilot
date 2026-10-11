@@ -99,7 +99,7 @@ class SubAssistantRunCoordinatorTest {
             val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
             sessions.enrollFixture(packet)
             val queries = net.weero.measix.pilot.service.ConfigurationQueryService(mockk(), sessions,
-                net.weero.measix.pilot.service.ApplicationRecoveryGate().also { it.ready() })
+                net.weero.measix.pilot.service.ApplicationRecoveryGate().also { it.ready() }, mockk())
             val original = queries.captureAccess(packet.identity.scope)
             sessions.finishExit(sessions.beginExit(requireNotNull(sessions.captureExitRequest())))
             sessions.enrollFixture(packet)
@@ -478,7 +478,7 @@ class SubAssistantRunCoordinatorTest {
             toolSetFactory = toolSetFactory,
             settingsStore = settingsStore,
             memoryService = memoryService,
-            configurations = configurations ?: net.weero.measix.pilot.service.ConfigurationQueryService(settingsStore, sessions, gate),
+            configurations = configurations ?: net.weero.measix.pilot.service.ConfigurationQueryService(settingsStore, sessions, gate, mockk()),
             modelExecutions = net.weero.measix.pilot.test.testModelExecutionService(settingsStore, sessions, gate),
             turnPipelineFactory = mockk<TurnPipelineFactory>(relaxed = true),
             turnContextFactory = net.weero.measix.pilot.service.turn.TurnContextFactory(mockk(relaxed = true)),

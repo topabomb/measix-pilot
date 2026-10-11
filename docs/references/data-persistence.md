@@ -123,6 +123,12 @@ Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父�
 
 ### 个人数据范围
 
+`WebDavBackupService` 使用已选资源的绑定句柄执行备份传输；列表条目保留原目标及文件版本，
+目标切换后旧条目不能用于新资源。目录不存在时列表返回空，不隐式创建目录；备份上传时才创建缺失父目录，
+上传使用条件创建，删除要求强 ETag。传输与归档 staging 共享资源取消生命周期，失败清理本次临时文件。
+恢复归档在最终 pending 发布点通过 `WebDavApplicationService.publishDownload` 复验原空间与连接，
+连接修改、切域不能穿过该提交边界。初始化失败可原地重试；重命名连接不取消传输。
+
 当前手工完整备份格式为 `rikkahub-personal-v1`，包含个人 `settings.json`、个人 `mcp_catalogs.json`、个人数据图的 `measix_pilot.db`、按图收集的 payload 和完整性 manifest。设置投影仍含用户自己的 Provider/Search/TTS/ASR/MCP/WebDAV/S3 凭据；企业配置、binding、Session、Feed、企业偏好和企业数据均不进入个人包。ZIP 未加密、未签名，SHA-256 仅校验完整性。
 
 `BackupArchiveService` 在既有文件锁与 snapshot barrier 内取得 SQLite 一致快照，`BackupDataGraph` 将个人根及其 Message/Turn/Tool/Context 复制到新建数据库，按显式列名复制并保留自增 ID 高水位；不携带源库空闲页、未知表或旧全文索引。Artifact 引用和 FTS 从保留的消息重建。个人 Artifact 包含未挂接聊天的用户文件；payload 清单只来自保留的 metadata、生命周期 receipt，以及共享 Skill/字体配置，不扫描整份 upload/images。Workspace 注册信息属于共享配置，Workspace 目录内容不进入该包。
@@ -139,7 +145,7 @@ Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父�
 
 CREATING/DELETING（包含 payload 已清除但 metadata 补偿未完成的状态）和图库 `.pending`/`.deleting` receipt 交回原 owner 恢复，不在备份层执行生命周期动作。
 
-Settings 恢复只替换个人投影，保留企业使用偏好与内部清理状态。旧个人 prepared 输入的失效配置资产在合并企业图前归一化；派生结果保存在 pending 的独立文件，实际 Settings owner 消费同一结果，原 settings.json 与数据库字节不变。
+Settings 恢复只替换个人投影，保留企业使用偏好与内部清理状态。旧个人 prepared 输入的 Settings 在 typed decode 前复用 `migrateLegacySettingsJson` 转换旧 DAV 配置，保全旧页面即时保存的未完成字段；损坏 JSON、字段类型或未知枚举拒绝合并并保留 pending 与 live 状态。失效配置资产在合并企业图前归一化；派生结果保存在 pending 的独立文件，实际 Settings owner 消费同一结果，原 settings.json 与数据库字节不变。
 
 恢复 owner 完成后先原子移出待恢复的 pending，再删除 rollback、publication 与已移出的目录；清理中断不重放恢复。
 

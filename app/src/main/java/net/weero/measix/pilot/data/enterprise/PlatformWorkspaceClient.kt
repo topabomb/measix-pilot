@@ -57,13 +57,29 @@ internal class PlatformWorkspaceClient(client: OkHttpClient) {
                 // file requests. Recognize it without inventing enable intent or enabling unsafe IO.
                 throw WorkspaceProtocolUnavailableException("workspace_requires_fixed_space_protocol")
             }
-            PlatformWireCodec.decode<PlatformWorkspaceProjection>(raw)
+            PlatformWireCodec.decode<PlatformWorkspaceProjection>(withoutUnconfirmedDavPermission(value).toString())
         }.also {
             require(!it.filesAvailable || (it.serviceState == PlatformWorkspaceProjectionServiceState.ENABLED &&
                 it.state == PlatformWorkspaceProjectionState.CONNECTED && it.agentSpaceId != null)) {
                 "workspace_projection_identity_conflict"
             }
         }
+
+    /** A missing or unsupported DAV permission disables only DAV, never the existing Files API. */
+    private fun withoutUnconfirmedDavPermission(value: JsonElement): JsonElement {
+        val projection = value as? JsonObject ?: return value
+        val dav = projection["webdav"] as? JsonObject ?: return value
+        val mode = dav["accessMode"]
+        val unconfirmed = mode == null || mode == JsonNull ||
+            (mode is JsonPrimitive && mode.isString && mode.content !in PlatformDAVAccessMode.entries.map { it.name })
+        if (!unconfirmed) return value
+        val fields = (dav - "accessMode").toMutableMap()
+        if (dav["available"] == JsonPrimitive(true)) {
+            fields["available"] = JsonPrimitive(false)
+            fields["reason"] = JsonPrimitive("webdav_access_mode_unavailable")
+        }
+        return JsonObject(projection + ("webdav" to JsonObject(fields)))
+    }
 
     /** Compatibility recognition only; legacy facts never become a current projection or file capability. */
     private fun requireLegacyProjection(value: JsonObject) {

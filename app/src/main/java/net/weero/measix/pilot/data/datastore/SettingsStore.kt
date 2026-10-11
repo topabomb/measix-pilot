@@ -87,6 +87,7 @@ private val Context.settingsStore by preferencesDataStore(
     name = "settings",
     produceMigrations = { context ->
         listOf(
+            WebDavSettingsMigration(),
             OcrSettingsMigration(context),
             SearchSelectionMigration(),
             McpLegacyCatalogSettingsMigration(),
@@ -374,6 +375,27 @@ class SettingsStore internal constructor(
     }
 
     /** The session owner serializes authorization changes through the entire preference commit. */
+    internal suspend fun changeWebDavConnection(
+        change: net.weero.measix.pilot.data.configuration.WebDavConnectionChange,
+        requireOwner: () -> Unit,
+    ) = updateMutex.withLock {
+        commitUserDocument(requireOwner) { it.withWebDavConnectionChange(change) }
+    }
+
+    internal suspend fun changeWebDavBackup(scope: ConfigurationScope,
+        expected: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences,
+        proposed: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences, requireOwner: () -> Unit,
+    ) = updateMutex.withLock {
+        val value = proposed.validated()
+        commitUserDocument(requireOwner) { document ->
+            val scoped = document.preferences.scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
+            check(scoped.webDavBackup == expected) { "webdav_backup_settings_changed" }
+            document.copy(preferences = document.preferences.copy(scopes =
+                document.preferences.scopes.filterNot { it.scope == scope } + scoped.copy(webDavBackup = value)))
+        }
+    }
+
+    /** The session owner serializes authorization changes through the entire preference commit. */
     internal suspend fun updateResourceSelections(
         scope: ConfigurationScope,
         enterpriseState: EnterpriseState,
@@ -623,7 +645,9 @@ data class Settings(
     val searchCommonOptions: SearchCommonOptions = SearchCommonOptions(),
     val selectedSearchServiceId: ConfigurationReference? = null,
     val mcpServers: List<McpServerConfig> = emptyList(),
-    val webDavConfig: WebDavConfig = WebDavConfig(),
+    val webDavBackup: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences = net.weero.measix.pilot.data.configuration.WebDavBackupPreferences(),
+    val webDavConnections: List<net.weero.measix.pilot.data.configuration.WebDavConnection> = emptyList(),
+    val currentWebDavConnectionId: kotlin.uuid.Uuid? = null,
     val s3Config: S3Config = S3Config(),
     val ttsProviders: List<TTSProviderSetting> = DEFAULT_TTS_PROVIDERS,
     val selectedTTSProviderId: ConfigurationReference = DEFAULT_SYSTEM_TTS_ID,
@@ -725,24 +749,6 @@ data class DisplaySetting(
 ) {
     fun areUpdateChecksEnabled(nowEpochMillis: Long = System.currentTimeMillis()): Boolean {
         return showUpdates && nowEpochMillis >= updateCheckDisabledUntilEpochMillis
-    }
-}
-
-@Serializable
-data class WebDavConfig(
-    val url: String = "",
-    val username: String = "",
-    val password: String = "",
-    val path: String = "measix_pilot_backups",
-    val items: List<BackupItem> = listOf(
-        BackupItem.DATABASE,
-        BackupItem.FILES
-    ),
-) {
-    @Serializable
-    enum class BackupItem {
-        DATABASE,
-        FILES,
     }
 }
 

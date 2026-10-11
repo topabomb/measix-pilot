@@ -10,10 +10,6 @@ sealed class LocalToolOption {
     data object ChartDisplay : LocalToolOption()
 
     @Serializable
-    @SerialName("javascript_engine")
-    data object JavascriptEngine : LocalToolOption()
-
-    @Serializable
     @SerialName("time_info")
     data object TimeInfo : LocalToolOption()
 

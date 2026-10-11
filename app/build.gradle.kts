@@ -182,6 +182,10 @@ android {
     testOptions {
         unitTests {
             isReturnDefaultValues = true
+            all {
+                // Robolectric sandboxes and MockK instrumentation outlive individual test cases.
+                it.maxHeapSize = "2g"
+            }
         }
     }
 
@@ -275,16 +279,7 @@ kotlin {
     }
 }
 
-// Unit tests execute the desktop binding; packaged Android variants retain the Android native library.
-configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
-    resolutionStrategy.dependencySubstitution {
-        substitute(module("io.github.dokar3:quickjs-kt-android"))
-            .using(module("io.github.dokar3:quickjs-kt-jvm:${libs.versions.quickjs.get()}"))
-    }
-}
-
 dependencies {
-    implementation(libs.quickjs)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.process)
@@ -330,6 +325,9 @@ dependencies {
 
     // okhttp
     implementation(libs.okhttp)
+    implementation(libs.dav4jvm) {
+        exclude(group = "org.ogce", module = "xpp3") // Android owns the XML pull parser.
+    }
     implementation(libs.okhttp.sse)
 
     // ktor client

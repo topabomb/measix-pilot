@@ -586,6 +586,7 @@ internal class EnterpriseApplicationService(
     private val speech: SpeechApplicationService,
     private val platform: PlatformEnterpriseService,
     private val remoteWorkspace: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService,
+    private val webDav: net.weero.measix.pilot.service.webdav.WebDavApplicationService,
 ) {
     private data class Switching(val request: RealmSwitchRequest, val result: Deferred<RealmSelection>)
     private val mutex = Mutex()
@@ -745,9 +746,11 @@ internal class EnterpriseApplicationService(
             }
             val normalized = EnrollmentMaterialParser.normalizeOrigin(origin)
             if (sessions.platformContext(request.access.sessionId).platform.connection.origin == normalized) return
-            remoteWorkspace.changeConnection(request.access) {
-                platform.changeAddress(request, normalized)
-                portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
+            webDav.changeConnection(request.access) {
+                remoteWorkspace.changeConnection(request.access) {
+                    platform.changeAddress(request, normalized)
+                    portals.closeAndAwait(request.access, PortalCloseReason.CONNECTION_CHANGED)
+                }
             }
         }
     }
@@ -832,10 +835,12 @@ internal class EnterpriseApplicationService(
     private suspend fun performSwitch(request: RealmSwitchRequest): RealmSelection {
         var receipt: PortalCloseReceipt? = null
         var remoteReceipt: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceRevocation? = null
+        var davReceipt: net.weero.measix.pilot.service.webdav.WebDavRevocation? = null
         var selected: RealmSelection? = null
         var failure: Exception? = null
         try {
             selected = sessions.switchRealm(request) { previous ->
+                davReceipt = webDav.revoke(previous)
                 remoteReceipt = remoteWorkspace.revoke(previous)
                 speech.revoke(previous)
                 terminals.revokeViewports(previous)
@@ -854,6 +859,9 @@ internal class EnterpriseApplicationService(
             withContext(NonCancellable) {
                 var portalFailure: Exception? = null
                 try { remoteReceipt?.awaitClosed() } catch (error: Exception) { portalFailure = error }
+                try { davReceipt?.awaitClosed() } catch (error: Exception) {
+                    if (portalFailure == null) portalFailure = error else portalFailure.addSuppressed(error)
+                }
                 try { receipt?.awaitClosed() } catch (error: Exception) {
                     if (portalFailure == null) portalFailure = error else portalFailure.addSuppressed(error)
                 }

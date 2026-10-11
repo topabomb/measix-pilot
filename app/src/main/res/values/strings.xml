@@ -12,7 +12,7 @@
   <string name="asr_button_stop">Stop</string>
   <string name="assistant_detail_basic_desc">Configure name, avatar, model, and parameters</string>
   <string name="assistant_detail_extensions_desc">Manage quick messages, prompt injections and skills</string>
-  <string name="assistant_detail_local_tools_desc">Enable local tools like JavaScript engine</string>
+  <string name="assistant_detail_local_tools_desc">Enable local tools</string>
   <string name="assistant_detail_mcp_desc">Configure MCP server tools for the assistant</string>
   <string name="assistant_detail_memory_desc">Manage assistant memory and recent chat references</string>
   <string name="assistant_detail_prompt_desc">Set system prompts, message templates, and regex rules</string>
@@ -75,8 +75,6 @@
   <string name="assistant_page_local_tools_screen_time_title">Screen Time</string>
   <string name="assistant_page_local_tools_clipboard_desc">Read or write plain text from the device clipboard</string>
   <string name="assistant_page_local_tools_clipboard_title">Clipboard</string>
-  <string name="assistant_page_local_tools_javascript_engine_desc">Execute JavaScript code with QuickJS engine for calculations and scripting</string>
-  <string name="assistant_page_local_tools_javascript_engine_title">JavaScript Engine</string>
   <string name="assistant_page_local_tools_time_info_desc">Get current date, weekday, time, and timezone info from the device</string>
   <string name="assistant_page_local_tools_time_info_title">Time Info</string>
   <string name="assistant_page_local_tools_tts_desc">Let the AI read text aloud to you using your selected TTS service</string>
@@ -217,7 +215,6 @@
   <string name="backup_page_username">Username</string>
   <string name="backup_page_webdav_backup">WebDAV Backup</string>
   <string name="backup_page_webdav_backup_files">WebDAV Backup Files</string>
-  <string name="backup_page_webdav_server_address">WebDAV Server Address</string>
   <string name="built_in_search_description">Enable model\'s built-in search functionality</string>
   <string name="built_in_search_title">Built-in Search</string>
   <string name="calculating">Calculating...</string>
@@ -2161,4 +2158,24 @@
   <string name="chart_next_page">Next</string>
   <string name="reasoning_opus55_hint">This model always uses thinking. Choose Auto or an effort level; Off is not supported.</string>
   <string name="reasoning_sonnet55_hint">Off disables thinking before the first answer. The model may still think between tool calls.</string>
+  <string name="webdav_settings_title">WebDAV</string>
+  <string name="webdav_settings_description">Manage file servers and choose the current WebDAV</string>
+  <string name="webdav_enterprise_managed">Enterprise WebDAV resources are managed by your organization.</string>
+  <string name="webdav_add_connection">Add server</string>
+  <string name="webdav_no_current">No current WebDAV. Add or select a server.</string>
+  <string name="webdav_current">Currently in use</string>
+  <string name="webdav_delete_connection">Remove %1$s? Server files will be kept. Any selection using this server will become unavailable.</string>
+  <string name="webdav_connection_name">Server name</string>
+  <string name="webdav_root_url">WebDAV root URL</string>
+  <string name="webdav_save">Save</string>
+  <string name="webdav_file_manager">WebDAV file manager</string>
+  <string name="webdav_switch_server">Switch server</string>
+  <string name="webdav_switch_cancel_transfer">Cancel the current transfer and switch servers?</string>
+  <string name="webdav_backup_resource">Backup resource</string>
+  <string name="webdav_backup_resource_hint">Independent of the current WebDAV selection.</string>
+  <string name="webdav_backup_select">Select a WebDAV resource</string>
+  <string name="webdav_retry_connection">Retry connection</string>
+  <string name="file_browser_result_summary">%1$s: %2$d completed</string>
+  <string name="file_browser_open_destination">Open folder</string>
+  <string name="webdav_enterprise_not_configured">Your organization has not provided WebDAV file access.</string>
 </resources>

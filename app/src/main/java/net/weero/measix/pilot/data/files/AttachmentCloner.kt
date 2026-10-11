@@ -133,11 +133,13 @@ internal object AttachmentCloner {
         artifactStore: ArtifactStore,
         copiedArtifacts: Map<String, OwnedArtifact>,
     ): UIMessagePart.Tool {
-        if (tool.toolName != ATTACHMENT_INSPECTION_TOOL_NAME && tool.toolName != "assistant_call") return tool
+        if (tool.toolName !in setOf(ATTACHMENT_INSPECTION_TOOL_NAME, "assistant_call", "webdav_upload")) return tool
         if (copiedArtifacts.isEmpty()) return tool
         val input = runCatching { JsonInstant.parseToJsonElement(tool.input) as? JsonObject }.getOrNull()
             ?: return tool
-        val attachments = input["attachments"] as? JsonArray ?: return tool
+        val singleFile = tool.toolName == "webdav_upload"
+        val attachments = if (singleFile) JsonArray(listOf(input["file_path"] ?: return tool))
+            else input["attachments"] as? JsonArray ?: return tool
         if (attachments.any { it !is JsonPrimitive || !it.isString }) return tool
         val rebound = attachments.map { value ->
             val path = (value as JsonPrimitive).content
@@ -150,7 +152,7 @@ internal object AttachmentCloner {
         if (rebound == attachments) return tool
         return tool.copy(
             input = JsonObject(input.toMutableMap().apply {
-                put("attachments", JsonArray(rebound))
+                if (singleFile) put("file_path", rebound.single()) else put("attachments", JsonArray(rebound))
             }).toString(),
         )
     }

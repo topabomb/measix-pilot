@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.backup
 
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -7,7 +8,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LargeFlexibleTopAppBar
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SecondaryScrollableTabRow
 import androidx.compose.material3.Tab
@@ -39,11 +41,11 @@ fun BackupPage(vm: BackupVM = koinViewModel()) {
     val pagerState = rememberPagerState { 4 }
     val scope = rememberCoroutineScope()
     var showRestartDialog by remember { mutableStateOf(false) }
-    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
     Scaffold(
         topBar = {
-            LargeFlexibleTopAppBar(
+            TopAppBar(
                 title = {
                     Text(stringResource(R.string.backup_page_title))
                 },
@@ -61,8 +63,10 @@ fun BackupPage(vm: BackupVM = koinViewModel()) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding)
+                .consumeWindowInsets(contentPadding)
         ) {
-            Text(stringResource(R.string.backup_personal_scope_notice), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            Text(stringResource(R.string.backup_personal_scope_notice), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
             SecondaryScrollableTabRow(
                 selectedTabIndex = pagerState.currentPage,
                 containerColor = CustomColors.topBarColors.containerColor,

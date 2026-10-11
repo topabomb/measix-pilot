@@ -27,6 +27,41 @@ class PlatformSnapshotMapperTest {
     private fun snapshot(name: String = "v4-full") = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture(name))
     private fun map(snapshot: PlatformManagedSnapshot) = PlatformSnapshotMapper.map(connection, identity, snapshot)
 
+    @Test fun `DAV definitions map and persist independently of optional workspace designation`() {
+        val base = Json.parseToJsonElement(fixture("v4-full")).jsonObject
+        val id = "dav_550e8400-e29b-41d4-a716-446655440000"
+        val definition = buildJsonObject {
+            put("resourceId", id); put("displayName", "Enterprise files"); put("enabled", true)
+            put("purpose", "WORKSPACE_FILE_EXCHANGE"); put("clientProtocol", "WEBDAV"); put("authOwnership", "ENTERPRISE_MANAGED")
+            put("rootPathTemplate", "/runtime/v1/resources/$id/spaces/{agentSpaceId}/dav/")
+        }
+        fun decode(definitions: JsonArray) = PlatformWireCodec.decode<PlatformManagedSnapshot>(
+            JsonObject(base + ("webdav" to definitions)).toString(),
+        )
+        val candidate = map(decode(JsonArray(listOf(definition))))
+        val resource = candidate.configuration.webdav.single()
+        assertEquals(id, resource.id)
+        assertEquals("Enterprise files", resource.name)
+        assertEquals(definition.getValue("rootPathTemplate").jsonPrimitive.content, resource.rootPathTemplate)
+        val saved = EnterpriseConfigurationCodec.json.encodeToJsonElement(EnterpriseConfiguration.serializer(), candidate.configuration)
+        assertEquals(candidate.configuration, EnterpriseConfigurationCodec.json.decodeFromJsonElement(EnterpriseConfiguration.serializer(), saved))
+        val legacy = JsonObject(saved.jsonObject - "webdav")
+        val old = EnterpriseConfigurationCodec.json.decodeFromJsonElement(EnterpriseConfiguration.serializer(), legacy)
+        assertTrue(old.webdav.isEmpty())
+        assertEquals(candidate.configuration.copy(webdav = emptyList()), old)
+        EnterpriseConfigurationCodec.validateConfiguration(identity, old)
+        val absent = map(PlatformWireCodec.decode<PlatformManagedSnapshot>(JsonObject(base - "webdav").toString()))
+        assertTrue(absent.configuration.webdav.isEmpty())
+        val originalV4 = cases().first { it.jsonObject.getValue("name").jsonPrimitive.content == "v4-full" }
+            .jsonObject.getValue("value").jsonObject
+        val v4 = map(PlatformWireCodec.decode<PlatformManagedSnapshot>(JsonObject(originalV4 + ("webdav" to JsonArray(listOf(definition)))).toString()))
+        assertTrue(v4.configuration.webdav.isEmpty())
+        assertThrows(IllegalArgumentException::class.java) { map(decode(JsonArray(listOf(definition, definition)))) }
+        val otherId = "dav_650e8400-e29b-41d4-a716-446655440000"
+        val wrongRoot = JsonObject(definition + ("rootPathTemplate" to JsonPrimitive("/runtime/v1/resources/$otherId/spaces/{agentSpaceId}/dav/")))
+        assertThrows(IllegalArgumentException::class.java) { map(decode(JsonArray(listOf(wrongRoot)))) }
+    }
+
     @Test fun `Android target mock snapshots map without local bindings or invented defaults`() {
         cases().filter { it.jsonObject.getValue("schema").jsonPrimitive.content == "ManagedSnapshot" && it.jsonObject.getValue("valid").jsonPrimitive.boolean }
             .forEach { value ->
@@ -333,6 +368,34 @@ class PlatformSnapshotMapperTest {
         assertTrue(migratedManifest.contentEquals(java.io.File(folder, "manifest.json").readBytes()))
         assertTrue(legacyConfiguration.contentEquals(java.io.File(revision, "configuration.json").readBytes()))
         assertTrue(legacyExecution.contentEquals(java.io.File(revision, "execution.json").readBytes()))
+    }
+
+    @Test fun `historical Applied without DAV loads without rewriting its bytes or publication identity`() {
+        val candidate = map(snapshot())
+        val folder = temporary.newFolder()
+        val store = enterpriseTestStore(folder)
+        val version = store.prepare(candidate)
+        val file = java.io.File(folder, "revisions/${version.revision}/configuration.json")
+        val saved = Json.parseToJsonElement(file.readText()).jsonObject
+        val legacy = JsonObject(saved + ("configuration" to JsonObject(saved.getValue("configuration").jsonObject - "webdav")))
+            .toString().toByteArray(Charsets.UTF_8)
+        file.writeBytes(legacy)
+        val legacyVersion = version.copy(configurationHash = MessageDigest.getInstance("SHA-256").digest(legacy)
+            .joinToString("") { "%02x".format(it) })
+        val sessionId = "ses_12345678-1234-4234-8234-123456789012"
+        val credential = store.prepareCredential(PlatformRefreshCredential(sessionId, "refresh", 2000000000000L))
+        val execution = candidate.execution as EnterpriseExecution.Platform
+        val session = EnterpriseSession(sessionId, identity, 2000000000000L,
+            PlatformSessionDetails(execution.connection, "dev_12345678-1234-4234-8234-123456789012", credential))
+        store.commit(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY,
+            session, legacyVersion, identity.scope, identity))
+        val reopened = enterpriseTestStore(folder)
+        val loaded = reopened.load()
+        assertEquals(candidate.configuration, loaded.configuration)
+        assertTrue(requireNotNull(loaded.configuration).webdav.isEmpty())
+        assertEquals(legacyVersion, loaded.manifest.applied)
+        assertEquals(candidate.execution, reopened.execution(loaded.manifest))
+        assertArrayEquals(legacy, file.readBytes())
     }
 
     @Test fun `same generation cannot replace the published platform hash`() = runBlocking {

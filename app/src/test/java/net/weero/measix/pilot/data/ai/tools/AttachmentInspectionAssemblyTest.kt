@@ -43,6 +43,7 @@ class AttachmentInspectionAssemblyTest {
             mcpManager = mockk(),
             providerManager = providerManager,
             artifactStore = mockk(),
+            webDavTransfers = mockk(),
         )
 
         listOf(inspection, model(listOf(Modality.TEXT)), null).forEach { currentModel ->

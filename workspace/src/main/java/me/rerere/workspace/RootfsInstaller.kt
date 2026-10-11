@@ -153,7 +153,8 @@ class RootfsInstaller(
                 }
                 // Alpine archives include a root directory entry. It may not replace the staging root.
                 val target = targetDir.safeResolve(header.name)
-                if (target == targetDir.canonicalFile) {
+                // Canonical Windows File paths may retain a trailing separator for root aliases.
+                if (target.toPath().normalize() == targetDir.canonicalFile.toPath().normalize()) {
                     require(header.type == TarEntryType.DIRECTORY) { "Rootfs root entry must be a directory" }
                     input.skipFully(header.size.paddedTarSize())
                     continue

@@ -58,7 +58,7 @@ class TurnToolSetFactoryTest {
                 document, packet.identity.scope, net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
             val local = mockk<LocalTools>()
             every { local.getTools(any(), any(), any()) } returns emptyList()
-            val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk())
+            val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk())
             val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(packet.identity.scope, "session")
             for (kind in listOf(net.weero.measix.pilot.service.runtime.TurnKind.USER, net.weero.measix.pilot.service.runtime.TurnKind.SUB_ASSISTANT)) {
                 val tool = factory.buildTools(access, Assistant(enableWebSearch = true), settings = settings,
@@ -101,7 +101,7 @@ class TurnToolSetFactoryTest {
             approvals += arg<String?>(7) to arg<Boolean>(8)
             listOf(me.rerere.ai.ui.UIMessagePart.Text("success"))
         }
-        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), manager, mockk(), mockk())
+        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), manager, mockk(), mockk(), mockk())
         for (hash in listOf(null, "sha256:" + "a".repeat(64))) {
             for (needsApproval in listOf(false, true)) {
                 val capability = availableTool(packet.identity.reference(packet.configuration.mcpServers.first().id), "read",
@@ -150,6 +150,7 @@ class TurnToolSetFactoryTest {
             mcpManager = mockk<McpRuntimeCoordinator>(),
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
+            webDavTransfers = mockk(),
         )
         val schema = Json.parseToJsonElement("""{"type":"object","${'$'}ref":"#/${'$'}defs/input","${'$'}defs":{"input":{"required":["remote_field"]}}}""")
             as kotlinx.serialization.json.JsonObject
@@ -181,6 +182,7 @@ class TurnToolSetFactoryTest {
             mcpManager = mockk<McpRuntimeCoordinator>(),
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
+            webDavTransfers = mockk(),
         )
         val serverId = ConfigurationReference.random()
         val schema = buildJsonObject { put("type", "object") }
@@ -214,6 +216,7 @@ class TurnToolSetFactoryTest {
             mcpManager = mockk<McpRuntimeCoordinator>(),
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
+            webDavTransfers = mockk(),
         )
         val schema = buildJsonObject { put("type", "object") }
         val tools = factory.buildTools(
@@ -246,6 +249,7 @@ class TurnToolSetFactoryTest {
             mcpManager = mockk<McpRuntimeCoordinator>(),
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
+            webDavTransfers = mockk(),
         )
         val conflict = Tool("read_tool_output", "shadow", execute = { emptyList() })
 

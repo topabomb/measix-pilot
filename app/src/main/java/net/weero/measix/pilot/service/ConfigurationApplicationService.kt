@@ -23,6 +23,28 @@ internal class ConfigurationApplicationService(
     private val workspaces: WorkspaceQueryService,
     private val artifacts: net.weero.measix.pilot.data.files.ArtifactStore,
 ) {
+    suspend fun changeWebDavBackup(selection: RealmSelection,
+        expected: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences,
+        proposed: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences) {
+        recoveryGate.awaitReady()
+        enterpriseSessions.withSelectedRealmSelection(selection) {
+            settings.changeWebDavBackup(selection.access.scope, expected, proposed) {
+                enterpriseSessions.requirePublishedSelection(selection)
+            }
+        }
+    }
+
+    suspend fun changeWebDavConnection(
+        selection: RealmSelection,
+        change: net.weero.measix.pilot.data.configuration.WebDavConnectionChange,
+    ) {
+        recoveryGate.awaitReady()
+        require(selection.access == RealmAccess.Personal) { "webdav_enterprise_configuration_read_only" }
+        enterpriseSessions.withSelectedRealmSelection(selection) {
+            settings.changeWebDavConnection(change) { enterpriseSessions.requirePublishedSelection(selection) }
+        }
+    }
+
     suspend fun selectConversationSearch(target: ConversationAssistantTarget, reference: ConfigurationReference) {
         recoveryGate.awaitReady()
         val page = target.conversation

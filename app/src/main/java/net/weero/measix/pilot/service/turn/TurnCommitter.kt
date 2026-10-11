@@ -331,7 +331,7 @@ sealed interface TurnOutcome : TurnRunResult {
 /**
  * Master/Target 共用管道装配清单。
  *
- * 单一装配 owner：`input(turnKind)` 按运行分类给出固定顺序（Tool Artifact 重放仅 USER 侧需要），
+ * 单一装配 owner：`input()` 给出主、子助手共享的固定顺序，
  * `output()` 为两侧共享的输出变换。用户会话与子助手注入同一个实例，不再有各自的私有装配。
  */
 class TurnPipelineFactory(
@@ -357,15 +357,12 @@ class TurnPipelineFactory(
     )
 
     /**
-     * 输入管道。USER 追加 Tool Artifact 重放（历史 inline tool result 的 artifact 引用需重新物化给模型）；
-     * SUB_ASSISTANT 不重放（Child clone 的协议投影由 AttachmentProjection 负责），其余顺序一致。
+     * 主、子助手的工具均可产出托管附件，重放与附件投影使用相同的授权读视图。
      */
-    fun input(turnKind: TurnKind): List<InputMessageTransformer> = buildList {
+    fun input(): List<InputMessageTransformer> = buildList {
         addAll(baseInput)
         add(templateTransformer)
-        if (turnKind == TurnKind.USER) {
-            add(toolArtifactReplayTransformer)
-        }
+        add(toolArtifactReplayTransformer)
         add(attachmentProjectionTransformer)
     }
 

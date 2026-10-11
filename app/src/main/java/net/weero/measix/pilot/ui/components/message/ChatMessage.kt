@@ -687,57 +687,8 @@ private fun MessagePartsBlock(
                         }
                     }
 
-                    is UIMessagePart.Document -> {
-                        Surface(
-                            tonalElevation = 2.dp,
-                            onClick = {
-                                openAttachment(AttachmentRefs.getStableRef(part)?.let(attachmentPreview))
-                            },
-                            modifier = Modifier,
-                            shape = RoundedCornerShape(50),
-                            color = MaterialTheme.colorScheme.tertiaryContainer
-                        ) {
-                            ProvideTextStyle(MaterialTheme.typography.labelSmall) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    when (part.mime) {
-                                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> {
-                                            Icon(
-                                                painter = painterResource(R.drawable.docx),
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-
-                                        "application/pdf" -> {
-                                            Icon(
-                                                painter = painterResource(R.drawable.pdf),
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-
-                                        else -> {
-                                            Icon(
-                                                imageVector = HugeIcons.File02,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-                                    }
-
-                                    Text(
-                                        text = part.fileName,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.widthIn(max = 200.dp)
-                                    )
-                                }
-                            }
-                        }
+                    is UIMessagePart.Document -> DocumentAttachment(part) {
+                        openAttachment(AttachmentRefs.getStableRef(part)?.let(attachmentPreview))
                     }
 
                     else -> {

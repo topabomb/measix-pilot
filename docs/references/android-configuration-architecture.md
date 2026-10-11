@@ -84,6 +84,14 @@ JSON codec 使用 `ignoreUnknownKeys=true` 和 `encodeDefaults=true`。
 `null`、空集合、未设置和显式失效引用必须按各字段协议区分；不得根据显示文本反推配置语义。
 助手模型的三态、工具和提示字段见 [助手配置](assistant-configuration.md)。
 
+个人文件服务器定义保存在 `UserConfiguration.webDavConnections`，当前引用保存在个人
+`ScopedUserPreferences.currentWebDavConnectionId`；`Settings` 备份投影保全两者。
+`ConfigurationApplicationService.changeWebDavConnection` 通过原 Settings writer 增量修改这两个字段，
+首项保存时选中，后续添加不抢占，删除当前项清空选择；失效引用不回退第一项。
+编辑使用原定义比较，迟到草稿不能复活已删除连接或覆盖其他编辑。企业域不消费这些个人选择。
+Settings 在创建或更改地址、用户名、密码时重新分配 `accessRevision`；重命名保留该身份。
+执行时核对捕获的身份，配置值快速往返或删除重建不能恢复旧访问；密码轮换不清除同一远端目标的待核实写入。
+
 ### 2.4 用户配置文档与迁移
 
 `UserSettingsDocument` 的 `schemaVersion`、`configuration`、`preferences`、`internalState` 为必需字段，缺失或版本不支持时拒绝读取；其 schema 与 Room、应用和备份版本独立。
@@ -162,6 +170,20 @@ MCP Tool 原始定义及其 JCS contractHash 使用独立的完整定义合同�
 `PlatformSnapshotMapper` 与 `EnterpriseConfigurationCodec` 都校验领域约束。`ManagedPolicy` 的各项默认引用可省略，缺失表示未设置，不取目录首项或复制 Chat 默认；非空模型引用须指向同快照内已启用模型，附件检查还要求 IMAGE 输入。可选 `imageGenerators` 缺失为空集合，已消费字段的显式 null、错型和无兜底的未知枚举仍拒绝；响应扩展按本节兼容规则忽略。Starter 的 v4/v5 条件和开场保全规则见下文。
 
 Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revision hash 再解码，不在正常读取时回退旧格式。历史 Starter 缺少 opening 时保留 null，不补造正文或重写 release/hash。`EnterpriseExecution.Platform.snapshotSchemaVersion` 持久保存下载时验证的版本；历史缺失为 null，不根据字段形状、Discovery 或客户端版本补造。
+
+Snapshot v5 的可选 `webdav[]` 经 `PlatformSnapshotMapper` 保存为 `EnterpriseConfiguration.webdav`；
+缺省及旧 Applied 缺字段均为空，不触发强制同步。v4 仍先经独立 DTO 投影，未知 DAV 字段不会取得 v5 含义。
+`EnterpriseWebDavResource` 只持平台公开定义，根模板必须精确匹配自身资源 ID，不进入供其他资源使用的 `runtimePaths`。
+`PlatformWorkspaceClient` 保留本人投影的唯一 `fileExchangeWebdavResourceId`；DAV 权限缺省、null 或未知字符串时
+只关闭 DAV 并返回 `webdav_access_mode_unavailable`，原 Files 能力仍按其自身字段解释。其他已知字段的类型校验不放宽。
+`ConfigurationQueryService.observeWebDavConfiguration` 合并本域定义与 `RemoteWorkspaceService.observeDavProjection`，
+唯一当前项由 `fileExchangeWebdavResourceId` 决定；查询失败保留指定身份和完整诊断，但不报告可用权限。
+`WebDavTarget` 固定原 Session、平台连接、资源及空间绑定；个人目标固定连接修订，显示名称修改不改变访问身份。
+`WebDavApplicationService` 在执行时复验这些身份，企业请求通过原平台 operation lease 注入 Bearer，
+仅明确未转发的认证拒绝允许一次刷新；PUT 输入不自动重放。切域、改址与退出编排取消并等待原 DAV 工作。
+最终本地交付通过 `withEnterpriseWebDavAccess` 在原 Session 和配置 owner 边界复验，网络 IO 不持这些锁。
+平台缓存令牌保留 30 秒提前刷新窗口；刷新响应接纳后按实际到期时间判断新令牌能否用于本次请求，
+不能把提前刷新窗口当作最低令牌寿命。即使 access token 在提交时已经过期，轮换后的 refresh 凭据仍须先保全。
 
 同步仅在缓存版本同时受客户端和最新 Bootstrap 支持时使用 ETag；304 可复用该配置并上报 Applied。未知或不再支持的缓存执行无条件完整下载；无可复用缓存的 304 以 `snapshot_304_without_cache` 拒绝，保全原 Applied，不循环重试。同 generation 的完整已验证候选可补齐缺失版本证据或修复损坏正文，但低 generation、release/hash/runtime path 冲突仍拒绝。v4 升级为含开场的 v5 由服务端发布新 generation/release，不改写旧发布。
 
@@ -313,7 +335,17 @@ Opening 的 System 只在当前会话助手等于原助手时参与选择，优�
 
 ### 4.8 备份配置
 
-WebDAV、S3 和提醒配置属于用户 Settings。个人备份包含用户自己的服务凭据，不能纳入企业
+WebDAV 备份通过 `ScopedUserPreferences.webDavBackup` 保存资源 ID、根内目录及归档内容选择，
+由 `ConfigurationApplicationService.changeWebDavBackup` 按原空间和 expected 值提交；不复制连接凭据，
+不跟随文件管理器或 Agent 的当前资源。个人 `Settings.webDavBackup` 只投影个人域偏好，恢复保留企业主体偏好。
+`WebDavSettingsMigration` 在 typed decode 前转换已有文档的旧 `webDavConfig`，独立 `webdav_config` 键
+由原 `UserSettingsMigration` 同次接纳。可按旧类型解码的配置保全地址及凭据，以稳定 ID 加入个人连接；目录保留原根内位置，
+`items` 中任一 DATABASE/FILES 仍映射为完整持久聚合，个人备份引用该连接，但不自动选为文件管理器当前项。
+已存在的新连接、个人当前选择及备份偏好优先，企业 scope 不变；仅空默认旧配置直接移除。
+旧界面逐字段即时保存的未完成地址、用户名和目录仍保留为可编辑配置，合法值按原位置规范化，校验失败保留原值；
+不赋予当前资源资格，新 Save、当前项选择和执行仍严格校验。导入归档沿 `migrateLegacySettingsJson` 使用相同转换；
+损坏 JSON、错误字段类型及未知枚举明确失败并保留输入，成功后移除旧字段，重跑幂等。
+S3 和提醒仍由用户 Settings 管理。个人备份包含用户自己的服务凭据，不能纳入企业
 Snapshot、执行绑定或 Session。归档格式、混合域隔离、冷恢复和系统备份排除规则统一见
 [备份与恢复](data-persistence.md#个人备份与恢复)。
 

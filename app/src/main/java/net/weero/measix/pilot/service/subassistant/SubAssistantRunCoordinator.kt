@@ -1105,7 +1105,7 @@ class SubAssistantRunCoordinator internal constructor(
                     turnContext = turnContext,
                     handle = started.handle,
                     messages = lastMessages,
-                    inputTransformers = turnPipelineFactory.input(TurnKind.SUB_ASSISTANT),
+                    inputTransformers = turnPipelineFactory.input(),
                     outputTransformers = turnPipelineFactory.output(),
                     interactionAvailability = TurnInteractionCapability.USER_INPUT_ONLY,
                     assistantMessageId = started.assistantMessageId,

@@ -92,6 +92,7 @@ class ToolArtifactRewriter(
         return output.map { part ->
             when (part) {
                 is UIMessagePart.Image -> part.copy(url = materialized.fileUri(filesDir))
+                is UIMessagePart.Document -> part.copy(url = materialized.fileUri(filesDir))
                 is UIMessagePart.Text -> part.copy(text = rewriteFilePathJson(part.text, materialized))
                 else -> part
             }.also { onRewritten(part, it) }
@@ -137,7 +138,7 @@ class ToolArtifactRewriter(
         output.mapNotNull { part ->
             when (part) {
                 is UIMessagePart.Text -> part.copy(text = markUnreadablePath(part.text))
-                is UIMessagePart.Image -> null
+                is UIMessagePart.Image, is UIMessagePart.Document -> null
                 else -> part
             }
         }

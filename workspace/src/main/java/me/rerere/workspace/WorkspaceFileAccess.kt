@@ -23,8 +23,9 @@ internal class RootfsFileHandle(
 
     override fun close() {
         if (handle != 0L) {
-            WorkspaceFileAccess.close(handle)
+            val closing = handle
             handle = 0L
+            WorkspaceFileAccess.close(closing)
         }
     }
 }

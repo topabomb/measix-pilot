@@ -25,6 +25,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -41,6 +47,9 @@ import net.weero.measix.pilot.ui.components.message.resolveAttachmentPreview
 import net.weero.measix.pilot.ui.components.message.LocalConversationImages
 import net.weero.measix.pilot.ui.components.message.resolveAttachmentImageSource
 import net.weero.measix.pilot.ui.components.message.isImagePartLoading
+import net.weero.measix.pilot.ui.components.message.DocumentAttachment
+import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.ui.components.richtext.HighlightCodeBlock
 import net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage
 import net.weero.measix.pilot.ui.components.ui.FormItem
@@ -185,7 +194,6 @@ internal fun builtinToolNameResource(name: String): Int? = when (name) {
     "generate_image" -> R.string.assistant_page_local_tools_text_to_image_title
     "inspect_attachments" -> R.string.chat_message_tool_inspect_attachments_title
     "ask_user" -> R.string.assistant_page_local_tools_ask_user_title
-    "eval_javascript" -> R.string.assistant_page_local_tools_javascript_engine_title
     "assistant_manage" -> R.string.assistant_page_local_tools_assistant_management_title
     "assistant_inspect" -> R.string.chat_message_tool_inspect_assistant
     "assistant_call" -> R.string.assistant_page_local_tools_assistant_delegation_title
@@ -285,7 +293,7 @@ fun ToolCallJsonDetails(
         return
     }
     val resultParts = context.tool.output.filter { part ->
-        part is UIMessagePart.Text || (includeImages && part is UIMessagePart.Image)
+        part is UIMessagePart.Text || part is UIMessagePart.Document || (includeImages && part is UIMessagePart.Image)
     }
     if (resultParts.isNotEmpty()) {
         val conversationAlbum = LocalConversationImages.current
@@ -331,6 +339,29 @@ fun ToolCallJsonDetails(
                             }
                         }
 
+                        is UIMessagePart.Document -> {
+                            val androidContext = LocalContext.current
+                            val exportService = org.koin.compose.koinInject<net.weero.measix.pilot.service.MediaExportService>()
+                            val exportScope = rememberCoroutineScope()
+                            var openFailure by remember(context.tool.localCallId) { mutableStateOf<Throwable?>(null) }
+                            openFailure?.let { error ->
+                                net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+                                    net.weero.measix.pilot.service.ChatError(title = stringResource(R.string.chat_message_attachment_open_failed),
+                                        detail = error.userVisibleDiagnostic()), onDismiss = { openFailure = null })
+                            }
+                            val preview = AttachmentRefs.getStableRef(part)?.let(attachmentPreview)
+                            AttachmentPreviewDiagnostic(preview)
+                            DocumentAttachment(part) {
+                                exportScope.launch {
+                                    try { exportService.openAttachment(androidContext, requireNotNull(preview) { "attachment_unavailable" }) }
+                                    catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                                    catch (error: Exception) {
+                                        net.weero.measix.pilot.utils.logDiagnosticFailure("ToolUI", "Attachment opening failed", error)
+                                        openFailure = error
+                                    }
+                                }
+                            }
+                        }
                         else -> {}
                     }
                 }

@@ -214,11 +214,25 @@ class EditorInputConnectionAndroidTest {
             assertEquals(10, editor.selectionEnd)
             assertEquals(0, state.revision)
         }
-        onView(isAssignableFrom(EditText::class.java)).perform(click(), closeSoftKeyboard())
+        lateinit var connection: InputConnection
+        lateinit var previousColour: FileSyntaxColorSpan
         compose.runOnIdle {
-            val connection = requireNotNull(editor.onCreateInputConnection(EditorInfo()))
+            // This native connection owns the composition. Starting and hiding the system IME
+            // would let its asynchronous finishComposingText clear the same Editable buffer.
+            assertFalse(editor.hasFocus())
+            assertFalse(editor.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java).isActive(editor))
+            previousColour = editor.text.getSpans(position, position + 1, FileSyntaxColorSpan::class.java).first()
+            connection = requireNotNull(editor.onCreateInputConnection(EditorInfo()))
             connection.setSelection(editor.length(), editor.length())
             assertTrue(connection.setComposingText("中文", 1))
+        }
+        compose.waitUntil(5_000) {
+            var refreshed = false
+            compose.runOnUiThread {
+                refreshed = editor.text.getSpans(position, position + 1, FileSyntaxColorSpan::class.java)
+                    .any { it !== previousColour }
+            }
+            refreshed
         }
         waitForColour(AtomOneLightPalette.string.toArgb())
         compose.runOnIdle {
@@ -236,7 +250,7 @@ class EditorInputConnectionAndroidTest {
         compose.runOnIdle {
             assertEquals(body + "中文", state.snapshot())
             assertEquals(body.length, BaseInputConnection.getComposingSpanStart(editor.text))
-            editor.onCreateInputConnection(EditorInfo())!!.finishComposingText()
+            connection.finishComposingText()
         }
     }
 

@@ -23,6 +23,13 @@ import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.files.ArtifactRetentionLease
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Conversation
+import net.weero.measix.pilot.data.model.ContextMessageLocator
+import net.weero.measix.pilot.data.model.ConversationContextSource
+import net.weero.measix.pilot.data.model.HistorySummaryCheckpoint
+import net.weero.measix.pilot.data.model.HistorySummaryCoveredMessage
+import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.data.model.historySummaryFingerprint
+import net.weero.measix.pilot.data.model.messageOriginEntry
 import net.weero.measix.pilot.data.repository.ConversationRepository
 import net.weero.measix.pilot.service.runtime.*
 import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
@@ -41,6 +48,34 @@ import kotlin.uuid.Uuid
 @Config(sdk = [34])
 class ConversationCommandAccessTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test fun `regenerating a history summary rejects before truncating later history`() = runTest {
+        fixture { f ->
+            val base = f.runtime.durable
+            val locators = base.nodes.map { ContextMessageLocator(it.id, it.currentMessage.id) }
+            val summary = MessageNode.of(UIMessage.user("summary"))
+            val checkpoint = HistorySummaryCheckpoint(covered = base.currentMessages().zip(locators).map { (message, locator) ->
+                HistorySummaryCoveredMessage(locator, historySummaryFingerprint(message, base.modelContextEntries, locators))
+            })
+            val origin = messageOriginEntry(summary, ConversationContextSource.HistorySummary(
+                model = null, prompt = "fixture", checkpoint = checkpoint,
+            ))
+            f.coordinator.executeOrThrow(f.rootId, InsertHistorySummaryCheckpoint(
+                base.nodes, base.modelContextEntries, summary, origin, base.nodes.size,
+            ))
+            f.coordinator.executeOrThrow(f.rootId, AppendUserMessage(UIMessage.user("must remain after summary")))
+            val before = f.runtime.durable
+            f.turns.regenerateAtMessage(f.page.commandTarget, summary.currentMessage)
+            f.runtime.awaitCurrentWorker()
+            assertEquals(before.nodes, f.runtime.durable.nodes)
+            assertEquals(before.modelContextEntries, f.runtime.durable.modelContextEntries)
+            assertEquals(before.contextAdmissions, f.runtime.durable.contextAdmissions)
+            assertEquals("must remain after summary", f.runtime.durable.currentMessages().last().toText())
+            assertTrue(f.errors.errors.value.single().detail.contains("summary_cannot_be_sent_as_user_input"))
+            coVerify(exactly = 0) { f.runner.run(any()) }
+            assertNull(f.runtime.currentWorker())
+        }
+    }
 
     @Test fun `initial enterprise route consumes configured assistant and uses space entry when absent without persisting a draft`() = runTest {
         fixture { f ->
@@ -238,6 +273,30 @@ class ConversationCommandAccessTest {
             f.page.close()
             rejects<IllegalStateException> { f.application.togglePin(target) }
             assertTrue(f.runtime.durable.header.isPinned)
+        }
+    }
+
+    @Test fun `editing generated text preserves committed model identity`() = runTest {
+        fixture { f ->
+            f.configureAssistant(net.weero.measix.pilot.data.model.Assistant(id = DEFAULT_ASSISTANT_ID))
+            val info = me.rerere.ai.ui.MessageModelInfo(ConfigurationReference.random(), "original-wire", "Original name")
+            val turnId = Uuid.random()
+            val worker = Job()
+            f.runtime.installTurnWorker(turnId, worker)
+            val handle = f.coordinator.startTurn(f.rootId, TurnTransition.buildStartTurnCommand(
+                f.runtime.durable, turnId = turnId,
+            ).copy(modelInfo = info))
+            f.coordinator.executeOrThrow(f.rootId, FinalizeTurn(handle, null,
+                TurnExecutionStatus.CANCELLED, "user_stop"))
+            worker.complete()
+            f.runtime.releaseTurnWorker(turnId, worker)
+            val original = f.runtime.durable.nodes.last().currentMessage
+            f.application.editMessage(f.page.commandTarget, original.id, listOf(UIMessagePart.Text("edited answer")))
+            val node = f.runtime.durable.nodes.last()
+            assertEquals(original, node.messages.first())
+            assertEquals(info, node.currentMessage.modelInfo)
+            assertEquals(info.id, node.currentMessage.modelId)
+            assertEquals("edited answer", node.currentMessage.toText())
         }
     }
 
@@ -641,7 +700,7 @@ class ConversationCommandAccessTest {
             val originalTurn = Uuid.random()
             val originalWorker = Job()
             f.runtime.installTurnWorker(originalTurn, originalWorker)
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer, me.rerere.ai.provider.Model(modelId = "fixture"))
             f.failTerminal = true
             f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false)
             f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("C")), false)
@@ -662,7 +721,7 @@ class ConversationCommandAccessTest {
             val originalTurn = Uuid.random()
             val originalWorker = Job()
             f.runtime.installTurnWorker(originalTurn, originalWorker)
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer, me.rerere.ai.provider.Model(modelId = "fixture"))
             f.failTerminal = true
             f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false)
             val stop = requireNotNull(f.finalizer.captureStop(f.rootId))
@@ -680,7 +739,7 @@ class ConversationCommandAccessTest {
         fixture { f ->
             val originalTurn = Uuid.random()
             f.runtime.installTurnWorker(originalTurn, Job())
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, originalTurn, f.finalizer, me.rerere.ai.provider.Model(modelId = "fixture"))
             val stop = requireNotNull(f.finalizer.captureStop(f.rootId))
             val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("B")), false))
             f.finalizer.finishStop(stop)
@@ -700,7 +759,7 @@ class ConversationCommandAccessTest {
             val worker = Job()
             f.runtime.installTurnWorker(turnId, worker)
             val started = net.weero.measix.pilot.service.turn.TurnCommitter.start(
-                f.coordinator, f.runtime, turnId, f.finalizer)
+                f.coordinator, f.runtime, turnId, f.finalizer, me.rerere.ai.provider.Model(modelId = "fixture"))
             val lease = net.weero.measix.pilot.service.runtime.ModelExecutionLease { error("no request expected") }
             f.runtime.bindModelExecution(turnId, worker, f.runtime.durable.header.assistantId, lease)
             f.runtime.bindTurnContext(turnId, worker, mockk {
@@ -837,7 +896,7 @@ class ConversationCommandAccessTest {
             val turn = Uuid.random()
             val worker = Job()
             f.runtime.installTurnWorker(turn, worker)
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer, me.rerere.ai.provider.Model(modelId = "fixture"))
             val release = CompletableDeferred<Unit>()
             val auxiliary = f.appScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 try { awaitCancellation() }
@@ -867,7 +926,7 @@ class ConversationCommandAccessTest {
             val turn = Uuid.random()
             val worker = Job()
             f.runtime.installTurnWorker(turn, worker)
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer, me.rerere.ai.provider.Model(modelId = "fixture"))
             val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
             f.failTerminal = true
             rejects<java.io.IOException> { f.application.stopEnterpriseWork(token) }
@@ -888,7 +947,7 @@ class ConversationCommandAccessTest {
         fixture { f ->
             val turn = Uuid.random()
             f.runtime.installTurnWorker(turn, Job())
-            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer)
+            net.weero.measix.pilot.service.turn.TurnCommitter.start(f.coordinator, f.runtime, turn, f.finalizer, me.rerere.ai.provider.Model(modelId = "fixture"))
             val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
             val idleId = f.put(f.scope, parent = f.rootId)
             f.registry.registerSnapshot(f.rows.getValue(idleId))

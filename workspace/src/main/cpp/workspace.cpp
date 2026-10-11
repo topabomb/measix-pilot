@@ -32,6 +32,8 @@ private:
 struct Handle {
     Fd parent;
     Fd original;
+    Fd output;
+    std::string temporary;
     std::string leaf;
     struct stat initial{};
     bool existed = false;
@@ -189,29 +191,81 @@ Java_me_rerere_workspace_WorkspaceFileAccess_read(JNIEnv* env, jobject, jlong po
     } catch (const std::exception& error) { report(env, error); return nullptr; }
 }
 
+namespace {
+void beginWrite(JNIEnv* env, Handle* handle) {
+    if (handle->output.get() >= 0) throw std::runtime_error("Write already started");
+    if (!handle->writable) throw std::runtime_error("File handle is read-only");
+    interrupted(env);
+    static std::atomic<unsigned long long> sequence{0};
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        handle->temporary = ".workspace-write-" + std::to_string(getpid()) + "-" + std::to_string(++sequence);
+        if (handle->temporary == handle->leaf) { handle->temporary.clear(); continue; }
+        int fd = openat(handle->parent.get(), handle->temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (fd >= 0) { handle->output.reset(fd); break; }
+        if (errno != EEXIST) { handle->temporary.clear(); failure("Create atomic write file"); }
+        handle->temporary.clear();
+    }
+    if (handle->output.get() < 0) throw std::runtime_error("Cannot reserve atomic write file");
+}
+
+struct stat commitWrite(JNIEnv* env, Handle* handle) {
+    if (handle->temporary.empty() || handle->output.get() < 0) throw std::runtime_error("No pending write");
+    if (fchmod(handle->output.get(), handle->existed ? (handle->initial.st_mode & 0777) : 0644) < 0) failure("Set file mode");
+    if (fsync(handle->output.get()) < 0) failure("Sync file");
+    struct stat written{};
+    if (fstat(handle->output.get(), &written) < 0) failure("Read written metadata");
+    struct stat staged{};
+    if (fstatat(handle->parent.get(), handle->temporary.c_str(), &staged, AT_SYMLINK_NOFOLLOW) < 0) failure("Check atomic write file");
+    if (!sameFile(written, staged) || staged.st_nlink != 1) throw std::runtime_error("Atomic write file changed");
+    interrupted(env);
+    if (handle->existed) {
+        struct stat current{};
+        if (fstatat(handle->parent.get(), handle->leaf.c_str(), &current, AT_SYMLINK_NOFOLLOW) < 0) failure("Check target before replacement");
+        validateWritable(current);
+        if (!sameFile(handle->initial, current)
+            || current.st_size != handle->initial.st_size
+            || current.st_mtim.tv_sec != handle->initial.st_mtim.tv_sec
+            || current.st_mtim.tv_nsec != handle->initial.st_mtim.tv_nsec
+            || current.st_ctim.tv_sec != handle->initial.st_ctim.tv_sec
+            || current.st_ctim.tv_nsec != handle->initial.st_ctim.tv_nsec) {
+            throw std::runtime_error("File changed during operation");
+        }
+        // Replacing the entry itself never follows a substituted leaf symlink.
+        if (renameat(handle->parent.get(), handle->temporary.c_str(), handle->parent.get(), handle->leaf.c_str()) < 0) failure("Replace file");
+    } else {
+        // New targets must not replace files concurrently created after open.
+        if (syscall(SYS_renameat2, handle->parent.get(), handle->temporary.c_str(),
+                    handle->parent.get(), handle->leaf.c_str(), RENAME_NOREPLACE) < 0) failure("Create file");
+    }
+    handle->temporary.clear();
+    return written;
+}
+
+void discardWrite(Handle* handle) {
+    if (handle->temporary.empty()) return;
+    struct stat owned{}, current{};
+    if (fstat(handle->output.get(), &owned) < 0) failure("Read incomplete write metadata");
+    if (fstatat(handle->parent.get(), handle->temporary.c_str(), &current, AT_SYMLINK_NOFOLLOW) < 0) {
+        if (errno == ENOENT) return;
+        failure("Check incomplete write");
+    }
+    if (sameFile(owned, current) && unlinkat(handle->parent.get(), handle->temporary.c_str(), 0) < 0)
+        failure("Remove incomplete write");
+}
+
+jlongArray writeMetadata(JNIEnv* env, const struct stat& written) {
+    jlong metadata[] = { written.st_size, written.st_mtim.tv_sec * 1000LL + written.st_mtim.tv_nsec / 1000000LL };
+    auto result = env->NewLongArray(2);
+    if (result) env->SetLongArrayRegion(result, 0, 2, metadata);
+    return result;
+}
+}
+
 extern "C" JNIEXPORT jlongArray JNICALL
 Java_me_rerere_workspace_WorkspaceFileAccess_write(JNIEnv* env, jobject, jlong pointer, jbyteArray bytes) {
-    std::string temporary;
-    struct stat ownedTemporary{};
-    bool ownsTemporary = false;
-    Handle* handle = nullptr;
     try {
-        handle = from(pointer);
-        if (!handle->writable) throw std::runtime_error("File handle is read-only");
-        interrupted(env);
-        static std::atomic<unsigned long long> sequence{0};
-        Fd output;
-        for (int attempt = 0; attempt < 64; ++attempt) {
-            temporary = ".workspace-write-" + std::to_string(getpid()) + "-" + std::to_string(++sequence);
-            if (temporary == handle->leaf) { temporary.clear(); continue; }
-            int fd = openat(handle->parent.get(), temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
-            if (fd >= 0) { output.reset(fd); break; }
-            if (errno != EEXIST) { temporary.clear(); failure("Create atomic write file"); }
-            temporary.clear();
-        }
-        if (output.get() < 0) throw std::runtime_error("Cannot reserve atomic write file");
-        if (fstat(output.get(), &ownedTemporary) < 0) failure("Read atomic write metadata");
-        ownsTemporary = true;
+        auto* handle = from(pointer);
+        beginWrite(env, handle);
         const jsize size = env->GetArrayLength(bytes);
         jbyte buffer[65536];
         for (jsize offset = 0; offset < size;) {
@@ -222,61 +276,22 @@ Java_me_rerere_workspace_WorkspaceFileAccess_write(JNIEnv* env, jobject, jlong p
             ssize_t written = 0;
             while (written < count) {
                 interrupted(env);
-                const auto part = ::write(output.get(), buffer + written, count - written);
+                const auto part = ::write(handle->output.get(), buffer + written, count - written);
                 if (part < 0) { if (errno == EINTR) continue; failure("Write file"); }
                 if (part == 0) throw std::runtime_error("Write file made no progress");
                 written += part;
             }
             offset += count;
         }
-        if (fchmod(output.get(), handle->existed ? (handle->initial.st_mode & 0777) : 0644) < 0) failure("Set file mode");
-        if (fsync(output.get()) < 0) failure("Sync file");
-        struct stat written{};
-        if (fstat(output.get(), &written) < 0) failure("Read written metadata");
-        struct stat staged{};
-        if (fstatat(handle->parent.get(), temporary.c_str(), &staged, AT_SYMLINK_NOFOLLOW) < 0) failure("Check atomic write file");
-        if (!sameFile(written, staged) || staged.st_nlink != 1) throw std::runtime_error("Atomic write file changed");
-        interrupted(env);
-        if (handle->existed) {
-            struct stat current{};
-            if (fstatat(handle->parent.get(), handle->leaf.c_str(), &current, AT_SYMLINK_NOFOLLOW) < 0) failure("Check target before replacement");
-            validateWritable(current);
-            if (!sameFile(handle->initial, current)
-                || current.st_size != handle->initial.st_size
-                || current.st_mtim.tv_sec != handle->initial.st_mtim.tv_sec
-                || current.st_mtim.tv_nsec != handle->initial.st_mtim.tv_nsec
-                || current.st_ctim.tv_sec != handle->initial.st_ctim.tv_sec
-                || current.st_ctim.tv_nsec != handle->initial.st_ctim.tv_nsec) {
-                throw std::runtime_error("File changed during operation");
-            }
-            // Replacing the entry itself never follows a substituted leaf symlink.
-            if (renameat(handle->parent.get(), temporary.c_str(), handle->parent.get(), handle->leaf.c_str()) < 0) failure("Replace file");
-        } else {
-            // New targets must not replace files concurrently created after open.
-            if (syscall(SYS_renameat2, handle->parent.get(), temporary.c_str(),
-                        handle->parent.get(), handle->leaf.c_str(), RENAME_NOREPLACE) < 0) failure("Create file");
-        }
-        temporary.clear();
-        jlong metadata[] = { written.st_size, written.st_mtim.tv_sec * 1000LL + written.st_mtim.tv_nsec / 1000000LL };
-        auto result = env->NewLongArray(2);
-        if (result) env->SetLongArrayRegion(result, 0, 2, metadata);
-        return result;
-    } catch (const std::exception& error) {
-        if (handle && ownsTemporary && !temporary.empty()) {
-            struct stat current{};
-            if (fstatat(handle->parent.get(), temporary.c_str(), &current, AT_SYMLINK_NOFOLLOW) == 0
-                && sameFile(ownedTemporary, current)) {
-                unlinkat(handle->parent.get(), temporary.c_str(), 0);
-            }
-        }
-        report(env, error);
-        return nullptr;
-    }
+        return writeMetadata(env, commitWrite(env, handle));
+    } catch (const std::exception& error) { report(env, error); return nullptr; }
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_me_rerere_workspace_WorkspaceFileAccess_close(JNIEnv*, jobject, jlong pointer) {
-    delete reinterpret_cast<Handle*>(pointer);
+Java_me_rerere_workspace_WorkspaceFileAccess_close(JNIEnv* env, jobject, jlong pointer) {
+    std::unique_ptr<Handle> handle(reinterpret_cast<Handle*>(pointer));
+    try { if (handle) discardWrite(handle.get()); }
+    catch (const std::exception& error) { report(env, error); }
 }
 
 // Directory capabilities share the same NOFOLLOW traversal as Rootfs file operations.

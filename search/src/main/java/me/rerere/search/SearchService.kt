@@ -132,7 +132,7 @@ sealed class SearchServiceOptions {
 
     @Serializable
     @SerialName("bing_local")
-    class BingLocalOptions(
+    data class BingLocalOptions(
         override val id: ConfigurationReference = ConfigurationReference.random()
     ) : SearchServiceOptions()
 

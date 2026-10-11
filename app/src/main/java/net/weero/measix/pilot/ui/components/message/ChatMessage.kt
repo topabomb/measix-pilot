@@ -58,7 +58,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
-import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
@@ -111,7 +110,6 @@ fun ChatMessage(
     modifier: Modifier = Modifier,
     loading: Boolean = false,
     turnFinished: Boolean = !loading,
-    model: Model? = null,
     modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
     assistant: Assistant? = null,
     lastMessage: Boolean = false,
@@ -165,7 +163,7 @@ fun ChatMessage(
         showUserAvatar = settings.showUserAvatar,
         showAssistantIcon = settings.showModelIcon,
         showAssistantName = settings.showModelName,
-        hasAssistantIdentity = model != null || assistant?.useAssistantAvatar == true,
+        hasAssistantIdentity = message.role == MessageRole.ASSISTANT,
     )
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -181,7 +179,6 @@ fun ChatMessage(
             ) {
                 ChatMessageAssistantAvatar(
                     message = message,
-                    model = model,
                     modelIconFallback = modelIconFallback,
                     assistant = assistant,
                     loading = loading,
@@ -209,7 +206,6 @@ fun ChatMessage(
                 parts = renderableParts,
                 annotations = message.annotations,
                 loading = loading,
-                model = model,
                 onToolDecision = if (readOnly) null else onToolDecision,
                 onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
                 toolLivePhases = toolLivePhases,
@@ -254,6 +250,8 @@ fun ChatMessage(
                         ChatMessageActionButtons(
                             message = message,
                             onRegenerate = onRegenerate,
+                            canRegenerate = contextSummary?.origin !=
+                                net.weero.measix.pilot.service.ConversationContextCategory.HISTORY_SUMMARY,
                             node = node,
                             onUpdate = onUpdate,
                             onOpenActionSheet = {
@@ -286,7 +284,6 @@ fun ChatMessage(
             onDelete = onDelete,
             onShare = onShare,
             onFork = onFork,
-            model = model,
             onSelectAndCopy = {
                 showSelectCopySheet = true
             },
@@ -404,7 +401,6 @@ private fun MessagePartsBlock(
     assistant: Assistant?,
     messageId: kotlin.uuid.Uuid,
     role: MessageRole,
-    model: Model?,
     parts: List<UIMessagePart>,
     annotations: List<UIMessageAnnotation>,
     loading: Boolean,
@@ -497,7 +493,6 @@ private fun MessagePartsBlock(
                                 key(step.reasoning.createdAt) {
                                     ChatMessageReasoningStep(
                                         reasoning = step.reasoning,
-                                        model = model,
                                         assistant = assistant,
                                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                                     )
@@ -692,57 +687,8 @@ private fun MessagePartsBlock(
                         }
                     }
 
-                    is UIMessagePart.Document -> {
-                        Surface(
-                            tonalElevation = 2.dp,
-                            onClick = {
-                                openAttachment(AttachmentRefs.getStableRef(part)?.let(attachmentPreview))
-                            },
-                            modifier = Modifier,
-                            shape = RoundedCornerShape(50),
-                            color = MaterialTheme.colorScheme.tertiaryContainer
-                        ) {
-                            ProvideTextStyle(MaterialTheme.typography.labelSmall) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    when (part.mime) {
-                                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> {
-                                            Icon(
-                                                painter = painterResource(R.drawable.docx),
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-
-                                        "application/pdf" -> {
-                                            Icon(
-                                                painter = painterResource(R.drawable.pdf),
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-
-                                        else -> {
-                                            Icon(
-                                                imageVector = HugeIcons.File02,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-                                    }
-
-                                    Text(
-                                        text = part.fileName,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.widthIn(max = 200.dp)
-                                    )
-                                }
-                            }
-                        }
+                    is UIMessagePart.Document -> DocumentAttachment(part) {
+                        openAttachment(AttachmentRefs.getStableRef(part)?.let(attachmentPreview))
                     }
 
                     else -> {

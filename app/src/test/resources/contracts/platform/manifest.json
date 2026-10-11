@@ -4,9 +4,9 @@
     2
   ],
   "coreBaselineVersion": "0.2.0-preview.23",
-  "baselineHash": "sha256:389b429ae51eb8d8cfbbf927c028ad298b0e1471edb668b86e28cb778224804b",
+  "baselineHash": "sha256:2be18c93c85c9aaa15873858e4f24b9340c04f62b89462107d1603e07de2d2ee",
   "generated": true,
   "source": "../api/client/client-control.openapi.yaml",
-  "sourceHash": "sha256:e7e457c52decf4ac92c94c90dd27af0b7593c7358a1231ac05f1785c6a195079",
+  "sourceHash": "sha256:55fb1ea7404ed71135948a94733b3160366adb991be3abda0c0af481f10e2cc8",
   "format": "openapi-3.0.3-client-schema-only"
 }

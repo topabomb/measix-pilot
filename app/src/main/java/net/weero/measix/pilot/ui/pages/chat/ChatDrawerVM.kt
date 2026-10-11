@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import net.weero.measix.pilot.data.datastore.ConversationSortOrder
 import android.app.Application
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -27,6 +28,10 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.service.ConversationSummary
 import net.weero.measix.pilot.service.ConversationFolderAccess
 import net.weero.measix.pilot.service.ConversationFolderDirectory
@@ -45,6 +50,9 @@ class ChatDrawerVM internal constructor(
     private val conversationApplicationService: ConversationApplicationService,
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
+
+    internal val webDavConfiguration = configurationQueryService.observeWebDavConfiguration()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), net.weero.measix.pilot.service.WebDavConfigurationReadState.Loading)
 
     internal val assistantCatalog = configurationQueryService.observeAssistantCatalog()
         .stateIn(viewModelScope, SharingStarted.Eagerly, AssistantCatalogReadState.Loading)
@@ -80,14 +88,35 @@ class ChatDrawerVM internal constructor(
         conversationQueryService.conversationActivities()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
-    val conversations: Flow<PagingData<ConversationListItem>> =
+    private val sortRead = folderRefresh.flatMapLatest {
+        conversationQueryService.observeSortOrder().map<ConversationSortOrder, Result<ConversationSortOrder>?> { Result.success(it) }
+            .onStart { emit(null) }
+            .catch { error ->
+                if (error is CancellationException) throw error
+                android.util.Log.e("ChatDrawerVM", "Conversation sort preference read failed", error)
+                emit(Result.failure(error))
+            }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val sortFailure = sortRead.map { it?.exceptionOrNull()?.userVisibleDiagnostic() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val sortOrder: StateFlow<ConversationSortOrder?> = sortRead.map { it?.getOrNull() }
+         .onEach { sort ->
+            if (sort == null) return@onEach
+            val previous: String? = savedStateHandle["conversationSortOrder"]
+            if (previous != null && previous != sort.name) saveScrollPosition(0, 0)
+            savedStateHandle["conversationSortOrder"] = sort.name
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val conversations: Flow<PagingData<ConversationListItem>> = sortOrder.flatMapLatest { sort ->
+        if (sort == null) return@flatMapLatest flowOf(PagingData.empty<ConversationListItem>())
         assistantTarget.flatMapLatest { target ->
             if (target == null) flowOf(PagingData.empty<ConversationSummary>()) else selectedFolder
                 .map { selected -> selected?.takeIf { it.first == target }?.second }
                 .distinctUntilChanged()
                 .flatMapLatest { folderId ->
-                    if (folderId == null) conversationQueryService.unfiledPaging(target)
-                    else conversationQueryService.folderPaging(target, folderId)
+                    if (folderId == null) conversationQueryService.unfiledPaging(target, sort)
+                    else conversationQueryService.folderPaging(target, folderId, sort)
                 }
         }
             .map { pagingData ->
@@ -99,7 +128,7 @@ class ChatDrawerVM internal constructor(
                                 if (after.conversation.isPinned) {
                                     ConversationListItem.PinnedHeader
                                 } else {
-                                    val afterDate = after.conversation.updateAt
+                                    val afterDate = after.conversation.sortTime
                                         .atZone(ZoneId.systemDefault())
                                         .toLocalDate()
                                     ConversationListItem.DateHeader(
@@ -111,7 +140,7 @@ class ChatDrawerVM internal constructor(
 
                             before is ConversationListItem.Item && after is ConversationListItem.Item -> {
                                 if (before.conversation.isPinned && !after.conversation.isPinned) {
-                                    val afterDate = after.conversation.updateAt
+                                    val afterDate = after.conversation.sortTime
                                         .atZone(ZoneId.systemDefault())
                                         .toLocalDate()
                                     ConversationListItem.DateHeader(
@@ -119,10 +148,10 @@ class ChatDrawerVM internal constructor(
                                         label = getDateLabel(afterDate)
                                     )
                                 } else if (!after.conversation.isPinned) {
-                                    val beforeDate = before.conversation.updateAt
+                                    val beforeDate = before.conversation.sortTime
                                         .atZone(ZoneId.systemDefault())
                                         .toLocalDate()
-                                    val afterDate = after.conversation.updateAt
+                                    val afterDate = after.conversation.sortTime
                                         .atZone(ZoneId.systemDefault())
                                         .toLocalDate()
 
@@ -143,7 +172,7 @@ class ChatDrawerVM internal constructor(
                         }
                     }
             }
-            .cachedIn(viewModelScope)
+        }.cachedIn(viewModelScope)
 
     val scrollIndex: Int get() = savedStateHandle["scrollIndex"] ?: 0
     val scrollOffset: Int get() = savedStateHandle["scrollOffset"] ?: 0

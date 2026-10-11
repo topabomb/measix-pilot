@@ -578,6 +578,7 @@ private fun SpeechProviderList(
                 tts is TTSProviderSetting.OpenAI -> stringResource(R.string.setting_tts_page_provider_openai)
                 tts is TTSProviderSetting.Gemini -> stringResource(R.string.setting_tts_page_provider_gemini)
                 tts is TTSProviderSetting.MiMo -> stringResource(R.string.setting_tts_page_provider_mimo)
+                tts is TTSProviderSetting.Volcengine -> stringResource(R.string.setting_tts_page_provider_volcengine)
                 tts is TTSProviderSetting.SystemTTS -> stringResource(R.string.setting_tts_page_provider_system)
                 asr is ASRProviderSetting.OpenAIRealtime -> "OpenAI Realtime"
                 asr is ASRProviderSetting.DashScope -> "DashScope"

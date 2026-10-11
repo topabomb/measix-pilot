@@ -60,14 +60,17 @@ updateLocal(latest personalSettings transform)
 
 新增文件引用必须通过 `ArtifactStore.updateSettingsReferences`：Settings 写锁先于 Artifact 生命周期锁，校验后保持文件锁直到 DataStore 回执与创建所有权交接完成。普通配置提交拒绝绕过该入口新增引用。完整引用覆盖用户定义和所有主体保留的使用偏好，不从当前显示投影推断；具体文件保留、删除与恢复协议见 [多模态与持久化](multimodal-context-and-turn-durability.md)。
 
+JSON 解码、个人配置物化和按域 Resolver 投影在 SettingsStore 的后台计算 dispatcher 执行；
+发布仍在原 writer／recovery 协议中完成，不由后台 Flow 提前宣布配置提交。
+
 ### 2.3 用户配置结构与默认语义
 
 `UserSettingsDocument.configuration` 是用户可编辑配置的持久事实；`Settings` 还包含运行消费所需的投影。
 用户文档模型位于 `UserSettingsDocument.kt`，个人 Settings 投影位于 `SettingsStore.kt`；迁移与读取规范化分别由 `UserSettingsMigration`、`SettingsNormalization` 维护。
 不在这里复制完整属性清单，但必须区分四种默认语义：Kotlin 构造默认、旧 DataStore key 缺失默认、
 `materializeForRead()` 后的有效默认、企业字段未提供。不能用其中一种推断另一种。
-例如 `Settings()` 的 `modeInjections` 构造默认包含 `DEFAULT_MODE_INJECTIONS`，空存储经过迁移后却为
-空列表，读取规范化不会补回 Learning Mode。正常持久化写入 `user_settings` 的类型化结构；
+`Settings()` 的 `modeInjections` 构造默认包含 `DEFAULT_MODE_INJECTIONS`；`UserSettingsMigration` 在旧键缺失时
+使用同一默认，但明确保存的空列表保持空。读取规范化不补造已删除的 Learning Mode。正常持久化写入 `user_settings` 的类型化结构；
 JSON codec 使用 `ignoreUnknownKeys=true` 和 `encodeDefaults=true`。
 
 | 配置类别 | 语义与边界 |
@@ -81,12 +84,22 @@ JSON codec 使用 `ignoreUnknownKeys=true` 和 `encodeDefaults=true`。
 `null`、空集合、未设置和显式失效引用必须按各字段协议区分；不得根据显示文本反推配置语义。
 助手模型的三态、工具和提示字段见 [助手配置](assistant-configuration.md)。
 
+个人文件服务器定义保存在 `UserConfiguration.webDavConnections`，当前引用保存在个人
+`ScopedUserPreferences.currentWebDavConnectionId`；`Settings` 备份投影保全两者。
+`ConfigurationApplicationService.changeWebDavConnection` 通过原 Settings writer 增量修改这两个字段，
+首项保存时选中，后续添加不抢占，删除当前项清空选择；失效引用不回退第一项。
+编辑使用原定义比较，迟到草稿不能复活已删除连接或覆盖其他编辑。企业域不消费这些个人选择。
+Settings 在创建或更改地址、用户名、密码时重新分配 `accessRevision`；重命名保留该身份。
+执行时核对捕获的身份，配置值快速往返或删除重建不能恢复旧访问；密码轮换不清除同一远端目标的待核实写入。
+
 ### 2.4 用户配置文档与迁移
 
 `UserSettingsDocument` 的 `schemaVersion`、`configuration`、`preferences`、`internalState` 为必需字段，缺失或版本不支持时拒绝读取；其 schema 与 Room、应用和备份版本独立。
 
 - `UserConfiguration` 保存现有 Provider/Model、TTS/ASR、MCP、Search、Assistant、注入/QuickMessage/标签、辅助提示词、备份连接及 UserProfile。用户昵称/头像不重复放入显示偏好。
 - `UserPreferences.common` 保存 DataStore 原有的外观、DisplayPreferences、播放速度和提醒；`scopes` 以完整 ConfigurationScope 保存 ResourceSelections、企业域的 AssistantUsagePreferences 和 GatewayPreference。Gateway 偏好随 Deployment、User 与资源 ID 隔离；旧顶层 gateways 不具备主体归属，迁移不猜测归属。SharedPreferences 表中的偏好仍由原 owner 管理。
+- 模型组折叠保存在 `ScopedUserPreferences.collapsedModelGroupIds`，使用稳定 Provider ID（企业目录组为 `enterprise`）并按完整主体隔离。`ConfigurationApplicationService.setModelGroupCollapsed` 增量修改最新文档，提交失败不发布；查询通过 `ConfigurationQueryService` 返回诊断。搜索临时展开命中组，不保存临时状态。个人 `Settings` 备份只投影个人折叠偏好，恢复不覆盖企业主体。
+- `DisplayPreferences.conversationSortOrder` 是共用显示偏好，缺失时为 `UPDATED`。个人备份和 Settings 投影保全此字段；它不进入企业配置或修改业务最近会话的定义。
 - `common.configuration.ConfigurationReference` 保留原用户 UUID 或企业 deploymentId/原始字符串 ID，不生成替代 UUID。个人引用的 JSON 仍是原 UUID 字符串；企业引用序列化为 `managed~deploymentId~资源ID`。ConfigurationScope 企业身份只包括 deploymentId/userId，URL、域名、端口、服务器位置、企业名称和用户名等可变属性都不参与身份。Settings 投影只提供个人配置；企业聊天、子助手、辅助模型、MCP、语音与配置界面通过原域的 `ResolvedConfiguration` 读取资源和选择。
 - `EnterprisePrincipalPreferencesMigration` 在 DataStore 打开前定点转换 `scopes.scope.authority`、资源选择、Gateway 与助手使用偏好的引用字段；预设消息复用 `LegacyEnterpriseTranscriptMigration`，只转换 `modelId` 和子助手目标 metadata。模板、正文、正则文本、Header、Body、Skills 与未知 JSON 字段不作为身份解释。同一平台主体因多个旧 URL 来源产生的 Settings scope 按序列化顺序以后出现的标量为准、逐资源合并偏好，MCP Catalog 保留最高 managed generation/revision 的可重建缓存。Room 的同类持久字段由 `Migration_12_13` 在数据库事务内改写；转换时严格验证非 Personal scope 与 managed reference，任一异常使整笔迁移回滚。正常解析器只接受新格式，不保留旧格式 fallback。
 - 已退休 local 示例或导入来源的数据使用 `RetiredLocalEnterpriseIdentity`：将原 `sourceNamespace` 与 deploymentId 的长度帧 UTF-8 字节编码为 `retired-local.` 保留 deploymentId，原身份可完整解码。scope、引用及 MCP 使用同一转换，userId、资源 ID、关系、正文与 payload 不变，不与同名平台主体合并。当前 serializer 校验保留编码的规范性；`EnterpriseConfigurationCodec.validateIdentity` 拒绝该命名空间取得平台 Session。退休记录仍归原持久化 owner，不开放 local 执行或新的可编辑域；个人恢复及个人备份合并保留这些非 Personal 数据。旧 manifest 不受支持时由 Enterprise 发布 Failed 并保留原文件，个人恢复不等待其成功。
@@ -160,6 +173,20 @@ MCP Tool 原始定义及其 JCS contractHash 使用独立的完整定义合同�
 
 Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revision hash 再解码，不在正常读取时回退旧格式。历史 Starter 缺少 opening 时保留 null，不补造正文或重写 release/hash。`EnterpriseExecution.Platform.snapshotSchemaVersion` 持久保存下载时验证的版本；历史缺失为 null，不根据字段形状、Discovery 或客户端版本补造。
 
+Snapshot v5 的可选 `webdav[]` 经 `PlatformSnapshotMapper` 保存为 `EnterpriseConfiguration.webdav`；
+缺省及旧 Applied 缺字段均为空，不触发强制同步。v4 仍先经独立 DTO 投影，未知 DAV 字段不会取得 v5 含义。
+`EnterpriseWebDavResource` 只持平台公开定义，根模板必须精确匹配自身资源 ID，不进入供其他资源使用的 `runtimePaths`。
+`PlatformWorkspaceClient` 保留本人投影的唯一 `fileExchangeWebdavResourceId`；DAV 权限缺省、null 或未知字符串时
+只关闭 DAV 并返回 `webdav_access_mode_unavailable`，原 Files 能力仍按其自身字段解释。其他已知字段的类型校验不放宽。
+`ConfigurationQueryService.observeWebDavConfiguration` 合并本域定义与 `RemoteWorkspaceService.observeDavProjection`，
+唯一当前项由 `fileExchangeWebdavResourceId` 决定；查询失败保留指定身份和完整诊断，但不报告可用权限。
+`WebDavTarget` 固定原 Session、平台连接、资源及空间绑定；个人目标固定连接修订，显示名称修改不改变访问身份。
+`WebDavApplicationService` 在执行时复验这些身份，企业请求通过原平台 operation lease 注入 Bearer，
+仅明确未转发的认证拒绝允许一次刷新；PUT 输入不自动重放。切域、改址与退出编排取消并等待原 DAV 工作。
+最终本地交付通过 `withEnterpriseWebDavAccess` 在原 Session 和配置 owner 边界复验，网络 IO 不持这些锁。
+平台缓存令牌保留 30 秒提前刷新窗口；刷新响应接纳后按实际到期时间判断新令牌能否用于本次请求，
+不能把提前刷新窗口当作最低令牌寿命。即使 access token 在提交时已经过期，轮换后的 refresh 凭据仍须先保全。
+
 同步仅在缓存版本同时受客户端和最新 Bootstrap 支持时使用 ETag；304 可复用该配置并上报 Applied。未知或不再支持的缓存执行无条件完整下载；无可复用缓存的 304 以 `snapshot_304_without_cache` 拒绝，保全原 Applied，不循环重试。同 generation 的完整已验证候选可补齐缺失版本证据或修复损坏正文，但低 generation、release/hash/runtime path 冲突仍拒绝。v4 升级为含开场的 v5 由服务端发布新 generation/release，不改写旧发布。
 
 `EnterpriseSnapshotCompatibilityException` 保留服务端格式与客户端集合，不把空集合或混合不匹配一律说成应用过旧。成功 Snapshot 的超限、解码、身份/ETag 或映射失败归 `EnterpriseSnapshotContentException`；网络读流、HTTP、持久化错误和取消保留原分类及 cause。较新格式提示更新应用，过旧格式提示管理员处理，不捏造最低应用版本或下载地址。
@@ -189,6 +216,19 @@ Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revis
 `EnterpriseIdentityDataDisposer` 按 principal 编排各 owner 清理。`EnterpriseDataResetService` 先持久保存“仅删除接入”或“接入和全部企业历史”的 reset intent，由应用 scope 的 worker 持有该操作；页面取消只取消等待，不取消已接纳的清理。重试复用尚在执行的原 intent，UI 区分 running、pending 与 failure。服务复用关闭屏障并在重启后继续；启动 resume 保持 `ApplicationRecoveryCoordinator` 门禁开放前的原恢复顺序，更强删除终态可扩大清理范围。任何分支都不删除个人数据，也不依赖 Core logout 成功；损坏 manifest 不能通过回读旧值假装重置成功。
 
 接入与配置 wire 以固定的 Core 导出 [Client Control 合同](../../app/src/test/resources/contracts/platform/client-control.openapi.yaml)及其 [来源 manifest](../../app/src/test/resources/contracts/platform/manifest.json)核对。Android 的共享 cases、本机 HTTP 与二维码 round-trip 只证明各自边界，真实 Core、相机/相册及发行版验收见 [测试策略](testing-strategy.md)。
+
+APK 的平台合同身份来自同目录 `protocol-baseline.json` 和 Portal manifest。`tools/android_contract.py` 与
+Gradle 配置阶段均核验两份 manifest 的主合同、Core 支持集合、基准 Core 和基线 LF SHA-256 一致，
+并校验 Client source/format/sourceHash、Portal Bridge 版本及完整材料的来源与实际字节摘要。
+`generate-enterprise-wire.py` 在解析 schema 前完成校验，继续保留 `PlatformWire.kt` 的 Core source SHA256 header。
+缺失、错误类型或不一致直接失败；普通构建只读取仓库内材料，不调用 Python、其他 checkout 或网络。
+
+`app/build.gradle.kts` 唯一维护产品版本，并独立声明 Android 支持的合同集合。当前目标为
+`0.0.20 / 20 → 平台合同 2 → Core 语义基准 0.2.0-preview.23`，Android 仅承诺 `[2]`；
+保留 Snapshot v4/v5 adapter 不等于承诺平台合同 1。四项只读 BuildConfig 字段为
+`PLATFORM_CONTRACT_VERSION`、`SUPPORTED_PLATFORM_CONTRACT_VERSIONS`、`CORE_BASELINE_VERSION`、
+`PLATFORM_CONTRACT_BASELINE_HASH`。关于页显示版本、主合同和基准 Core；它们不随连接的服务器变化，
+也不参与运行准入或持久化配置迁移。最终 APK 核验与已有消费测试的使用方式见[测试策略](testing-strategy.md#最终-apk-与-core-版本对应)。
 
 ### 按主体解析与使用偏好
 
@@ -240,6 +280,8 @@ Conversation、Memory、Artifact、GeneratedMedia、收藏、分页与统计中�
 ### 4.2 Provider 与 Model
 
 用户 `ProviderSetting` / `Model` 保存连接参数、模型能力和高级覆盖，字段以原类型声明为准。
+Provider `customHeaders` 缺字段解码为空列表；复制、类型转换与 Model providerOverwrite 保留该字段。
+Provider 编辑复用原 typed contract，目录、余额及生成请求共用各自 Adapter 合并入口，详情默认折叠显示请求头编辑器。
 `providerOverwrite`、custom headers/body、URL 和 API key 只属于用户定义，可能含凭据；
 企业公开 Model 与私有 execution binding 独立，不以这些覆盖字段作为受管执行来源。
 有效模型选择由 Resolver 派生，执行 owner 复验原域准入；wire 差异见 [Provider 协议](protocol-reference.md)。
@@ -295,7 +337,17 @@ Opening 的 System 只在当前会话助手等于原助手时参与选择，优�
 
 ### 4.8 备份配置
 
-WebDAV、S3 和提醒配置属于用户 Settings。个人备份包含用户自己的服务凭据，不能纳入企业
+WebDAV 备份通过 `ScopedUserPreferences.webDavBackup` 保存资源 ID、根内目录及归档内容选择，
+由 `ConfigurationApplicationService.changeWebDavBackup` 按原空间和 expected 值提交；不复制连接凭据，
+不跟随文件管理器或 Agent 的当前资源。个人 `Settings.webDavBackup` 只投影个人域偏好，恢复保留企业主体偏好。
+`WebDavSettingsMigration` 在 typed decode 前转换已有文档的旧 `webDavConfig`，独立 `webdav_config` 键
+由原 `UserSettingsMigration` 同次接纳。可按旧类型解码的配置保全地址及凭据，以稳定 ID 加入个人连接；目录保留原根内位置，
+`items` 中任一 DATABASE/FILES 仍映射为完整持久聚合，个人备份引用该连接，但不自动选为文件管理器当前项。
+已存在的新连接、个人当前选择及备份偏好优先，企业 scope 不变；仅空默认旧配置直接移除。
+旧界面逐字段即时保存的未完成地址、用户名和目录仍保留为可编辑配置，合法值按原位置规范化，校验失败保留原值；
+不赋予当前资源资格，新 Save、当前项选择和执行仍严格校验。导入归档沿 `migrateLegacySettingsJson` 使用相同转换；
+损坏 JSON、错误字段类型及未知枚举明确失败并保留输入，成功后移除旧字段，重跑幂等。
+S3 和提醒仍由用户 Settings 管理。个人备份包含用户自己的服务凭据，不能纳入企业
 Snapshot、执行绑定或 Session。归档格式、混合域隔离、冷恢复和系统备份排除规则统一见
 [备份与恢复](data-persistence.md#个人备份与恢复)。
 

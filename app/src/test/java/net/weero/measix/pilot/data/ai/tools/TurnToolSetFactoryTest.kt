@@ -5,6 +5,7 @@ import net.weero.measix.pilot.data.enterprise.reference
 
 
 import io.mockk.every
+import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -21,6 +22,17 @@ import net.weero.measix.pilot.data.ai.mcp.managedMcpNamespace
 import net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot
 import net.weero.measix.pilot.data.ai.tools.local.LocalTools
 import net.weero.measix.pilot.data.datastore.Settings
+import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
+import net.weero.measix.pilot.data.datastore.UserSettingsDocument
+import net.weero.measix.pilot.data.datastore.changeAssistantPreference
+import net.weero.measix.pilot.data.configuration.ConfigurationResolver
+import net.weero.measix.pilot.data.configuration.appliedConfiguration
+import net.weero.measix.pilot.data.enterprise.EnterpriseWebDavResource
+import net.weero.measix.pilot.data.enterprise.PlatformWebDAVDefinitionPurpose
+import net.weero.measix.pilot.data.enterprise.PlatformWebDAVDefinitionClientProtocol
+import net.weero.measix.pilot.data.enterprise.PlatformWebDAVDefinitionAuthOwnership
+import net.weero.measix.pilot.service.webdav.WebDavTransferService
+import net.weero.measix.pilot.service.webdav.WebDavTarget
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.model.Assistant
@@ -59,7 +71,7 @@ class TurnToolSetFactoryTest {
                 document, packet.identity.scope, net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
             val local = mockk<LocalTools>()
             every { local.getTools(any(), any(), any()) } returns emptyList()
-            val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk())
+            val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk())
             val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(packet.identity.scope, "session")
             for (kind in listOf(net.weero.measix.pilot.service.runtime.TurnKind.USER, net.weero.measix.pilot.service.runtime.TurnKind.SUB_ASSISTANT)) {
                 val tool = factory.buildTools(access, Assistant(enableWebSearch = true), settings = settings,
@@ -104,7 +116,7 @@ class TurnToolSetFactoryTest {
             destinations += arg<ConfigurationReference>(1) to arg<String>(3)
             listOf(me.rerere.ai.ui.UIMessagePart.Text("success"))
         }
-        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), manager, mockk(), mockk())
+        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), manager, mockk(), mockk(), mockk())
         for (hash in listOf(null, "sha256:" + "a".repeat(64))) {
             for (needsApproval in listOf(false, true)) {
                 val reference = packet.identity.reference(packet.configuration.mcpServers.first().id)
@@ -156,6 +168,7 @@ class TurnToolSetFactoryTest {
             mcpManager = mockk<McpRuntimeCoordinator>(),
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
+            webDavTransfers = mockk(),
         )
         val schema = Json.parseToJsonElement("""{"type":"object","${'$'}ref":"#/${'$'}defs/input","${'$'}defs":{"input":{"required":["remote_field"]}}}""")
             as kotlinx.serialization.json.JsonObject
@@ -177,7 +190,7 @@ class TurnToolSetFactoryTest {
     @Test fun `compact managed namespace preserves remote names at the provider length boundary`() = runTest {
         val local = mockk<LocalTools>()
         every { local.getTools(any(), any(), any()) } returns emptyList()
-        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk())
+        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk())
         val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
         val reference = packet.identity.reference(packet.configuration.mcpServers.first().id)
         val namespace = managedMcpNamespace(reference)
@@ -202,6 +215,50 @@ class TurnToolSetFactoryTest {
     }
 
     @Test
+    fun `v5 optional managed MCP and current DAV assemble independently without workspace`() = runTest {
+        val original = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
+        val definition = original.configuration.assistants.first().copy(mcpBindings = emptyList())
+        val davId = "dav_12345678-1234-4234-8234-123456789abc"
+        val dav = EnterpriseWebDavResource(davId, "Current DAV", true,
+            PlatformWebDAVDefinitionPurpose.WORKSPACE_FILE_EXCHANGE, PlatformWebDAVDefinitionClientProtocol.WEBDAV,
+            PlatformWebDAVDefinitionAuthOwnership.ENTERPRISE_MANAGED, "/runtime/v1/resources/$davId/spaces/{agentSpaceId}/dav/")
+        val packet = original.copy(configuration = original.configuration.copy(assistants = listOf(definition), webdav = listOf(dav)))
+        val state = appliedConfiguration(packet, 5L)
+        val assistantId = packet.identity.reference(definition.id)
+        val mcpId = packet.identity.reference(packet.configuration.mcpServers.first().id)
+        val document = UserSettingsDocument.empty().changeAssistantPreference(packet.identity.scope, state,
+            assistantId, AssistantPreferenceChange.Mcp(mcpId, true))
+        val configuration = ConfigurationResolver.resolve(document, packet.identity.scope, state)
+        val assistant = configuration.assistants.getValue(assistantId)
+        assertEquals(5L, configuration.enterpriseSnapshotSchemaVersion)
+        assertTrue(configuration.permitsAdditionalManagedMcp(assistantId))
+        assertEquals(setOf(mcpId), assistant.mcpServers)
+        assertEquals(null, assistant.workspaceId)
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(packet.identity.scope, "session")
+        val target = mockk<WebDavTarget.Enterprise> { every { name } returns dav.name }
+        val transfers = mockk<WebDavTransferService>()
+        val local = mockk<LocalTools>() { every { getTools(any(), any(), any()) } returns emptyList() }
+        val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), mockk(), transfers)
+        val capability = availableTool(mcpId, "read", buildJsonObject { put("type", "object") })
+            .copy(namespace = managedMcpNamespace(mcpId))
+        for (current in listOf(target, null)) {
+            coEvery { transfers.currentTarget(access, configuration) } returns current
+            for (kind in listOf(net.weero.measix.pilot.service.runtime.TurnKind.USER,
+                net.weero.measix.pilot.service.runtime.TurnKind.SUB_ASSISTANT)) {
+                val tools = factory.buildTools(access, assistant, settings = document.personalSettings(),
+                    configuration = configuration, capabilityModel = null, turnKind = kind,
+                    mcpCapabilities = TurnMcpCapabilitySnapshot(listOf(capability)))
+                assertEquals(listOf("mcp__${capability.namespace}__read"), tools.filter { it.name.startsWith("mcp__") }.map { it.name })
+                assertEquals(if (current == null) emptyList<String>() else listOf("webdav_upload", "webdav_download"),
+                    tools.filter { it.name.startsWith("webdav_") }.map { it.name })
+                assertTrue(tools.none { it.name.startsWith("workspace_") })
+            }
+        }
+        assertEquals(setOf(mcpId), configuration.assistants.getValue(assistantId).mcpServers)
+        assertEquals(listOf(dav), configuration.enterpriseConfiguration!!.webdav)
+    }
+
+    @Test
     fun `invalid remote tool name does not hide valid tools from the same server`() = runTest {
         val localTools = mockk<LocalTools>()
         every { localTools.getTools(any(), any(), any()) } returns emptyList()
@@ -214,6 +271,7 @@ class TurnToolSetFactoryTest {
             mcpManager = mockk<McpRuntimeCoordinator>(),
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
+            webDavTransfers = mockk(),
         )
         val serverId = ConfigurationReference.random()
         val schema = buildJsonObject { put("type", "object") }
@@ -247,6 +305,7 @@ class TurnToolSetFactoryTest {
             mcpManager = mockk<McpRuntimeCoordinator>(),
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
+            webDavTransfers = mockk(),
         )
         val schema = buildJsonObject { put("type", "object") }
         val tools = factory.buildTools(
@@ -279,6 +338,7 @@ class TurnToolSetFactoryTest {
             mcpManager = mockk<McpRuntimeCoordinator>(),
             providerManager = mockk<ProviderManager>(),
             artifactStore = mockk<ArtifactStore>(),
+            webDavTransfers = mockk(),
         )
         val conflict = Tool("read_tool_output", "shadow", execute = { emptyList() })
 

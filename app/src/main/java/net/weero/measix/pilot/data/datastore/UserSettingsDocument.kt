@@ -39,11 +39,12 @@ internal data class UserConfiguration(
     val titlePrompt: String = DEFAULT_TITLE_PROMPT,
     val suggestionPrompt: String = DEFAULT_SUGGESTION_PROMPT,
     val compressPrompt: String = DEFAULT_COMPRESS_PROMPT,
-    val webDavConfig: WebDavConfig = WebDavConfig(),
+    val webDavConnections: List<net.weero.measix.pilot.data.configuration.WebDavConnection> = emptyList(),
     val s3Config: S3Config = S3Config(),
     val profile: UserProfile = UserProfile(),
 ) {
     init {
+        require(webDavConnections.map { it.id }.distinct().size == webDavConnections.size) { "duplicate_webdav_connection" }
         val references = buildList {
             val pendingProviders = ArrayDeque(providers)
             while (pendingProviders.isNotEmpty()) {
@@ -88,6 +89,7 @@ internal data class UserProfile(
 /** Display behavior is shared; the user's profile is owned by UserConfiguration. */
 @Serializable
 internal data class DisplayPreferences(
+    val conversationSortOrder: ConversationSortOrder = ConversationSortOrder.UPDATED,
     val useAppIconStyleLoadingIndicator: Boolean = true,
     val showUserAvatar: Boolean = true,
     val showAssistantBubble: Boolean = false,
@@ -128,6 +130,7 @@ internal data class DisplayPreferences(
     val volumeKeyScrollRatio: Float = 1.0f,
 ) {
     fun project(profile: UserProfile): DisplaySetting = DisplaySetting(
+        conversationSortOrder = conversationSortOrder,
         userAvatar = profile.avatar,
         userNickname = profile.nickname,
         useAppIconStyleLoadingIndicator = useAppIconStyleLoadingIndicator,
@@ -205,6 +208,9 @@ internal data class ScopedUserPreferences(
     val assistantUsage: List<AssistantUsagePreferences> = emptyList(),
     val gateways: List<GatewayPreference> = emptyList(),
     val lastConversationId: kotlin.uuid.Uuid? = null,
+    val collapsedModelGroupIds: Set<String> = emptySet(),
+    val currentWebDavConnectionId: kotlin.uuid.Uuid? = null,
+    val webDavBackup: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences = net.weero.measix.pilot.data.configuration.WebDavBackupPreferences(),
 ) {
     init {
         require(scope is ConfigurationScope.Enterprise || assistantUsage.isEmpty()) { "personal_assistants_use_shared_definitions" }
@@ -238,6 +244,15 @@ internal data class UserPreferences(
 
     fun lastConversation(scope: ConfigurationScope): kotlin.uuid.Uuid? =
         scopes.singleOrNull { it.scope == scope }?.lastConversationId
+
+    fun collapsedModelGroups(scope: ConfigurationScope): Set<String> =
+        scopes.singleOrNull { it.scope == scope }?.collapsedModelGroupIds.orEmpty()
+
+    fun withModelGroupCollapsed(scope: ConfigurationScope, groupId: String, collapsed: Boolean): UserPreferences {
+        val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
+        val groups = if (collapsed) existing.collapsedModelGroupIds + groupId else existing.collapsedModelGroupIds - groupId
+        return copy(scopes = scopes.filterNot { it.scope == scope } + existing.copy(collapsedModelGroupIds = groups))
+    }
 
     fun withLastConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid?): UserPreferences {
         val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
@@ -312,7 +327,12 @@ internal data class UserSettingsDocument(
             titlePrompt = configuration.titlePrompt,
             suggestionPrompt = configuration.suggestionPrompt,
             compressPrompt = configuration.compressPrompt,
-            webDavConfig = configuration.webDavConfig,
+            webDavBackup = preferences.scopes.singleOrNull { it.scope == ConfigurationScope.Personal }?.webDavBackup
+                ?: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences(),
+            webDavConnections = configuration.webDavConnections,
+            currentWebDavConnectionId = preferences.scopes.singleOrNull {
+                it.scope == ConfigurationScope.Personal
+            }?.currentWebDavConnectionId,
             s3Config = configuration.s3Config,
             dynamicColor = common.dynamicColor,
             themeId = common.themeId,
@@ -321,6 +341,7 @@ internal data class UserSettingsDocument(
             backupReminderConfig = common.backupReminderConfig,
             displaySetting = common.display.project(configuration.profile),
             favoriteModels = selected.favoriteModels,
+            collapsedModelGroupIds = preferences.collapsedModelGroups(ConfigurationScope.Personal),
             chatModelId = selected.chatModelId ?: DEFAULT_AUTO_MODEL_ID,
             fastModelId = selected.fastModelId ?: DEFAULT_AUTO_MODEL_ID,
             titleModelId = selected.titleModelId,
@@ -371,7 +392,7 @@ internal data class UserSettingsDocument(
                 titlePrompt = settings.titlePrompt,
                 suggestionPrompt = settings.suggestionPrompt,
                 compressPrompt = settings.compressPrompt,
-                webDavConfig = settings.webDavConfig,
+                webDavConnections = settings.webDavConnections,
                 s3Config = settings.s3Config,
                 profile = UserProfile(settings.displaySetting.userAvatar, settings.displaySetting.userNickname),
             ),
@@ -383,6 +404,7 @@ internal data class UserSettingsDocument(
                     defaultTTSPlaybackSpeed = settings.defaultTTSPlaybackSpeed,
                     backupReminderConfig = settings.backupReminderConfig,
                     display = DisplayPreferences(
+                        conversationSortOrder = settings.displaySetting.conversationSortOrder,
                         useAppIconStyleLoadingIndicator = settings.displaySetting.useAppIconStyleLoadingIndicator,
                         showUserAvatar = settings.displaySetting.showUserAvatar,
                         showAssistantBubble = settings.displaySetting.showAssistantBubble,
@@ -425,13 +447,52 @@ internal data class UserSettingsDocument(
                 ),
                 scopes = preferences.scopes.filterNot { it.scope == ConfigurationScope.Personal } +
                     (preferences.scopes.singleOrNull { it.scope == ConfigurationScope.Personal }
-                        ?: ScopedUserPreferences(ConfigurationScope.Personal)).copy(selections = personal),
+                        ?: ScopedUserPreferences(ConfigurationScope.Personal)).copy(
+                            selections = personal, collapsedModelGroupIds = settings.collapsedModelGroupIds,
+                            currentWebDavConnectionId = settings.currentWebDavConnectionId, webDavBackup = settings.webDavBackup),
             ),
             internalState = SettingsInternalState(
                 launchCount = settings.launchCount,
                 ignoredUpdateVersion = settings.ignoredUpdateVersion,
                 pendingAssistantDeletions = settings.pendingAssistantDeletions,
             ),
+        )
+    }
+
+    internal fun withWebDavConnectionChange(change: net.weero.measix.pilot.data.configuration.WebDavConnectionChange): UserSettingsDocument {
+        val personal = preferences.scopes.singleOrNull { it.scope == ConfigurationScope.Personal }
+            ?: ScopedUserPreferences(ConfigurationScope.Personal)
+        val connections = configuration.webDavConnections
+        var selected = personal.currentWebDavConnectionId
+        val updated = when (change) {
+            is net.weero.measix.pilot.data.configuration.WebDavConnectionChange.Save -> {
+                val validated = change.connection.validated()
+                val existing = connections.singleOrNull { it.id == validated.id }
+                check(existing == change.expected) { "webdav_connection_changed" }
+                val connection = validated.copy(accessRevision = if (existing == null ||
+                    existing.rootUrl != validated.rootUrl || existing.username != validated.username ||
+                    existing.password != validated.password) kotlin.uuid.Uuid.random() else existing.accessRevision)
+                if (connections.isEmpty() && selected == null) selected = connection.id
+                if (existing == null) connections + connection
+                else connections.map { if (it.id == connection.id) connection else it }
+            }
+            is net.weero.measix.pilot.data.configuration.WebDavConnectionChange.Delete -> {
+                if (selected == change.id) selected = null
+                connections.filterNot { it.id == change.id }
+            }
+            is net.weero.measix.pilot.data.configuration.WebDavConnectionChange.Select -> {
+                require(change.id == null || connections.any { it.id == change.id }) { "webdav_connection_missing" }
+                change.id?.let { id -> connections.single { it.id == id }.validated() }
+                selected = change.id
+                connections
+            }
+        }
+        val scoped = personal.copy(currentWebDavConnectionId = selected)
+        return copy(
+            configuration = configuration.copy(webDavConnections = updated),
+            preferences = preferences.copy(scopes = if (preferences.scopes.any { it.scope == ConfigurationScope.Personal }) {
+                preferences.scopes.map { if (it.scope == ConfigurationScope.Personal) scoped else it }
+            } else preferences.scopes + scoped),
         )
     }
 

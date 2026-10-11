@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.remoteworkspace
 
+import net.weero.measix.pilot.service.files.*
+
 import android.content.res.Configuration
 import android.view.View
 import android.view.ViewGroup
@@ -61,11 +63,11 @@ class RemoteMediaPreviewLiveAndroidTest {
             var created = false
             val oldOrientation = compose.activity.requestedOrientation
             try {
-                assertEquals(RemoteOutcome.SUCCEEDED, remote.createDirectory(handle, folder).outcome)
+                assertEquals(BrowserOutcome.SUCCEEDED, remote.createDirectory(handle, folder).outcome)
                 created = true
                 val bytes = instrumentation.context.assets.open("media/preview-test.mp4").use { it.readBytes() }
                 val upload = remote.upload(handle, "$folder/short.mp4", null, bytes.size.toLong(), { bytes.inputStream() })
-                assertEquals(upload.diagnostic, RemoteOutcome.SUCCEEDED, upload.outcome)
+                assertEquals(upload.diagnostic, BrowserOutcome.SUCCEEDED, upload.outcome)
                 awaitSparseFixture(context.cacheDir, folder, handle.space)
                 val large = remote.list(handle, folder).files.single { it.name == "four-gib.mp4" }
                 assertEquals(4L * 1024 * 1024 * 1024, large.size)
@@ -131,7 +133,7 @@ class RemoteMediaPreviewLiveAndroidTest {
                 val short = remote.list(handle, folder).files.single { it.name == "short.mp4" }
                 val original = remote.mediaSource(handle, short)
                 try {
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.upload(handle, short.path, short.etag,
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.upload(handle, short.path, short.etag,
                         bytes.size.toLong(), { bytes.inputStream() }).outcome)
                     try { original.readRange(0, 32); fail("Old media version must be rejected") }
                     catch (expected: PlatformHttpException) {
@@ -149,8 +151,8 @@ class RemoteMediaPreviewLiveAndroidTest {
                         withTimeout(30_000) {
                             if (created) {
                                 val directory = remote.list(handle, "").files.single { it.path == folder }
-                                val deleted = remote.mutate(handle, RemoteFileAction.DELETE, directory, recursiveConfirmed = true)
-                                assertEquals(deleted.diagnostic, RemoteOutcome.SUCCEEDED, deleted.outcome)
+                                val deleted = remote.mutate(handle, BrowserFileAction.DELETE, directory, recursiveConfirmed = true)
+                                assertEquals(deleted.diagnostic, BrowserOutcome.SUCCEEDED, deleted.outcome)
                                 evidence.put("testDirectoryRemoved", true)
                             }
                         }

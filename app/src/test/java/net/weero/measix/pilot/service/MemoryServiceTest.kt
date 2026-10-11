@@ -403,7 +403,7 @@ class MemoryServiceTest {
         var now = System.currentTimeMillis()
         val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "enterprise"))) { now }
         val gate = ApplicationRecoveryGate()
-        val configurations = ConfigurationQueryService(settings, sessions, gate)
+        val configurations = ConfigurationQueryService(settings, sessions, gate, mockk())
         val repository = mockk<MemoryRepository>()
         private val namespaces = java.util.concurrent.ConcurrentHashMap<MemoryAddress, MutableStateFlow<List<AssistantMemory>>>()
         fun rows(address: MemoryAddress) = namespaces.getOrPut(address) { MutableStateFlow(emptyList()) }

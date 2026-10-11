@@ -889,7 +889,7 @@ class TurnCancellationIntegrationTest {
                 runtime.bindModelExecution(fixture.turnId, activeWorker, turnContext.assistant.id,
                     turnContext.model.requests as ModelExecutionLease)
                 runtime.bindTurnContext(fixture.turnId, activeWorker, turnContext)
-                val started = TurnCommitter.start(coordinator, runtime, fixture.turnId, turnFinalizer)
+                val started = TurnCommitter.start(coordinator, runtime, fixture.turnId, turnFinalizer, model)
                 val committer = started.turnCommitter
                 runner.run(TurnRunInputs(
                     turnContext = turnContext, handle = started.handle,
@@ -974,6 +974,7 @@ class TurnCancellationIntegrationTest {
                     turnId = turnId,
 
                     turnFinalizer = turnFinalizer,
+                    model = model,
                 )
                 turnCommitter = started.turnCommitter
                 val initialAssistant = runtime.durable.currentMessages().last()

@@ -32,9 +32,14 @@ Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协�
 
 OpenAI 的 `chatCompletionsPath` 与 `responsesPath` 分别配置两种协议的相对入口，默认 `/chat/completions` 与 `/responses`。Responses 路径保留 baseUrl 前缀，拒绝替换 origin、查询、fragment 和明文/编码穿越。`FrozenProviderWireShape.OpenAI` 在 START 捕获两者，后续凭据更新不能修改请求路径；旧配置缺失 `responsesPath` 时使用默认值。
 
-`configureSessionHeader` 只在实际请求 host 为 `opencode.ai` 时将 `providerSessionId` 写为 `x-opencode-session`，原会话 ID 覆盖自定义同名头。Google Vertex 使用实际 Google URL，残留 baseUrl 不影响判定。自动头带请求标记；宿主的 `ProviderSessionHeaderInterceptor` 在每次网络发送时移除跨 host 重定向携带的自动头，不修改用户手动配置的普通 header。该身份复用会话 owner，不新增持久状态。
+四种文本协议通过 `configureSessionHeader`，只在实际请求 host 为 `opencode.ai` 时将 `openCodeSessionId ?: providerSessionId` 写为 `x-opencode-session`，自动会话身份覆盖自定义同名头。标题、建议、摘要、附件识别辅助入口及探测使用专用的 `openCodeSessionId`；OpenRouter 请求正文仍只读取 `providerSessionId`。Google Vertex 使用实际 Google URL，残留 baseUrl 不影响判定。自动头带请求标记；宿主的 `ProviderSessionHeaderInterceptor` 在每次网络发送时移除跨 host 重定向携带的自动头，不修改用户手动配置的普通 header。该身份复用既有会话或辅助请求身份，不新增持久状态。
 
 `TextGenerationParams`、`ImageGenerationParams` 与 `ImageEditParams` 的 `credentials` 是不参与序列化的 `RequestCredentials`。`UserSettings` 继续使用原 Provider 的 KeyRoulette；`Fixed` 使用单次请求的原始凭据，不按空白或逗号拆分，不访问轮换缓存。未提供固定 credential 时由私有 headers 提供认证；若同时出现自动认证同名 header 则在发请求前拒绝。四种文本协议及个人 OpenAI 图片生成/编辑共用该认证选择；企业图片不制造持久化 ProviderSetting，而由 `ManagedImageGenerationProvider` 按冻结 protocol 构造唯一 typed wire。
+
+Provider `customHeaders` 先于请求级（Model／Assistant）headers 应用，名称大小写不敏感，后值唯一覆盖前值。
+Adapter 自动认证头仍由凭据 owner 设置；固定凭据遇到同名头先拒绝，受管请求额外校验全部 Provider／请求级保留头。
+START 捕获 Provider headers，后续凭据刷新不读取新编辑值；模型列表、embedding、余额和图像走同一配置合并规则。
+余额请求指纹纳入有效 headers，避免编辑后复用另一请求身份的缓存。
 
 ### 企业路由与私有请求
 
@@ -160,7 +165,11 @@ host
 
 这些枚举是内部协议状态，不是用户设置。不得新增持久化的“方言”开关来修复单个 host，也不得用 modelId 猜测未知网关背后的 endpoint。
 
-独立文生图走同一 OpenAI-compatible host 的 `/images/generations` 与 `/images/edits`。HTTP 失败通过 `formatProviderHttpError()` 变成带 `statusCode` / `errorCode` / `errorType` 的 `HttpException`。
+独立文生图按 `imageEndpoint` 保留配置的 baseURL 前缀，普通 OpenAI-compatible host 走 `/images/generations` 与 `/images/edits`。
+精确 `openrouter.ai` 使用 `/images` JSON API，编辑把授权图片作为 data URL 放入 `input_references[].image_url.url`；
+不会在失败后切换另一个收费端点重试。`media_type` 保留响应真实图片 MIME，旧响应仍使用 `output_format`／PNG 默认。
+`auto` 或空 size 省略，普通兼容 host 的显式尺寸原样传递；仅已确认不接受 size 的 `api.x.ai` 省略此字段，不按模型名或域名子串推断。
+HTTP 失败通过 `formatProviderHttpError()` 变成带 `statusCode` / `errorCode` / `errorType` 的 `HttpException`。
 OpenAI Images 使用 `error.code`（如 `moderation_blocked`、`content_policy_violation`、`rate_limit_exceeded`、`credit_balance_exhausted`、`invalid_api_key`）；
 xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响应里用 `respect_moderation=false` 标记审核未通过。
 分类与工具回传见 [`turn-step-execution.md`](turn-step-execution.md) 与 [`prompts-and-tools.md`](prompts-and-tools.md)。
@@ -314,6 +323,8 @@ Claude thinking 不是一个可对所有历史模型统一发送的结构：
 
 | 模型组 | AUTO | 显式强度 | OFF |
 |--------|------|------------|-----|
+| Claude Opus 5.5 | adaptive | adaptive + effort | IO 前拒绝 |
+| Claude Sonnet 5.5 | adaptive | adaptive + effort | between_tools，工具之间仍可能思考 |
 | `ModelRegistry.CLAUDE_ADAPTIVE_THINKING` | `thinking.type=adaptive` | adaptive + `output_config.effort` | `disabled` |
 | 较早的 reasoning 模型 | 省略 thinking | `enabled + budget_tokens` | `disabled` |
 
@@ -321,16 +332,30 @@ Claude thinking 不是一个可对所有历史模型统一发送的结构：
 `CLAUDE_XHIGH_EFFORT` 发送 `xhigh`，其他 adaptive 型号映射为 `max`。启用 thinking 时设置 `display=summarized`。
 手动 budget 至少为协议下限且必须小于 `max_tokens`，过小的显式上限在构建时拒绝。
 `CLAUDE_MANUAL_THINKING_WITH_EFFORT` 额外发送 effort，XHIGH/MAX 映射为 `high`；其余手动模型只使用 budget。
-模型未声明 REASONING 时不发送 thinking。具体型号由 `ModelRegistry` 及兼容测试维护。
+较早型号未声明 REASONING 时不发送 thinking；5.5 始终执行型号规则。具体型号由 `ModelRegistry` 及兼容测试维护。
 
 当 thinking 实际启用时不发送 temperature；legacy AUTO 因为省略 thinking，可以正常发送 temperature。
+5.5 在 CustomBody 合并之后验证最终 body：temperature=1、top_p∈[0.99,1] 接受并省略，其他显式值及任意 top_k 拒绝；
+tool_choice 仅允许 auto／none。effort 必须是受支持字符串，Sonnet between_tools 只允许 high 及以下。
+Opus／Sonnet 5.5 的 XHIGH 均发送 xhigh，保留 Claude 3 及旧型号行为。UI 使用实际解析出的模型限制选择，不重写已有无效配置。
 
 ### 不透明 thinking 状态
 
 - `thinking.signature` 保存到 `ClaudeReasoningMetadata.signature`；
 - `redacted_thinking.data` 保存到 `redactedData`；
 - 工具续轮按原顺序、原内容回放；
-- 切换到不同模型配置时剥离旧模型的 thinking/redacted blocks，保留可见答案和工具历史。
+- 较早型号切换到不同模型配置时剥离旧模型的 thinking/redacted blocks，保留可见答案和工具历史。
+
+5.5 使用 `ClaudeReplayEvidence` 检查实际 endpoint、wire model、system／tools／messages 前缀、当前块和前驱链。
+来源取最终响应地址，包括 Routed relay 和重定向；query 只保存摘要，不保存其中凭据。前缀忽略此前 thinking／redacted，
+并只排除协议位置的 cache_control，工具 schema 中同名字段仍是内容。允许保留原 thinking 连续区间，不能跨中间缺口拼接。
+缺失、未知版本或失配证据只过滤本次 wire，持久历史不变；同源同型号的本地配置 ID 变化不影响证据。
+
+`ClaudeResponseMetadata` 累积本次实际排除块的摘要，经原 StepModelResult／checkpoint 保存，后续请求不能使这些块复活；
+在已过滤前缀上生成的新块可形成新的有效链，无 thinking 的成功响应也携带该记录。没有旁路写入或独立状态表。
+`ClaudeContentBlockMetadata` 保留原响应组及块位置，使同响应中交错的 thinking、text、tool_use 先完整输出为一个 assistant，
+再附这一批 tool_result。`UIMessageChoice.contentBlockSlots` 只用于增量关联，签名按同槽追加；空正文的签名块和 redacted 块均保留。
+这些可选协议字段通过原 JSON 和备份链兼容，旧数据不补造证据。依据为官方 [Preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking)。
 
 ### Prompt caching
 

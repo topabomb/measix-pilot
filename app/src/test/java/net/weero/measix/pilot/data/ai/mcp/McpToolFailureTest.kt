@@ -14,6 +14,16 @@ import org.junit.Test
 
 class McpToolFailureTest {
     @Test
+    fun `remote structured results preserve arbitrary JSON shapes`() {
+        for (raw in listOf("[1,true,null]", "42", "true", "\"detail\"", "null")) {
+            val content = Json.parseToJsonElement(raw)
+            val projected = McpToolFailureProjector.project(McpToolFailureKind.REMOTE_ERROR, structuredContent = content)
+            val body = Json.parseToJsonElement((projected.output.single() as UIMessagePart.Text).text).jsonObject
+            assertEquals(content, body["structured_content"])
+        }
+    }
+
+    @Test
     fun `local failure projections contain only stable decision fields`() {
         val expected = mapOf(
             McpToolFailureKind.TOOL_UNAVAILABLE to Triple("unavailable", "tool_unavailable", McpToolFailureKind.TOOL_UNAVAILABLE.detail),

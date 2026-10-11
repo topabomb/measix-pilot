@@ -11,6 +11,7 @@ internal fun mergeDisplaySettingDelta(
     edited: DisplaySetting,
     current: DisplaySetting,
 ): DisplaySetting = current.copy(
+    conversationSortOrder = selectChanged(baseline.conversationSortOrder, edited.conversationSortOrder, current.conversationSortOrder),
     userAvatar = selectChanged(baseline.userAvatar, edited.userAvatar, current.userAvatar),
     userNickname = selectChanged(baseline.userNickname, edited.userNickname, current.userNickname),
     useAppIconStyleLoadingIndicator = selectChanged(

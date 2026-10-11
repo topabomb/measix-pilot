@@ -36,7 +36,7 @@ internal fun Request.Builder.authenticate(
     roulette: KeyRoulette,
 ): Request.Builder = apply {
     when (credentials) {
-        RequestCredentials.UserSettings -> addHeader(header, prefix + roulette.next(userKeys, providerId))
+        RequestCredentials.UserSettings -> header(header, prefix + roulette.next(userKeys, providerId))
         is RequestCredentials.Fixed -> {
             tag(PrivateRequest::class.java, PrivateRequest)
             credentials.value?.let {

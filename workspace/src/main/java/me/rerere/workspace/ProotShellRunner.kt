@@ -15,23 +15,25 @@ class ProotShellRunner(
             )
         }
 
-        val spec = launchSpec(context)
-        if (!spec.executable.isFile) {
+        val executable = File(nativeLibraryDir, ProotLaunchSpec.PROOT_EXEC)
+        if (!executable.isFile) {
             return WorkspaceCommandResult(
                 exitCode = 127,
                 stdout = "",
-                stderr = "proot executable not found: ${spec.executable.absolutePath}",
+                stderr = "proot executable not found: ${executable.absolutePath}",
             )
         }
-        if (!spec.loader.isFile) {
+        val loader = File(nativeLibraryDir, ProotLaunchSpec.PROOT_LOADER)
+        if (!loader.isFile) {
             return WorkspaceCommandResult(
                 exitCode = 127,
                 stdout = "",
-                stderr = "proot loader not found: ${spec.loader.absolutePath}",
+                stderr = "proot loader not found: ${loader.absolutePath}",
             )
         }
 
-        RootfsCompatibility(nativeLibraryDir).requireCompatible(context.linuxDir)
+        val environment = RootfsCompatibility(nativeLibraryDir).requireCompatible(context.linuxDir)
+        val spec = launchSpec(context, environment)
 
         context.tempDir.mkdirs()
         patcher.patch(context.linuxDir)
@@ -62,13 +64,17 @@ class ProotShellRunner(
         spec.commandLine
     }
 
-    private fun launchSpec(context: WorkspaceShellContext): ProotLaunchSpec =
+    private fun launchSpec(
+        context: WorkspaceShellContext,
+        environment: RootfsEnvironment = RootfsCompatibility(nativeLibraryDir).inspectEnvironment(context.linuxDir),
+    ): ProotLaunchSpec =
         ProotLaunchSpec.from(
             nativeLibraryDir = nativeLibraryDir,
             filesDir = context.filesDir,
             linuxDir = context.linuxDir,
             tempDir = context.tempDir,
             bindMounts = context.bindMounts,
+            guestEnvironment = environment,
             guestCwd = context.cwd,
             command = context.command,
         )

@@ -3,6 +3,10 @@ package net.weero.measix.pilot.ui.pages.chat
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsAnimationCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -18,7 +22,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import androidx.test.espresso.Espresso.closeSoftKeyboard
 import android.accessibilityservice.AccessibilityService
 import kotlinx.serialization.json.*
 import me.rerere.ai.provider.Model
@@ -111,12 +114,25 @@ class ChatContextFlowAndroidTest {
             val systemBefore = "SYSTEM_UI_BEFORE {{model_name}}"
             val systemAfter = "SYSTEM_ASYNC_AFTER {{model_name}}"
             val systemButton = uiContext.getString(R.string.chat_page_conversation_system_prompt)
-            compose.onNode(hasScrollToIndexAction() and SemanticsMatcher("visible chat history") { it.boundsInRoot.left >= 0f && it.boundsInRoot.right > 0f }).performScrollToNode(hasText(systemButton))
+            val history = compose.onNode(hasScrollToIndexAction() and SemanticsMatcher("visible chat history") {
+                it.boundsInRoot.left >= 0f && it.boundsInRoot.right > 0f
+            })
+            history.performScrollToNode(hasText(systemButton))
             compose.onNodeWithText(systemButton).performClick()
             compose.onNode(hasSetTextAction() and hasText(uiContext.getString(R.string.chat_page_conversation_system_prompt_hint)))
                 .performTextReplacement(systemBefore)
-            closeSoftKeyboard()
-            compose.onNodeWithText(uiContext.getString(R.string.chat_page_conversation_system_prompt_save)).performScrollTo().performClick()
+            hideKeyboardAndWait(requireNotNull(activity))
+            val saveSystem = compose.onNodeWithText(uiContext.getString(R.string.chat_page_conversation_system_prompt_save))
+            saveSystem.performScrollTo()
+            // The empty draft setup is followed by this card; avoid the bottom composer's overlay.
+            history.performScrollToIndex(1)
+            InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(200, 5_000)
+            activity.onActivity {
+                assertFalse(ViewCompat.getRootWindowInsets(it.window.decorView)!!.isVisible(WindowInsetsCompat.Type.ime()))
+            }
+            val savePoint = saveSystem.fetchSemanticsNode().boundsInRoot.center
+            assertTrue("Save must be above the chat input", savePoint.y < compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot.top)
+            saveSystem.assertIsDisplayed().performClick()
             compose.waitUntil(30_000) { compose.onAllNodesWithText("$systemButton ✎").fetchSemanticsNodes().isNotEmpty() }
             capture(context, "00-system-edited-through-chat-ui.png")
             compose.onNodeWithTag("chat_input").performTextInput("Context integration request")
@@ -141,7 +157,7 @@ class ChatContextFlowAndroidTest {
             compose.onNode(hasSetTextAction() and !hasTestTag("chat_input")).performTextInput(secondModel.displayName)
             compose.onNode(hasText(secondModel.displayName) and hasClickAction() and !hasSetTextAction()).performClick()
             awaitUi(30_000) { query.conversationUiModel(lease).first { it?.configuration?.model?.id == secondModel.id } }
-            closeSoftKeyboard()
+            hideKeyboardAndWait(requireNotNull(activity))
             runBlocking {
                 // Other asynchronous writers use the real owners, not UI events in this test.
                 conversations.updateCustomSystemPrompt(ConversationAssistantTarget(lease.commandTarget, assistant.id), systemAfter)
@@ -233,7 +249,7 @@ class ChatContextFlowAndroidTest {
             assertTrue("Tool result must precede external context", resultIndex >= 0 && disclosureIndex > resultIndex)
             assertTrue(followUp[resultIndex]["tool_call_id"]?.jsonPrimitive?.content == "context-assistant")
             compose.onNodeWithTag("chat_input").performTextInput("Next START uses updated configuration")
-            closeSoftKeyboard()
+            hideKeyboardAndWait(requireNotNull(activity))
             compose.waitUntil(30_000) { compose.onAllNodes(hasTestTag("chat_send_button") and isEnabled()).fetchSemanticsNodes().size == 1 }
             compose.onNode(hasTestTag("chat_send_button") and isEnabled()).assertIsDisplayed().performClick()
             compose.waitUntil(60_000) { compose.onAllNodesWithText("Context second answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
@@ -294,7 +310,7 @@ class ChatContextFlowAndroidTest {
             compose.onNode(isDialog()).performTouchInput { click(androidx.compose.ui.geometry.Offset(center.x, 24f)) }
             compose.waitUntil(10_000) { compose.onAllNodesWithText(uiContext.getString(R.string.assistant_page_tab_extensions)).fetchSemanticsNodes().isEmpty() }
             compose.onNodeWithTag("chat_input").performTextInput("Next START has the rule disabled")
-            closeSoftKeyboard()
+            hideKeyboardAndWait(requireNotNull(activity))
             compose.waitUntil(30_000) { compose.onAllNodes(hasTestTag("chat_send_button") and isEnabled()).fetchSemanticsNodes().size == 1 }
             compose.onNode(hasTestTag("chat_send_button") and isEnabled()).assertIsDisplayed().performClick()
             compose.waitUntil(60_000) { compose.onAllNodesWithText("Context third answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
@@ -489,6 +505,47 @@ class ChatContextFlowAndroidTest {
             compose.waitUntil(timeoutMillis + 5_000) { pending.isCompleted }
             runBlocking { pending.await() }
         } finally { scope.cancel() }
+    }
+
+    private fun hideKeyboardAndWait(activity: ActivityScenario<RouteActivity>) {
+        val animations = mutableSetOf<WindowInsetsAnimationCompat>()
+        val callback = object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+            override fun onPrepare(animation: WindowInsetsAnimationCompat) {
+                if (animation.typeMask and WindowInsetsCompat.Type.ime() != 0) animations += animation
+            }
+
+            override fun onProgress(
+                insets: WindowInsetsCompat,
+                runningAnimations: MutableList<WindowInsetsAnimationCompat>,
+            ): WindowInsetsCompat {
+                animations += runningAnimations.filter { it.typeMask and WindowInsetsCompat.Type.ime() != 0 }
+                return insets
+            }
+
+            override fun onEnd(animation: WindowInsetsAnimationCompat) {
+                animations -= animation
+            }
+        }
+        try {
+            activity.onActivity {
+                ViewCompat.setWindowInsetsAnimationCallback(it.window.decorView, callback)
+                it.currentFocus?.clearFocus()
+                WindowCompat.getInsetsController(it.window, it.window.decorView).hide(WindowInsetsCompat.Type.ime())
+            }
+            // Observe already-running animations before accepting the hidden Insets endpoint.
+            compose.waitForIdle()
+            InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(200, 5_000)
+            compose.waitUntil(5_000) {
+                var hidden = false
+                activity.onActivity {
+                    hidden = ViewCompat.getRootWindowInsets(it.window.decorView)
+                        ?.isVisible(WindowInsetsCompat.Type.ime()) == false && animations.isEmpty()
+                }
+                hidden && compose.onAllNodes(hasSetTextAction() and isFocused()).fetchSemanticsNodes().isEmpty()
+            }
+        } finally {
+            activity.onActivity { ViewCompat.setWindowInsetsAnimationCallback(it.window.decorView, null) }
+        }
     }
 
     private fun capture(context: Context, name: String) {

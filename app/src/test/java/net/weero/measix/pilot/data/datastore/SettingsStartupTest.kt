@@ -55,11 +55,19 @@ import org.robolectric.annotation.Config
 class SettingsStartupTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    private fun assertPreservedFailure(expected: Throwable, actual: Throwable?) {
+        requireNotNull(actual)
+        assertEquals(expected.javaClass, actual.javaClass)
+        assertEquals(expected.message, actual.message)
+        // Coroutine stack recovery may copy an exception when crossing the flow dispatcher.
+        assertTrue(generateSequence(actual) { it.cause }.any { it === expected })
+    }
+
     @Test fun `first read failures reach recovery and the same store retries without writing`() = runTest {
         for (failure in listOf(java.io.IOException("settings volume unavailable"), CorruptionException("bad preferences"))) {
             val scope = AppScope(StandardTestDispatcher(testScheduler))
             val preferences = ReadablePreferences(failure)
-            val settings = SettingsStore(isolatedContext(), scope, preferences)
+            val settings = SettingsStore(isolatedContext(), scope, preferences, StandardTestDispatcher(testScheduler))
             val gate = ApplicationRecoveryGate()
             val artifacts = mockk<ArtifactStore>()
             val media = mockk<GeneratedMediaStore>()
@@ -90,7 +98,7 @@ class SettingsStartupTest {
             )
             try {
                 recovery.recoverNow()
-                assertEquals(failure, (gate.state.value as ApplicationRecoveryState.Failed).error)
+                assertPreservedFailure(failure, (gate.state.value as ApplicationRecoveryState.Failed).error)
                 assertTrue(settings.userSettings.value.init)
                 assertEquals(0, maintenance)
                 coVerify(exactly = 0) { artifacts.reconcileStartup() }
@@ -109,7 +117,7 @@ class SettingsStartupTest {
     @Test fun `decode failure preserves published settings and concurrent retry owns one observer`() = runTest {
         val scope = AppScope(StandardTestDispatcher(testScheduler))
         val preferences = ReadablePreferences()
-        val settings = SettingsStore(isolatedContext(), scope, preferences)
+        val settings = SettingsStore(isolatedContext(), scope, preferences, StandardTestDispatcher(testScheduler))
         try {
             settings.initializeForRecovery()
             runCurrent()
@@ -145,7 +153,7 @@ class SettingsStartupTest {
         val bytes = byteArrayOf(-1, -1, -1, -1)
         file.writeBytes(bytes)
         val preferences = PreferenceDataStoreFactory.create(scope = scope, produceFile = { file })
-        val settings = SettingsStore(isolatedContext(), scope, preferences)
+        val settings = SettingsStore(isolatedContext(), scope, preferences, StandardTestDispatcher(testScheduler))
         try {
             repeat(2) {
                 assertTrue(runCatching { settings.initializeForRecovery() }.exceptionOrNull() is CorruptionException)
@@ -170,9 +178,9 @@ class SettingsStartupTest {
             override suspend fun cleanUp() { cleanup++ }
         }
         val preferences = PreferenceDataStoreFactory.create(migrations = listOf(migration), scope = scope, produceFile = { file })
-        val settings = SettingsStore(isolatedContext(), scope, preferences)
+        val settings = SettingsStore(isolatedContext(), scope, preferences, StandardTestDispatcher(testScheduler))
         try {
-            assertEquals(failure, runCatching { settings.initializeForRecovery() }.exceptionOrNull())
+            assertPreservedFailure(failure, runCatching { settings.initializeForRecovery() }.exceptionOrNull())
             assertFalse(file.exists())
             assertEquals(0, cleanup)
             reject = false
@@ -197,7 +205,7 @@ class SettingsStartupTest {
                 override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
                     transform(data.value).also { data.value = it }
             }
-            val settings = SettingsStore(context, appScope, dataStore = preferences)
+            val settings = SettingsStore(context, appScope, dataStore = preferences, computationDispatcher = StandardTestDispatcher(testScheduler))
             val write = async(start = CoroutineStart.UNDISPATCHED) {
                 if (restore) settings.restoreLocal(Settings(themeId = "early-restore")) { value, commit -> commit(value) }
                 else settings.updateLocal { it.copy(themeId = "early-write") }
@@ -217,7 +225,7 @@ class SettingsStartupTest {
     @Test fun `rejected datastore write cannot publish the proposed configuration`() = runTest {
         val scope = AppScope(StandardTestDispatcher(testScheduler))
         val preferences = AcknowledgedPreferences(fail = true)
-        val settings = SettingsStore(isolatedContext(), scope, preferences)
+        val settings = SettingsStore(isolatedContext(), scope, preferences, StandardTestDispatcher(testScheduler))
         try {
             runCurrent()
             val before = settings.userSettings.value
@@ -231,7 +239,7 @@ class SettingsStartupTest {
 
     @Test fun `clearing a recent conversation preserves other scopes and saved selections`() = runTest {
         val scope = AppScope(StandardTestDispatcher(testScheduler))
-        val settings = SettingsStore(isolatedContext(), scope, AcknowledgedPreferences())
+        val settings = SettingsStore(isolatedContext(), scope, AcknowledgedPreferences(), StandardTestDispatcher(testScheduler))
         val personal = net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal
         val enterprise = net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise(
             me.rerere.common.configuration.EnterpriseAuthority("dep_recent"), "usr_recent")
@@ -258,7 +266,7 @@ class SettingsStartupTest {
         val scope = AppScope(StandardTestDispatcher(testScheduler))
         val acknowledgement = CompletableDeferred<Unit>()
         val preferences = AcknowledgedPreferences(acknowledgement = acknowledgement)
-        val settings = SettingsStore(isolatedContext(), scope, preferences)
+        val settings = SettingsStore(isolatedContext(), scope, preferences, StandardTestDispatcher(testScheduler))
         try {
             runCurrent()
             val before = settings.userSettings.value
@@ -289,7 +297,7 @@ class SettingsStartupTest {
             scope = scope,
             produceFile = { file },
         )
-        val settings = SettingsStore(isolatedContext(), scope, preferences)
+        val settings = SettingsStore(isolatedContext(), scope, preferences, StandardTestDispatcher(testScheduler))
         val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_order"), "usr_order")
         val enterpriseConversation = kotlin.uuid.Uuid.random()
         val ttsA = TTSProviderSetting.SystemTTS(name = "TTS A")

@@ -271,14 +271,20 @@ internal class EnterpriseSessionController(
         PlatformRefreshAttempt(updated, pending)
     }
 
-    suspend fun acceptPlatformRefresh(attempt: PlatformRefreshAttempt, response: PlatformRefreshResponse) = mutex.withLock {
+    suspend fun acceptPlatformRefresh(attempt: PlatformRefreshAttempt, response: PlatformRefreshResponse): PlatformAccessToken? = mutex.withLock {
         val current = platformContextLocked(attempt.context.sessionId)
         if (current.platform.credential != attempt.context.platform.credential) fail("enterprise_refresh_replaced")
         val next = PlatformRefreshCredential(current.sessionId, response.refreshToken, Instant.parse(response.refreshExpiresAt).toEpochMilli())
         val version = withContext(Dispatchers.IO) { store.prepareCredential(next) }
-        publishPlatformCredential(current.copy(expiresAtMillis = Instant.parse(response.sessionIdleExpiresAt).toEpochMilli(),
+        val sessionExpiresAt = Instant.parse(response.sessionIdleExpiresAt).toEpochMilli()
+        publishPlatformCredential(current.copy(expiresAtMillis = sessionExpiresAt,
             platform = current.platform.copy(credential = version)))
-        platformAccessTokens[current.sessionId] = PlatformAccessToken(response.accessToken, Instant.parse(response.accessTokenExpiresAt).toEpochMilli())
+        val token = PlatformAccessToken(response.accessToken, Instant.parse(response.accessTokenExpiresAt).toEpochMilli())
+        platformAccessTokens[current.sessionId] = token
+        // A just-issued short token is usable. The cache's pre-refresh window is not an expiry check.
+        // Preserve rotated credentials even if the access token expires while committing them.
+        val acceptedAt = nowMillis()
+        token.takeIf { it.expiresAtMillis > acceptedAt && sessionExpiresAt > acceptedAt }
     }
 
     private suspend fun publishPlatformCredential(context: PlatformSessionContext) {

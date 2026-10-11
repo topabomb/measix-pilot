@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.service.runtime
 
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefBackfill
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.model.Conversation
@@ -28,11 +31,7 @@ internal sealed interface ConversationWrite {
         val executionFacts: ExecutionFacts? = null,
     ) : ConversationWrite
 
-    data class MutateTree(
-        val rootId: Uuid,
-        val mutations: List<ConversationMutation>,
-        val deletedChildIds: Set<Uuid>,
-    ) : ConversationWrite
+
 }
 
 internal data class ConversationHeaderChange(
@@ -106,18 +105,24 @@ internal object ConversationTransition {
             is EditMessageVariant -> editVariant(current, command)
             is DeleteMessage -> deleteMessage(current, command)
             is SelectNodeVariant -> selectNodeVariant(current, command)
+            is InsertHistorySummaryCheckpoint -> {
+                check(current.nodes == command.expectedNodes && current.modelContextEntries == command.expectedContextEntries) {
+                    "conversation_changed_during_compression"
+                }
+                require(command.insertIndex in 1..current.nodes.size && current.nodes.none { it.id == command.node.id }) {
+                    "invalid_summary_insertion"
+                }
+                require(command.origin.ownerNodeId == command.node.id && command.origin.ownerMessageId == command.node.currentMessage.id &&
+                    (command.origin.payload.source as? net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary)?.checkpoint != null) {
+                    "summary_origin_requires_checkpoint"
+                }
+                requireSummaryText(command.node.currentMessage)
+                current.copy(nodes = current.nodes.toMutableList().apply { add(command.insertIndex, command.node) },
+                    modelContextEntries = current.modelContextEntries + command.origin,
+                    header = current.header.copy(chatSuggestions = emptyList()))
+            }
             is TruncateToNodeIndex -> truncateTo(current, command.nodeIndexInclusive)
-            is ReplaceMessageTree -> current.copy(
-                nodes = command.nodes,
-                modelContextEntries = current.modelContextEntries + command.messageOrigins.also { entries ->
-                    require(entries.all { it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary &&
-                        current.nodes.none { old -> old.id == it.ownerNodeId } &&
-                        command.nodes.any { node -> node.id == it.ownerNodeId && node.currentMessage.id == it.ownerMessageId } }) {
-                        "summary_origin_requires_new_message"
-                    }
-                },
-                header = if (command.clearSuggestions) current.header.copy(chatSuggestions = emptyList()) else current.header,
-            )
+            is ReplaceMessageTree -> current.copy(nodes = command.nodes)
             is BackfillAttachmentRefs -> backfillAttachmentRefs(current, command.backfills)
             is HeaderConversationCommand -> current.copy(
                 header = applyHeader(current.header, command),
@@ -138,10 +143,15 @@ internal object ConversationTransition {
             } else reduced
             else -> reduced
         }
-        if (command is ReplaceMessageTree && command.messageOrigins.isNotEmpty()) {
+        if (command is InsertHistorySummaryCheckpoint) {
             net.weero.measix.pilot.data.model.ConversationContextIntegrity.validate(
                 next.nodes, next.modelContextEntries, next.contextAdmissions, next.opening, next.header.scope,
             )
+            require(
+                net.weero.measix.pilot.data.model.selectHistorySummary(next.currentMessages(), next.nodes.associate {
+                    it.currentMessage.id to net.weero.measix.pilot.data.model.ContextMessageLocator(it.id, it.currentMessage.id)
+                }, next.modelContextEntries)?.entry?.id == command.origin.id,
+            ) { "summary_checkpoint_not_applicable" }
         }
         return if (next == current) current else next
     }
@@ -340,7 +350,7 @@ internal object ConversationTransition {
                     if (old.nodes.getOrNull(index) !== node) upsert(index, node)
                 }
             }
-            is ReplaceMessageTree -> {
+            is ReplaceMessageTree, is InsertHistorySummaryCheckpoint -> {
                 val newIds = new.nodes.mapTo(hashSetOf(), MessageNode::id)
                 old.nodes.filter { it.id !in newIds }.forEach { deletedNodeIds += it.id }
                 val oldById = old.nodes.associateBy(MessageNode::id)
@@ -386,7 +396,7 @@ internal object ConversationTransition {
         command: ConversationCommand,
     ): ConversationHeaderPatch? {
         val fromCommand = when (command) {
-            is ReplaceMessageTree -> ConversationHeaderPatch(
+            is InsertHistorySummaryCheckpoint -> ConversationHeaderPatch(
                 chatSuggestions = newHeader.chatSuggestions.takeIf { it != oldHeader.chatSuggestions },
             ).takeUnless { it.isNoOp() }
             is HeaderConversationCommand -> headerPatchFromCommand(oldHeader, command)
@@ -486,14 +496,27 @@ internal object ConversationTransition {
         val node = current.nodes[nodeIndex]
         if (node.messages.any { it.id == command.variant.id }) return current
         val newMessages = node.messages + command.variant
+        val sourceId = command.sourceMessageId ?: node.currentMessage.id
+        require(node.messages.any { it.id == sourceId }) { "edit_source_variant_missing" }
+        val summary = current.modelContextEntries.singleOrNull { it.ownerNodeId == node.id && it.ownerMessageId == sourceId &&
+            it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary }
+        require(summary == null || !command.truncateAfterNode) { "summary_cannot_be_sent_as_user_input" }
+        if (summary != null) requireSummaryText(command.variant)
+        val editedNode = node.copy(messages = newMessages, selectIndex = newMessages.lastIndex)
         return current.copy(
             nodes = (if (command.truncateAfterNode) current.nodes.take(nodeIndex + 1) else current.nodes).mapIndexed { i, n ->
-                if (i != nodeIndex) n else node.copy(
-                    messages = newMessages,
-                    selectIndex = newMessages.lastIndex,
-                )
+                if (i != nodeIndex) n else editedNode
             },
+            modelContextEntries = if (summary == null) current.modelContextEntries else current.modelContextEntries +
+                net.weero.measix.pilot.data.model.messageOriginEntry(editedNode, summary.payload.source),
         )
+    }
+
+    private fun requireSummaryText(message: UIMessage) {
+        require(message.role == me.rerere.ai.core.MessageRole.USER &&
+            message.parts.all { it is UIMessagePart.Text } && message.toText().isNotBlank()) {
+            "summary_requires_text: Enter non-empty summary text; attachments are not supported in a history summary."
+        }
     }
 
     private fun deleteMessage(current: ConversationAggregateSnapshot, command: DeleteMessage): ConversationAggregateSnapshot {
@@ -502,7 +525,9 @@ internal object ConversationTransition {
         }
         if (targetNodeIndex < 0) return current
         val targetNode = current.nodes[targetNodeIndex]
-        val nextMessages = targetNode.messages.filterNot { it.id == command.messageId }
+        val isSummary = current.modelContextEntries.any { it.ownerNodeId == targetNode.id &&
+            it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary }
+        val nextMessages = if (isSummary) emptyList() else targetNode.messages.filterNot { it.id == command.messageId }
         val replacement: MessageNode? = if (nextMessages.isEmpty()) {
             null
         } else {

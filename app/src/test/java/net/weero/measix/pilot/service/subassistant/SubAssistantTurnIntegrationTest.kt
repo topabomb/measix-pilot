@@ -214,7 +214,7 @@ class SubAssistantTurnIntegrationTest {
             coEvery { tools.prepareMcpCapabilities(any(), any(), any(), any(), any(), any()) } returns TurnMcpCapabilitySnapshot.EMPTY
             coEvery { tools.buildTools(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } returns listOf(buildAskUserTool())
             val pipeline = mockk<TurnPipelineFactory>()
-            every { pipeline.input(any()) } returns emptyList()
+            every { pipeline.input() } returns emptyList()
             every { pipeline.output() } returns emptyList()
             val runGate = SubAssistantRunGate()
             val childRuns = SubAssistantRunCoordinator(
@@ -224,7 +224,7 @@ class SubAssistantTurnIntegrationTest {
                 memoryService = mockk<net.weero.measix.pilot.service.MemoryService> {
                     coEvery { captureExecution(any(), any()) } returns null
                 }, turnPipelineFactory = pipeline,
-                configurations = ConfigurationQueryService(settingsStore, sessions, ApplicationRecoveryGate().apply { ready() }),
+                configurations = ConfigurationQueryService(settingsStore, sessions, ApplicationRecoveryGate().apply { ready() }, mockk()),
                 turnContextFactory = TurnContextFactory(mockk(relaxed = true)), artifactStore = artifacts,
                 toolArtifactRewriter = mockk(relaxed = true), json = JsonInstant,
                 attachmentResolver = resolver, context = mockk(relaxed = true), turnFinalizer = finalizer,
@@ -253,7 +253,7 @@ class SubAssistantTurnIntegrationTest {
             var pausedStepId: Uuid? = null
             var pausedLocalCallId: Uuid? = null
             val worker = appScope.async(start = CoroutineStart.LAZY) {
-                val started = TurnCommitter.start(commands, runtime, turnId, finalizer)
+                val started = TurnCommitter.start(commands, runtime, turnId, finalizer, model)
                 runner.run(turnRunInputsFixture(
                     conversationId = runtime.id, settings = settings, model = model,
                     mediaCapabilities = me.rerere.ai.provider.RequestMediaCapabilities.NONE,
@@ -312,7 +312,7 @@ class SubAssistantTurnIntegrationTest {
                     SubAssistantLifecycle(repository, registry, commands, JsonInstant), mockk(), artifacts, mockk(), finalizer,
                     JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
                 val synchronization = mockk<EnterpriseSynchronizationService> { coEvery { cancelAndAwait(any()) } returns Unit }
-                val exit = EnterpriseExitService(sessions, synchronization, application, gate, appScope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), identityData = mockk(relaxed = true), remoteWorkspace = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, platformLogout = {})
+                val exit = EnterpriseExitService(sessions, synchronization, application, gate, appScope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), identityData = mockk(relaxed = true), remoteWorkspace = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, webDav = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, platformLogout = {})
                 val request = requireNotNull(exit.captureRequest())
                 val pending = async { try { exit.exit(request); null } catch (error: Exception) { error } }
                 sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.CLOSING }

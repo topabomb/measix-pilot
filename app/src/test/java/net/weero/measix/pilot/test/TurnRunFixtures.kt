@@ -79,7 +79,7 @@ internal fun turnRunInputsFixture(
     onResult: suspend (TurnRunResult) -> Unit = {},
     cancelReason: () -> String? = { null },
 ): TurnRunInputs {
-    val started = startedMessages(messages, assistantMessageId)
+    val started = startedMessages(messages, assistantMessageId, model)
     var committed = Conversation.ofId(conversationId, assistant.id)
         .copy(messageNodes = started.map { MessageNode.of(it) }).toSnapshot()
     val outcomes = mutableMapOf<ToolCallLocator, ToolExecutionStatus>()
@@ -144,12 +144,14 @@ internal fun turnRunInputsFixture(
 internal fun UIMessage.replaceToolByLocalCallId(tool: UIMessagePart.Tool): UIMessage =
     copy(parts = parts.map { if (it is UIMessagePart.Tool && it.localCallId == tool.localCallId) tool else it })
 
-private fun startedMessages(messages: List<UIMessage>, assistantMessageId: Uuid?): List<UIMessage> {
+private fun startedMessages(messages: List<UIMessage>, assistantMessageId: Uuid?, model: Model): List<UIMessage> {
     val last = messages.lastOrNull()
     if (last?.role != me.rerere.ai.core.MessageRole.ASSISTANT) {
         return messages + UIMessage(
             id = assistantMessageId ?: Uuid.NIL,
             role = me.rerere.ai.core.MessageRole.ASSISTANT,
+            modelId = model.id,
+            modelInfo = me.rerere.ai.ui.MessageModelInfo(model.id, model.modelId, model.displayName),
             parts = listOf(net.weero.measix.pilot.service.runtime.TurnTransition.openStep(0)),
         )
     }

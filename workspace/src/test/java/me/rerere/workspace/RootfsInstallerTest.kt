@@ -54,6 +54,77 @@ class RootfsInstallerTest {
     }
 
     @Test
+    fun `Alpine root directory entries preserve the staging directory and following files`() {
+        val archive = tmp.newFile("alpine.tar.gz")
+        GZIPOutputStream(archive.outputStream()).use { out ->
+            out.writeTarEntry("./", '5', ByteArray(0))
+            out.writeTarEntry(".", '5', ByteArray(0))
+            out.writeTarEntry("./etc/", '5', ByteArray(0))
+            out.writeTarEntry("./etc/os-release", '0', "ID=alpine".toByteArray())
+            out.write(ByteArray(TAR_BLOCK * 2))
+        }
+        val target = tmp.newFolder()
+        val preserved = File(target, "keep").apply { writeText("original") }
+        createInstaller().extractTar(archive, target) {}
+        assertEquals("original", preserved.readText())
+        assertEquals("ID=alpine", File(target, "etc/os-release").readText())
+    }
+
+    @Test
+    fun `root entry files and links cannot replace staging while traversal still fails`() {
+        for ((name, type) in listOf("./" to '0', "." to '2', "./" to '1', "../escape" to '0')) {
+            val archive = tmp.newFile()
+            GZIPOutputStream(archive.outputStream()).use { out ->
+                out.writeTarEntry(name, type, ByteArray(0))
+                out.write(ByteArray(TAR_BLOCK * 2))
+            }
+            val target = tmp.newFolder()
+            val preserved = File(target, "keep").apply { writeText("original") }
+            assertThrows(IllegalArgumentException::class.java) {
+                createInstaller().extractTar(archive, target, RootfsInstaller.ArchiveFormat.TAR_GZ) {}
+            }
+            assertEquals("original", preserved.readText())
+        }
+    }
+
+    @Test
+    fun `PAX and GNU root aliases cannot replace staging with an external symlink`() {
+        val outside = tmp.newFolder()
+        val marker = File(outside, "marker").apply { writeText("untouched") }
+        for (type in listOf('x', 'L')) for (name in listOf("./. ", " . ", "./", "/", "./ . ", "./\t. ")) {
+            val archive = tmp.newFile()
+            GZIPOutputStream(archive.outputStream()).use { out ->
+                val extended = if (type == 'L') "$name\u0000" else {
+                    val record = " path=$name\n"
+                    var length = record.length + 1
+                    while (length != record.length + length.toString().length) length = record.length + length.toString().length
+                    "$length$record"
+                }
+                out.writeTarEntry("extended", type, extended.toByteArray())
+                out.writeTarEntry("placeholder", '2', ByteArray(0), outside.absolutePath)
+                out.writeTarEntry("marker", '0', "overwritten".toByteArray())
+                out.write(ByteArray(TAR_BLOCK * 2))
+            }
+            val target = tmp.newFolder()
+            if (name in listOf("./. ", " . ", "./", "/")) {
+                val error = assertThrows(IllegalArgumentException::class.java) {
+                    createInstaller().extractTar(archive, target, RootfsInstaller.ArchiveFormat.TAR_GZ) {}
+                }
+                assertEquals("Rootfs root entry must be a directory", error.message)
+            } else {
+                // A leading-space filename is not a root alias on Unix; Windows may reject it.
+                // Neither outcome may replace the staging root or change the containment anchor.
+                try { createInstaller().extractTar(archive, target, RootfsInstaller.ArchiveFormat.TAR_GZ) {} }
+                catch (_: java.io.IOException) { assertTrue(target.isDirectory) }
+                catch (error: IllegalArgumentException) { assertEquals("Rootfs root entry must be a directory", error.message) }
+            }
+            assertFalse(java.nio.file.Files.isSymbolicLink(target.toPath()))
+            assertTrue(target.isDirectory)
+            assertEquals("untouched", marker.readText())
+        }
+    }
+
+    @Test
     fun `wrong architecture install preserves the existing rootfs before replacement`() {
         val manager = WorkspaceManager(tmp.newFolder())
         val native = tmp.newFolder()
@@ -96,12 +167,13 @@ class RootfsInstallerTest {
 
     private fun createInstaller() = RootfsInstaller(WorkspaceManager(tmp.newFolder()), tmp.newFolder())
 
-    private fun OutputStream.writeTarEntry(name: String, type: Char, data: ByteArray) {
+    private fun OutputStream.writeTarEntry(name: String, type: Char, data: ByteArray, linkName: String = "") {
         val header = ByteArray(TAR_BLOCK)
         name.toByteArray(Charsets.UTF_8).copyInto(header, 0)
         "0000755".toByteArray().copyInto(header, 100)
         data.size.toLong().toOctalField().copyInto(header, 124)
         header[156] = type.code.toByte()
+        linkName.toByteArray().copyInto(header, 157)
         write(header)
         write(data)
         val padding = (TAR_BLOCK - data.size % TAR_BLOCK) % TAR_BLOCK

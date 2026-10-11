@@ -37,6 +37,27 @@ import kotlin.uuid.Uuid
  * 核心：reducer 零 IO、纯函数、未被触及节点保持同一实例引用（structural sharing）。
  */
 internal class TurnTransitionTest : ConversationTransitionTestBase() {
+    @Test
+    fun `START captures model identity before output and regeneration preserves previous identity`() {
+        val firstModel = me.rerere.ai.ui.MessageModelInfo(ConfigurationReference.random(), "first", "First model")
+        val nextModel = me.rerere.ai.ui.MessageModelInfo(ConfigurationReference.random(), "next", "Next model")
+        val initial = Conversation.ofId(Uuid.random()).copy(
+            messageNodes = listOf(MessageNode.of(UIMessage.user("question"))),
+        ).toSnapshot()
+        val started = ConversationTransition.apply(initial,
+            TurnTransition.buildStartTurnCommand(initial, turnId = Uuid.random()).copy(modelInfo = firstModel),
+        )
+        val first = started.nodes.last().currentMessage
+        assertEquals(firstModel, first.modelInfo)
+        assertEquals(firstModel.id, first.modelId)
+        val regenerated = ConversationTransition.apply(started,
+            TurnTransition.buildStartTurnCommand(started, turnId = Uuid.random()).copy(modelInfo = nextModel),
+        )
+        assertEquals(first, regenerated.nodes.last().messages.first())
+        assertEquals(nextModel, regenerated.nodes.last().currentMessage.modelInfo)
+        assertEquals(nextModel.id, regenerated.nodes.last().currentMessage.modelId)
+    }
+
     // ---- START 新 owner / anchor 语义 ----
 
     @Test

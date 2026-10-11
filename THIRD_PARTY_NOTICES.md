@@ -13,7 +13,7 @@ the license metadata packaged by Gradle dependencies and the source-specific pro
 
 The PRoot source baseline follows upstream app import commit
 `f4508dfac2255cf83e75859a8fe37dd7da6778a3`. The checked-in artifacts are local builds with the
-termination patch recorded in `workspace/proot-lock.json`. Exact source/dependency checksums,
+termination and syscall compatibility patch recorded in `workspace/proot-lock.json`. Exact source/dependency checksums,
 the patch, build protocol and verification limits are recorded in `workspace/PROOT.md` and
 `workspace/tools/build-proot.py`.
 

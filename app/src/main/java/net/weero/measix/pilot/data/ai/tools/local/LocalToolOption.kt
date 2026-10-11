@@ -6,8 +6,8 @@ import kotlinx.serialization.Serializable
 @Serializable
 sealed class LocalToolOption {
     @Serializable
-    @SerialName("javascript_engine")
-    data object JavascriptEngine : LocalToolOption()
+    @SerialName("chart_display")
+    data object ChartDisplay : LocalToolOption()
 
     @Serializable
     @SerialName("time_info")

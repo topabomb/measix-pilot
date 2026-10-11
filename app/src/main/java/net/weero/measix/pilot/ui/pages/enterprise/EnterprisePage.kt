@@ -237,6 +237,9 @@ internal fun EnterpriseSpaceSettingsCard(modifier: Modifier = Modifier, vm: Ente
 @Composable
 internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinViewModel()) {
     val state by vm.overview.collectAsStateWithLifecycle()
+    val queries = org.koin.compose.koinInject<net.weero.measix.pilot.service.ConfigurationQueryService>()
+    val webDavConfiguration by remember(queries) { queries.observeWebDavConfiguration() }
+        .collectAsStateWithLifecycle(initialValue = net.weero.measix.pilot.service.WebDavConfigurationReadState.Loading)
     val working by vm.busy.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
@@ -409,6 +412,22 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options))
                         }
                         DropdownMenu(expanded = pageMenuOpen, onDismissRequest = { pageMenuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.webdav_file_manager)) },
+                                enabled = !busy && (webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available)?.current != null,
+                                onClick = {
+                                    val current = webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available
+                                    if (current?.current != null) {
+                                        pageMenuOpen = false
+                                        nav.navigate(Screen.WebDavFiles(selection = current.selection))
+                                    }
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.settings)) },
+                                enabled = !busy,
+                                onClick = { pageMenuOpen = false; nav.navigate(Screen.Setting) },
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(if (inEnterprise) R.string.enterprise_all_chat_history else R.string.history_page_title)) },
                                 enabled = !busy,

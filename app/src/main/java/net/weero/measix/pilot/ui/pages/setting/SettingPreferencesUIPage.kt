@@ -44,6 +44,7 @@ import me.rerere.hugeicons.stroke.FileImport
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.ChatFontFamily
 import net.weero.measix.pilot.data.datastore.DisplaySetting
+import net.weero.measix.pilot.data.datastore.ConversationSortOrder
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.richtext.MarkdownBlock
 import net.weero.measix.pilot.ui.components.ui.CardGroup
@@ -112,6 +113,20 @@ fun SettingPreferencesUIPage(vm: SettingVM = koinViewModel()) {
             contentPadding = contentPadding + PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item {
+                CardGroup(title = { Text(stringResource(R.string.conversation_sort_title)) }) {
+                    item(headlineContent = {
+                        Select(
+                            options = ConversationSortOrder.entries,
+                            selectedOption = displaySetting.conversationSortOrder,
+                            onOptionSelected = { updateDisplaySetting(displaySetting.copy(conversationSortOrder = it)) },
+                            optionToString = { stringResource(if (it == ConversationSortOrder.CREATED)
+                                R.string.conversation_sort_created else R.string.conversation_sort_updated) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    })
+                }
+            }
             item {
                 CardGroup(
                     modifier = Modifier.padding(horizontal = 8.dp),

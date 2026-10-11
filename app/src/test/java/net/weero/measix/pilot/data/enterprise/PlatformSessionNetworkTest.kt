@@ -42,6 +42,37 @@ class PlatformSessionNetworkTest {
     private fun rawFixture(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString()
+
+    @Test fun `fresh short lifetime token is usable while expired refresh preserves rotated credential`() = runBlocking {
+        for (expiresAt in listOf(16_000L, 1000L)) {
+            val refreshed = PlatformWireCodec.decode<PlatformRefreshResponse>(fixture("refresh-response"))
+                .copy(accessTokenExpiresAt = Instant.ofEpochMilli(expiresAt).toString())
+            val requests = AtomicInteger()
+            val server = server {
+                requests.incrementAndGet()
+                reply(200, PlatformWireCodec.json.encodeToString(refreshed))
+            }
+            try {
+                val sessions = owner(temporary.newFolder())
+                val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
+                val exchange = PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(fixture("enrollment-response"))
+                    .copy(accessTokenExpiresAt = Instant.ofEpochMilli(1000).toString())
+                val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection, exchange)
+                if (expiresAt > 1000L) {
+                    val token = service(sessions).accessToken(id, connection)
+                    assertTrue(token.value == refreshed.accessToken)
+                    assertEquals(expiresAt, token.expiresAtMillis)
+                    assertNull("Cached tokens still keep the normal pre-refresh window", sessions.platformAccessToken(id))
+                } else {
+                    try { service(sessions).accessToken(id, connection); fail("Expired access token was accepted") }
+                    catch (expected: EnterpriseConfigurationException) { assertEquals("platform_access_token_expired", expected.reason) }
+                }
+                assertEquals(1, requests.get())
+                assertTrue(sessions.beginPlatformRefresh(id).credential.refreshToken == refreshed.refreshToken)
+            } finally { server.stop(0) }
+        }
+    }
+
     private fun server(handler: HttpExchange.() -> Unit) = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
         createContext("/") { exchange -> exchange.use { it.handler() } }
         start()

@@ -10,13 +10,13 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class ConversationMessageOriginTest {
-    @Test fun `summary commits its source with the replacement tree and keeps ordinary content`() {
+    @Test fun `legacy summary source remains readable without invented coverage`() {
         val assistant = Assistant()
         val original = Conversation.ofId(Uuid.random(), assistant.id)
             .copy(messageNodes = listOf(MessageNode.of(UIMessage.user("old request")))).toSnapshot()
         val node = MessageNode.of(UIMessage.user("Summary with literal {{name}}"))
         val entry = messageOriginEntry(node, ConversationContextSource.HistorySummary(null, "Summarize", "Focus on units", 100))
-        val result = ConversationTransition.apply(original, ReplaceMessageTree(listOf(node), messageOrigins = listOf(entry)))
+        val result = original.copy(nodes = listOf(node), modelContextEntries = listOf(entry))
         assertEquals("Summary with literal {{name}}", result.currentMessages().single().toText())
         assertEquals(listOf(entry), result.modelContextEntries)
         assertTrue(entry.payload.body is ConversationContextBody.MessageReference)

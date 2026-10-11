@@ -214,6 +214,29 @@ class AdmittedContextPlannerTest {
         assertEquals(listOf(use), resolveUsesAt(admissions, owner, second.stepId, listOf(first, second, third)).uses)
     }
 
+    @Test fun `beforeStep split cannot resurrect cancelled step protocol state`() {
+        fun metadata(digest: String) = ClaudeResponseMetadata(ClaudeReplayState(retiredDigests = setOf(digest))).toMetadata()
+        val first = step(0).copy(outcome = StepOutcome.Continue,
+            modelResult = sampledModelResult("tool_use").copy(providerMetadata = metadata("committed")))
+        val second = step(1).copy(outcome = StepOutcome.Cancelled,
+            modelResult = sampledModelResult("end_turn").copy(providerMetadata = metadata("cancelled")))
+        val assistant = UIMessage(role = MessageRole.ASSISTANT, terminalStatus = MessageTerminalStatus.CANCELLED,
+            parts = listOf(first, tool(first), second, UIMessagePart.Text("partial")),
+            providerMetadata = mergeMessageMetadata(metadata("committed"), metadata("cancelled")))
+        val user = UIMessage.user("question")
+        val origins = locators(listOf(user, assistant))
+        val entry = entry(origins.getValue(assistant.id).context(), origins.getValue(user.id).context(), content(DisclosureSection.MEMORY))
+        val output = planner.applyContextProjections(listOf(user, requireNotNull(assistant.replaySafeProjection())),
+            listOf(projection(entry, ContextPlacement.BeforeStep(second.stepId))),
+            origins.mapValues { RequestMessageOrigin.Durable(it.value) })
+        val provider = RequestAssembler().assemble(output).providerMessages
+        assertEquals(setOf("committed"), provider.flatMap {
+            it.metadataAs<ClaudeResponseMetadata>()?.claudeReplayState?.retiredDigests.orEmpty()
+        }.toSet())
+        assertEquals(null, provider.last().providerMetadata)
+        assertTrue(provider.last().parts.any { it is UIMessagePart.Text && it.text == "partial" })
+    }
+
     @Test fun `beforeStep split preserves each opaque response group once and tool identity unchanged`() {
         val first = step(0)
         val second = step(1)

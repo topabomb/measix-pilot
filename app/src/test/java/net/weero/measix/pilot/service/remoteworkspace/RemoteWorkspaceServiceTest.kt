@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.service.remoteworkspace
 
+import net.weero.measix.pilot.service.files.*
+
 import io.mockk.*
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -19,13 +21,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [net.weero.measix.pilot.test.WindowsAtomicFileShadow::class])
 class RemoteWorkspaceServiceTest {
     @get:Rule val temporary = TemporaryFolder()
-    private val ready = PlatformWorkspaceProjection(1, PlatformWorkspaceProjectionState.CONNECTED, 1,
-        "spc_550e8400-e29b-41d4-a716-446655440000", mcpAvailable = false, filesAvailable = true,
+    private val ready = PlatformWorkspaceProjection(schemaVersion = 1, state = PlatformWorkspaceProjectionState.CONNECTED, bindingRevision = 1,
+        agentSpaceId = "spc_550e8400-e29b-41d4-a716-446655440000", mcpAvailable = false, filesAvailable = true,
         mcpReason = "mcp_not_published", filesReason = "available", serviceState = PlatformWorkspaceProjectionServiceState.ENABLED)
-    private val file = RemoteFile("a.txt", false, 1, null, "\"v1\"")
+    private val file = BrowserFile("a.txt", false, 1, null, "\"v1\"")
     private val success = PlatformWorkspaceFileResult(PlatformWorkspaceFileResultOutcome.SUCCEEDED, emptyList(), false)
 
     private inner class Fixture(val sessions: EnterpriseSessionController, val service: RemoteWorkspaceService,
@@ -48,6 +50,43 @@ class RemoteWorkspaceServiceTest {
         val selection = sessions.readPresentation().selection!!
         service.queryState.first { it?.refreshing == false }
         return Fixture(sessions, service, client, selection, control, invalidations)
+    }
+
+    @Test fun `DAV projection retains designated identity but exposes query failure and clears it after successful refresh`() = runTest {
+        val id = "dav_12345678-1234-4234-8234-123456789abc"
+        val projection = ready.copy(fileExchangeWebdavResourceId = id,
+            webdav = PlatformWorkspaceDAVProjection(id, true, "ready", PlatformDAVAccessMode.FULL, 2))
+        val f = fixture(projection)
+        assertEquals(id, f.service.observeDavProjection().first()!!.projection!!.fileExchangeWebdavResourceId)
+        coEvery { f.client.state(any(), any()) } throws IOException("DAV status offline")
+        f.service.refresh(f.selection)
+        val failed = requireNotNull(f.service.observeDavProjection().first())
+        assertEquals(id, failed.projection!!.fileExchangeWebdavResourceId)
+        assertTrue(failed.diagnostic!!.contains("DAV status offline"))
+        coEvery { f.client.state(any(), any()) } returns projection
+        f.service.readDavProjection(f.selection.access as RealmAccess.Enterprise)
+        assertNull(f.service.observeDavProjection().first()!!.diagnostic)
+    }
+
+    @Test fun `exit cancels DAV target lookup before waiting for platform operations`() = runTest {
+        val f = fixture()
+        val access = f.selection.access as RealmAccess.Enterprise
+        val entered = CompletableDeferred<Unit>()
+        val cleaning = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { f.client.state(any(), any()) } coAnswers {
+            entered.complete(Unit)
+            try { awaitCancellation() }
+            finally { withContext(NonCancellable) { cleaning.complete(Unit); release.await() } }
+        }
+        val lookup = async { f.service.readDavProjection(access) }
+        entered.await()
+        val close = async { f.service.cancelAndAwait(access); f.sessions.awaitPlatformOperations(access) }
+        cleaning.await()
+        assertFalse(close.isCompleted)
+        release.complete(Unit)
+        close.await()
+        assertTrue(lookup.isCancelled)
     }
 
     @Test fun `media source pins HEAD version and length instead of directory metadata`() = runTest {
@@ -271,14 +310,14 @@ class RemoteWorkspaceServiceTest {
             success
         }
         val failed = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
-        assertEquals(RemoteOutcome.FAILED, failed.outcome)
+        assertEquals(BrowserOutcome.FAILED, failed.outcome)
         assertTrue(failed.diagnostic!!.contains("invalid_credential"))
         coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         coVerify(exactly = 1) { f.control.refresh(any(), any(), any()) }
         assertTrue(f.invalidations.isEmpty())
         assertEquals(f.selection, f.sessions.readPresentation().selection)
 
-        assertEquals(RemoteOutcome.SUCCEEDED,
+        assertEquals(BrowserOutcome.SUCCEEDED,
             f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
         coVerify(exactly = 2) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         coVerify(exactly = 1) { f.control.refresh(any(), any(), any()) }
@@ -296,14 +335,14 @@ class RemoteWorkspaceServiceTest {
         refreshing.await()
         first.cancelAndJoin()
         assertTrue(first.isCancelled)
-        assertEquals(RemoteOutcome.CANCELLED, f.service.outcomeAfterCancellation(handle, file.path))
+        assertEquals(BrowserOutcome.CANCELLED, f.service.outcomeAfterCancellation(handle, file.path))
         coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         assertTrue(f.invalidations.isEmpty())
         assertEquals(f.selection, f.sessions.readPresentation().selection)
 
         coEvery { f.control.refresh(any(), any(), any()) } returns refreshedToken()
         coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
-        assertEquals(RemoteOutcome.SUCCEEDED,
+        assertEquals(BrowserOutcome.SUCCEEDED,
             f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
         coVerify(exactly = 2) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         coVerify(exactly = 2) { f.control.refresh(any(), any(), any()) }
@@ -331,10 +370,10 @@ class RemoteWorkspaceServiceTest {
         assertTrue(first.isCancelled)
         assertTrue(cancellationReachedCaller.isCompleted)
         assertTrue(sendExited.isCompleted)
-        assertEquals(RemoteOutcome.UNKNOWN, f.service.outcomeAfterCancellation(handle, file.path))
+        assertEquals(BrowserOutcome.UNKNOWN, f.service.outcomeAfterCancellation(handle, file.path))
         coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
         val blocked = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
-        assertEquals(RemoteOutcome.UNKNOWN, blocked.outcome)
+        assertEquals(BrowserOutcome.UNKNOWN, blocked.outcome)
         assertEquals("workspace_verify_unknown_result_first", blocked.diagnostic)
         coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         coVerify(exactly = 0) { f.control.refresh(any(), any(), any()) }
@@ -351,13 +390,13 @@ class RemoteWorkspaceServiceTest {
         }
         val result = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
         assertTrue(sendEntered.isCompleted)
-        assertEquals(RemoteOutcome.UNKNOWN, result.outcome)
+        assertEquals(BrowserOutcome.UNKNOWN, result.outcome)
         assertTrue(result.diagnostic!!.contains("IOException"))
         assertTrue(result.diagnostic!!.contains("connection reset before a write response"))
-        assertEquals(RemoteOutcome.UNKNOWN, f.service.outcomeAfterCancellation(handle, file.path))
+        assertEquals(BrowserOutcome.UNKNOWN, f.service.outcomeAfterCancellation(handle, file.path))
         coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
         val blocked = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
-        assertEquals(RemoteOutcome.UNKNOWN, blocked.outcome)
+        assertEquals(BrowserOutcome.UNKNOWN, blocked.outcome)
         assertEquals("workspace_verify_unknown_result_first", blocked.diagnostic)
         coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         coVerify(exactly = 0) { f.control.refresh(any(), any(), any()) }
@@ -370,7 +409,7 @@ class RemoteWorkspaceServiceTest {
         val rejected = accessRejected()
         var closes = 0
         var deletes = 0
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/export/rejected"
             override fun open() = object : ByteArrayOutputStream() {
                 override fun close() { closes++; super.close() }
@@ -503,12 +542,12 @@ class RemoteWorkspaceServiceTest {
         coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } throws PlatformHttpException(507,
             PlatformProblem("about:blank", "unknown", 507, "workspace_result_unknown"), "disk full after write")
         val result = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
-        assertEquals(RemoteOutcome.UNKNOWN, result.outcome)
+        assertEquals(BrowserOutcome.UNKNOWN, result.outcome)
         val blocked = f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() })
-        assertEquals(RemoteOutcome.UNKNOWN, blocked.outcome)
+        assertEquals(BrowserOutcome.UNKNOWN, blocked.outcome)
         coVerify(exactly = 1) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
-        assertEquals(RemoteOutcome.SUCCEEDED, f.service.upload(handle, "copy.txt", null, 1, { byteArrayOf(1).inputStream() }).outcome)
+        assertEquals(BrowserOutcome.SUCCEEDED, f.service.upload(handle, "copy.txt", null, 1, { byteArrayOf(1).inputStream() }).outcome)
     }
 
     @Test fun `space replacement invalidates existing handle before next file request`() = runTest {
@@ -525,7 +564,7 @@ class RemoteWorkspaceServiceTest {
         val f = fixture(); val handle = f.service.open(f.selection)
         coEvery { f.client.download(any(), any(), any(), any(), any(), any(), any()) } returns WorkspaceContentMetadata("\"v1\"", 1, null)
         var deletes = 0
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/7"
             override fun open() = object : ByteArrayOutputStream() { override fun close() { throw IOException("provider close failed") } }
             override fun delete(): Boolean { deletes++; return false }
@@ -549,7 +588,7 @@ class RemoteWorkspaceServiceTest {
             try { f.service.open(f.selection); fail("new management session admitted during address change") }
             catch (error: IllegalStateException) { assertEquals("workspace_connection_change_in_progress", error.message) }
             assertFalse(f.service.isValid(handle))
-            assertEquals(RemoteOutcome.FAILED, f.service.upload(handle, "a.txt", null, 1, { byteArrayOf(1).inputStream() }).outcome)
+            assertEquals(BrowserOutcome.FAILED, f.service.upload(handle, "a.txt", null, 1, { byteArrayOf(1).inputStream() }).outcome)
             coVerify(exactly = 0) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         } finally { finish.complete(Unit); changing.await() }
         val replacement = f.service.open(f.selection)
@@ -562,7 +601,7 @@ class RemoteWorkspaceServiceTest {
         coEvery { f.client.state(any(), any()) } throws IOException("status connection lost")
         f.service.refresh(f.selection)
         assertEquals(RemoteWorkspaceStatus.FAILED, f.service.summary.value!!.status)
-        assertEquals(RemoteOutcome.FAILED, f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
+        assertEquals(BrowserOutcome.FAILED, f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
         coVerify(exactly = 0) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
     }
 
@@ -591,7 +630,7 @@ class RemoteWorkspaceServiceTest {
             assertFalse("new write bypassed the unfinished status query", writing.isCompleted)
             coVerify(exactly = 0) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
         } finally { releaseRead.complete(Unit); releaseQuery.complete(Unit); refreshing.await() }
-        assertEquals(RemoteOutcome.SUCCEEDED, writing.await().outcome)
+        assertEquals(BrowserOutcome.SUCCEEDED, writing.await().outcome)
         assertTrue(f.service.summary.value!!.canOpenFiles)
         assertTrue(f.service.isValid(handle))
     }
@@ -606,7 +645,7 @@ class RemoteWorkspaceServiceTest {
         val deletes = java.util.concurrent.atomic.AtomicInteger()
         val opens = java.util.concurrent.atomic.AtomicInteger()
         val bytes = ByteArrayOutputStream()
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/returned-during-refresh"
             override fun open(): java.io.OutputStream { opens.incrementAndGet(); return bytes }
             override fun delete(): Boolean { deletes.incrementAndGet(); return true }
@@ -637,7 +676,7 @@ class RemoteWorkspaceServiceTest {
         val refreshing = async { f.service.refresh(f.selection) }
         queryStarted.await()
         val deletes = java.util.concurrent.atomic.AtomicInteger()
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/failed-refresh"
             override fun open(): java.io.OutputStream = error("failed status must not open output")
             override fun delete(): Boolean { deletes.incrementAndGet(); return true }
@@ -664,7 +703,7 @@ class RemoteWorkspaceServiceTest {
         val refreshing = async { f.service.refresh(f.selection) }
         queryStarted.await()
         val deletes = java.util.concurrent.atomic.AtomicInteger()
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/replaced-space"
             override fun open(): java.io.OutputStream = error("replacement space must not open output")
             override fun delete(): Boolean { deletes.incrementAndGet(); return true }
@@ -688,7 +727,7 @@ class RemoteWorkspaceServiceTest {
         val deletes = java.util.concurrent.atomic.AtomicInteger()
         val deleting = CompletableDeferred<Unit>()
         val releaseDelete = java.util.concurrent.CountDownLatch(1)
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/switch-during-refresh"
             override fun open(): java.io.OutputStream = error("switched realm must not open output")
             override fun delete(): Boolean {
@@ -719,14 +758,14 @@ class RemoteWorkspaceServiceTest {
         coEvery { f.client.list(any(), any(), any(), any()) } throws IOException("connection reset during directory read")
         try { f.service.list(handle, ""); fail() } catch (_: IOException) { }
         assertEquals(RemoteWorkspaceStatus.READ_FAILED, f.service.summary.value!!.status)
-        assertEquals(RemoteOutcome.FAILED, f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
+        assertEquals(BrowserOutcome.FAILED, f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
         f.service.refresh(f.selection)
         assertEquals(RemoteWorkspaceStatus.READ_FAILED, f.service.summary.value!!.status)
         coEvery { f.client.list(any(), any(), any(), any()) } returns PlatformWorkspaceFileList(emptyList())
         f.service.list(handle, "")
         assertTrue(f.service.summary.value!!.canOpenFiles)
         coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
-        assertEquals(RemoteOutcome.SUCCEEDED, f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
+        assertEquals(BrowserOutcome.SUCCEEDED, f.service.upload(handle, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
     }
 
     @Test fun `unexpected successful HTTP statuses remain unknown and cannot be replayed`() = runTest {
@@ -734,8 +773,8 @@ class RemoteWorkspaceServiceTest {
         for (status in listOf(201, 204)) {
             val path = "result-$status.txt"
             coEvery { f.client.upload(any(), any(), any(), path, any(), any(), any(), any()) } throws PlatformHttpException(status, null, "unexpected successful response")
-            assertEquals(RemoteOutcome.UNKNOWN, f.service.upload(handle, path, null, 1, { byteArrayOf(1).inputStream() }).outcome)
-            assertEquals(RemoteOutcome.UNKNOWN, f.service.upload(handle, path, null, 1, { byteArrayOf(1).inputStream() }).outcome)
+            assertEquals(BrowserOutcome.UNKNOWN, f.service.upload(handle, path, null, 1, { byteArrayOf(1).inputStream() }).outcome)
+            assertEquals(BrowserOutcome.UNKNOWN, f.service.upload(handle, path, null, 1, { byteArrayOf(1).inputStream() }).outcome)
             coVerify(exactly = 1) { f.client.upload(any(), any(), any(), path, any(), any(), any(), any()) }
         }
     }
@@ -744,17 +783,17 @@ class RemoteWorkspaceServiceTest {
         val f = fixture(); val first = f.service.open(f.selection)
         coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } throws PlatformHttpException(507,
             PlatformProblem("about:blank", "unknown", 507, "workspace_result_unknown"), "write may have completed")
-        assertEquals(RemoteOutcome.UNKNOWN, f.service.upload(first, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
+        assertEquals(BrowserOutcome.UNKNOWN, f.service.upload(first, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
         f.service.close(first)
         val reopened = f.service.open(f.selection)
         try { f.service.acknowledgeVerified(reopened, file.path); fail("confirmation accepted without a fresh read") }
         catch (_: IllegalStateException) { }
-        assertEquals(RemoteOutcome.UNKNOWN, f.service.upload(reopened, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
+        assertEquals(BrowserOutcome.UNKNOWN, f.service.upload(reopened, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
         assertNull(f.service.verifyUnknown(reopened, file.path))
-        assertEquals(RemoteOutcome.UNKNOWN, f.service.upload(reopened, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
+        assertEquals(BrowserOutcome.UNKNOWN, f.service.upload(reopened, file.path, file.etag, 1, { byteArrayOf(1).inputStream() }).outcome)
         f.service.acknowledgeVerified(reopened, file.path)
         coEvery { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) } returns success
-        assertEquals(RemoteOutcome.SUCCEEDED, f.service.upload(reopened, file.path, null, 1, { byteArrayOf(1).inputStream() }).outcome)
+        assertEquals(BrowserOutcome.SUCCEEDED, f.service.upload(reopened, file.path, null, 1, { byteArrayOf(1).inputStream() }).outcome)
         coVerify(exactly = 2) { f.client.upload(any(), any(), any(), any(), any(), any(), any(), any()) }
     }
 
@@ -837,7 +876,7 @@ class RemoteWorkspaceServiceTest {
         val deletes = java.util.concurrent.atomic.AtomicInteger()
         val deleting = CompletableDeferred<Unit>()
         val releaseDelete = java.util.concurrent.CountDownLatch(1)
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/not-started"
             override fun open(): java.io.OutputStream = error("cancelled operation must not open output")
             override fun delete(): Boolean {
@@ -868,7 +907,7 @@ class RemoteWorkspaceServiceTest {
         val deletes = java.util.concurrent.atomic.AtomicInteger()
         val deleting = CompletableDeferred<Unit>()
         val releaseDelete = java.util.concurrent.CountDownLatch(1)
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/accepted"
             override fun open(): java.io.OutputStream = error("revoked accepted document must not be opened")
             override fun delete(): Boolean {
@@ -897,7 +936,7 @@ class RemoteWorkspaceServiceTest {
         val releaseCreate = java.util.concurrent.CountDownLatch(1)
         val deletes = java.util.concurrent.atomic.AtomicInteger()
         val opens = java.util.concurrent.atomic.AtomicInteger()
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/created-during-switch"
             override fun open(): java.io.OutputStream { opens.incrementAndGet(); return ByteArrayOutputStream() }
             override fun delete(): Boolean { deletes.incrementAndGet(); return true }
@@ -938,7 +977,7 @@ class RemoteWorkspaceServiceTest {
         } catch (error: IOException) { assertTrue(error.userVisibleDiagnostic().contains("local provider could not create a document")) }
         assertEquals(RemoteWorkspaceStatus.AVAILABLE, f.service.summary.value!!.status)
         var deletes = 0
-        val destination = object : RemoteExportDestination {
+        val destination = object : BrowserExportDestination {
             override val description = "content://owned/document/open-failed"
             override fun open(): java.io.OutputStream = throw IOException("local output could not be opened")
             override fun delete(): Boolean { deletes++; return true }
@@ -959,7 +998,7 @@ class RemoteWorkspaceServiceTest {
             val deleting = CompletableDeferred<Unit>()
             val releaseDelete = java.util.concurrent.CountDownLatch(1)
             val deletes = java.util.concurrent.atomic.AtomicInteger()
-            val destination = object : RemoteExportDestination {
+            val destination = object : BrowserExportDestination {
                 override val description = "content://owned/document/old-space-${failure.status}"
                 override fun open(): java.io.OutputStream = ByteArrayOutputStream()
                 override fun delete(): Boolean {

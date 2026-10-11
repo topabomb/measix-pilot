@@ -55,9 +55,125 @@ import io.mockk.every
 import kotlinx.coroutines.flow.flowOf
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], shadows = [net.weero.measix.pilot.test.WindowsAtomicFileShadow::class])
 class ConfigurationApplicationServiceTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    @Test
+    fun `webdav changes commit through settings owner and reject enterprise stale and failed writes`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            val enterpriseSelection = env.selection
+            val personal = env.sessions.selectPersonalFixture()
+            val connection = WebDavConnection(name = "Files", rootUrl = "https://dav.example/", password = " secret ")
+            env.commands.changeWebDavConnection(personal, WebDavConnectionChange.Save(connection, null))
+            val saved = env.diskDocument()
+            val projection = env.queries.observeWebDavConfiguration().first() as WebDavConfigurationReadState.Available
+            assertEquals(connection, projection.personalConnections.single().copy(accessRevision = connection.accessRevision))
+            assertEquals(connection.id, saved.personalSettings().currentWebDavConnectionId)
+            env.intercept = { throw IOException("WebDAV settings write failed") }
+            try {
+                env.commands.changeWebDavConnection(personal, WebDavConnectionChange.Delete(connection.id))
+                fail("Failed write must be reported")
+            } catch (error: IOException) { assertTrue(error.stackTraceToString().contains("WebDAV settings write failed")) }
+            assertEquals(saved, env.diskDocument())
+            assertEquals(projection.current, (env.queries.observeWebDavConfiguration().first() as WebDavConfigurationReadState.Available).current)
+            env.intercept = null
+            expectCommandFailure { env.commands.changeWebDavConnection(enterpriseSelection, WebDavConnectionChange.Select(null)) }
+            env.sessions.selectEnterpriseFixture()
+            expectCommandFailure { env.commands.changeWebDavConnection(personal, WebDavConnectionChange.Select(null)) }
+            val enterprise = env.queries.observeWebDavConfiguration().first() as WebDavConfigurationReadState.Available
+            assertTrue(enterprise.resources.isEmpty())
+            assertNull(enterprise.current)
+            assertEquals(saved, env.diskDocument())
+            val personalAgain = env.sessions.selectPersonalFixture()
+            val original = projection.personalConnections.single()
+            env.commands.changeWebDavConnection(personalAgain, WebDavConnectionChange.Save(original.copy(password = "rotated"), original))
+            var delivered = false
+            try {
+                env.queries.withPersonalWebDavConnection(personalAgain, original) { delivered = true }
+                fail("A committed connection edit must reject the old system handoff")
+            } catch (error: IllegalStateException) { assertEquals("webdav_connection_changed", error.message) }
+            assertFalse(delivered)
+            try {
+                env.queries.withPersonalWebDavAccess(RealmAccess.Personal, original) { delivered = true }
+                fail("A committed connection edit must reject old Turn download publication")
+            } catch (error: IllegalStateException) { assertEquals("webdav_connection_changed", error.message) }
+            assertFalse(delivered)
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
+    fun `webdav backup preferences are scoped independent and compare expected state before commit`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            val empty = net.weero.measix.pilot.data.configuration.WebDavBackupPreferences()
+            val enterprise = empty.copy(resourceId = "dav-enterprise", path = "company-backups")
+            env.commands.changeWebDavBackup(env.selection, empty, enterprise)
+            val personal = env.sessions.selectPersonalFixture()
+            val chosen = empty.copy(resourceId = "personal", path = "personal-backups")
+            env.commands.changeWebDavBackup(personal, empty, chosen)
+            assertEquals(chosen, env.diskDocument().personalSettings().webDavBackup)
+            assertEquals(enterprise, env.diskDocument().preferences.scopes.single { it.scope == env.access.scope }.webDavBackup)
+            assertEquals(chosen, (env.queries.observeWebDavConfiguration().first() as WebDavConfigurationReadState.Available).backup)
+            val saved = env.diskDocument()
+            expectCommandFailure { env.commands.changeWebDavBackup(personal, empty, chosen.copy(path = "stale")) }
+            assertEquals(saved, env.diskDocument())
+            env.intercept = { throw IOException("backup preference write failed") }
+            try {
+                env.commands.changeWebDavBackup(personal, chosen, chosen.copy(path = "failed"))
+                fail("Failed write must be reported")
+            } catch (_: IOException) { }
+            assertEquals(saved, env.diskDocument())
+            env.intercept = null
+            env.sessions.selectEnterpriseFixture()
+            expectCommandFailure { env.commands.changeWebDavBackup(personal, chosen, empty) }
+            assertEquals(saved, env.diskDocument())
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
+    fun `model group preferences commit independently by scope and reject stale or failed writes`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            assertTrue(env.queries.observeCollapsedModelGroups(env.selection).first().getOrThrow().isEmpty())
+            val original = env.diskDocument()
+            env.commands.setModelGroupCollapsed(env.selection, "enterprise", true)
+            env.commands.setModelGroupCollapsed(null, "personal-provider", true)
+            env.commands.setModelGroupCollapsed(env.selection, "user-provider", true)
+            val saved = env.diskDocument()
+            assertEquals(setOf("enterprise", "user-provider"), saved.preferences.collapsedModelGroups(env.access.scope))
+            assertEquals(setOf("personal-provider"), saved.preferences.collapsedModelGroups(ConfigurationScope.Personal))
+            assertEquals(original.configuration, saved.configuration)
+            assertEquals(original.preferences.forScope(env.access.scope), saved.preferences.forScope(env.access.scope))
+            assertEquals(saved, JsonInstant.decodeFromString<UserSettingsDocument>(JsonInstant.encodeToString(saved)))
+            env.intercept = { throw IOException("group preference write failed") }
+            try {
+                env.commands.setModelGroupCollapsed(env.selection, "enterprise", false)
+                fail("Failed write must be reported")
+            } catch (error: IOException) { assertTrue(error.stackTraceToString().contains("group preference write failed")) }
+            assertEquals(saved, env.diskDocument())
+            assertEquals(setOf("enterprise", "user-provider"), env.queries.observeCollapsedModelGroups(env.selection).first().getOrThrow())
+            env.intercept = null
+            val exported = env.settings.snapshotLocal()
+            val stale = env.selection
+            env.sessions.selectPersonalFixture()
+            expectCommandFailure { env.commands.setModelGroupCollapsed(stale, "enterprise", false) }
+            assertEquals(saved.preferences, env.diskDocument().preferences)
+            env.commands.setModelGroupCollapsed(null, "personal-provider", false)
+            assertTrue(env.queries.observeCollapsedModelGroups(null).first().getOrThrow().isEmpty())
+            assertEquals(setOf("enterprise", "user-provider"), env.diskDocument().preferences.collapsedModelGroups(env.access.scope))
+            val backup = JsonInstant.decodeFromString<Settings>(JsonInstant.encodeToString(exported))
+            assertEquals(setOf("personal-provider"), backup.collapsedModelGroupIds)
+            env.commands.setModelGroupCollapsed(null, "temporary", true)
+            env.settings.restoreLocal(backup) { value, commit -> commit(value) }
+            assertEquals(saved.preferences.scopes.associateBy { it.scope }, env.diskDocument().preferences.scopes.associateBy { it.scope })
+
+        } finally { env.scope.cancel() }
+    }
 
     @Test
     fun `chat field commands preserve definitions while enterprise assistants override their default model`() = runTest {
@@ -470,7 +586,7 @@ class ConfigurationApplicationServiceTest {
         } finally { env.scope.cancel() }
     }
 
-    private fun TestScope.environment(): Environment = Environment(temporary.newFolder(), AppScope(StandardTestDispatcher(testScheduler)))
+    private fun TestScope.environment(): Environment = Environment(temporary.newFolder(), AppScope(StandardTestDispatcher(testScheduler)), StandardTestDispatcher(testScheduler))
 
     @Test
     fun `realm resource choices retain invalid references and reject replacements that do not satisfy policy or capability`() = runTest {
@@ -629,7 +745,7 @@ class ConfigurationApplicationServiceTest {
         } finally { env.scope.cancel() }
     }
 
-    private class Environment(root: File, val scope: AppScope) {
+    private class Environment(root: File, val scope: AppScope, computationDispatcher: kotlinx.coroutines.CoroutineDispatcher) {
         var intercept: (suspend () -> Unit)? = null
         private val preferencesFile = File(root, "settings.preferences_pb")
         private val preferences = PreferenceDataStoreFactory.create(
@@ -646,7 +762,7 @@ class ConfigurationApplicationServiceTest {
             override fun getApplicationContext(): Context = this
             override fun getFilesDir(): File = File(root, "files").apply { mkdirs() }
         }
-        val settings = SettingsStore(context, scope, dataStore = preferences)
+        val settings = SettingsStore(context, scope, dataStore = preferences, computationDispatcher = computationDispatcher)
         var now = System.currentTimeMillis()
         private val enterpriseRoot = File(root, "enterprise")
         val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(enterpriseRoot)) { now }
@@ -668,7 +784,7 @@ class ConfigurationApplicationServiceTest {
         val commands = ConfigurationApplicationService(settings, sessions, gate, coordinator, workspaces, artifacts)
         private val preview = mockk<ConversationAttachmentPreviewProjector>()
         val chatQuery = ConversationQueryService(repository, registry, mockk(), mockk(), preview, sessions, gate, settings, mockk(), mockk())
-        val queries = ConfigurationQueryService(settings, sessions, gate)
+        val queries = ConfigurationQueryService(settings, sessions, gate, mockk())
         val model = Model(modelId = "personal")
         val mcp = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "Mine"), url = "https://example.invalid")
         val assistant = Assistant(name = "User", chatModelId = model.id)

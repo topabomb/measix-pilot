@@ -23,8 +23,16 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify fixed Core materials and release rejection paths
+        run: |
+          python -m pip install PyYAML==6.0.2
+          python -m unittest discover -s tools -p test_android_release.py -v
+          python tools/generate-enterprise-wire.py --check
       - name: Verify source formatting
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -62,7 +70,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
       - name: Enable emulator acceleration
         run: |

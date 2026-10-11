@@ -44,6 +44,63 @@ import org.robolectric.annotation.Config
 class SpeechApplicationServiceBarrierTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `personal Volcengine keeps captured voice and resource with live keys and realm admission`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val scope = CoroutineScope(SupervisorJob() + dispatcher)
+        try {
+            for (enterprise in listOf(false, true)) {
+                val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+                val packet = exampleEnterprisePackage().let { it.copy(configuration = it.configuration.copy(
+                    policy = it.configuration.policy.copy(allowLocalTts = true))) }
+                if (enterprise) sessions.enrollFixture(packet) else sessions.recover()
+                val selection = requireNotNull(sessions.readPresentation().selection)
+                val frozen = me.rerere.tts.provider.TTSProviderSetting.Volcengine(apiKey = "old-key", speechRate = -20)
+                val user = MutableStateFlow(Settings(ttsProviders = listOf(frozen), selectedTTSProviderId = frozen.id))
+                val settings = mockk<SettingsStore>()
+                every { settings.userSettings } returns user
+                installExecutionConfigurationFixture(settings)
+                val queries = mockk<ConfigurationQueryService>()
+                every { queries.observeCurrent() } returns emptyFlow()
+                val player = mockk<TtsController>(relaxed = true)
+                every { player.playbackState } returns MutableStateFlow(PlaybackState())
+                every { player.error } returns MutableStateFlow<String?>(null)
+                var playbackSession: TtsPlaybackSession? = null
+                every { player.setSession(any()) } answers { playbackSession = firstArg(); mockk<TtsPlaybackCleanup>(relaxed = true) }
+                val manager = mockk<TTSManager>()
+                val actual = java.util.Collections.synchronizedList(mutableListOf<me.rerere.tts.provider.TTSProviderSetting>())
+                every { manager.generateSpeech(any(), any()) } answers {
+                    actual += firstArg<me.rerere.tts.provider.TTSProviderSetting>()
+                    kotlinx.coroutines.flow.flowOf(me.rerere.tts.model.AudioChunk(byteArrayOf(1), me.rerere.tts.model.AudioFormat.MP3, isLast = true))
+                }
+                val service = SpeechApplicationService(speechContext(), settings, sessions, queries, mockk(), manager,
+                    EnterpriseSpeechTransport(), okhttp3.OkHttpClient(), scope, player, mockk(relaxed = true))
+                val capture = SpeechCapture(selection, ConfigurationCategory.TTS, frozen.id, frozen, null, null, null,
+                    (sessions.state.value as? EnterpriseState.Available)?.manifest?.applied,
+                    "int_${kotlin.uuid.Uuid.random()}", {}, {}, "", false, false)
+                service.enqueue(capture, "volc-queue", "hello", false, null)
+                val playback = requireNotNull(playbackSession)
+                playback.synthesize(TtsChunk(index = 0, text = "first"))
+                val revised = frozen.copy(apiKey = "new-key", resourceId = "new-resource", speaker = "new-voice", speechRate = 50)
+                user.value = user.value.copy(ttsProviders = listOf(revised))
+                playback.synthesize(TtsChunk(index = 1, text = "second"))
+                assertEquals(listOf(frozen, frozen.copy(apiKey = "new-key")), actual.toList())
+                user.value = user.value.copy(ttsProviders = listOf(revised.copy(baseUrl = "https://changed.example")))
+                assertTrue(runCatching { playback.synthesize(TtsChunk(index = 2, text = "reject endpoint")) }.exceptionOrNull()?.message.orEmpty()
+                    .contains("speech_resource_changed"))
+                user.value = user.value.copy(ttsProviders = listOf(revised))
+                if (enterprise) {
+                    val denied = packet.copy(configuration = packet.configuration.copy(generation = packet.configuration.generation + 1,
+                        policy = packet.configuration.policy.copy(allowLocalTts = false)))
+                    sessions.synchronize(selection.access as RealmAccess.Enterprise, platformCandidate(denied))
+                } else user.value = user.value.copy(ttsProviders = emptyList())
+                assertTrue(runCatching { playback.synthesize(TtsChunk(index = 3, text = "revoked")) }.isFailure)
+                assertEquals(2, actual.size)
+                service.closeRealm(selection.access)
+            }
+        } finally { scope.cancel(); Dispatchers.resetMain() }
+    }
+
     @Test fun `enterprise system speech has no platform usage refresh while cloud speech preserves it`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)

@@ -245,6 +245,12 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         supportingContent = { Text(stringResource(R.string.setting_page_mcp_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_mcp)) },
                     )
+                    item(
+                        onClick = { navController.navigate(Screen.SettingWebDav) },
+                        leadingContent = { Icon(HugeIcons.ServerStack01, null) },
+                        supportingContent = { Text(stringResource(R.string.webdav_settings_description)) },
+                        headlineContent = { Text(stringResource(R.string.webdav_settings_title)) },
+                    )
                 }
             }
 

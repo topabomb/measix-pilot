@@ -34,7 +34,6 @@ import net.weero.measix.pilot.utils.DatabaseUtil
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.data.provider.WorkspaceDocumentsDependencies
-import me.rerere.workspace.WorkspaceManager
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -102,22 +101,7 @@ class MeasixPilotApp : Application(), WorkspaceDocumentsDependencies, SingletonI
         // delete temp files
         deleteTempFiles(retiredTempFolders)
 
-        // cleanup workspace temp dirs (proot + rootfs /tmp)
-        cleanupWorkspaceTempDirs()
-
         // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
-    }
-
-    private fun cleanupWorkspaceTempDirs() {
-        get<AppScope>().launch(Dispatchers.IO) {
-            try {
-                get<WorkspaceManager>().cleanupAllTempDirs()
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.e(TAG, "cleanupWorkspaceTempDirs failed", error)
-            }
-        }
     }
 
     private fun deleteTempFiles(retired: List<java.io.File>) {

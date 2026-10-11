@@ -13,13 +13,14 @@ internal class MediaPreviewSource(
     val accessChanges: kotlinx.coroutines.flow.Flow<*>,
     verifyAccess: suspend () -> Unit,
     close: () -> Unit = {},
+    maxBytes: Long = MAX_MEDIA_BYTES,
     readRange: suspend (Long, Int) -> ByteArray,
 ) {
     private val closed = AtomicBoolean()
     private val accessCheck = verifyAccess
     private val rangeReader = readRange
     private val release = close
-    init { require(length in 1..MAX_MEDIA_BYTES) { "workspace_media_size_limit" } }
+    init { require(length in 1..maxBytes) { "workspace_media_size_limit" } }
 
     val verifyAccess: suspend () -> Unit = {
         requireOpen()

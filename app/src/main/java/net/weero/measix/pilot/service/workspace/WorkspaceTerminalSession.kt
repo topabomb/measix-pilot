@@ -36,14 +36,15 @@ internal fun createWorkspaceTerminalSession(
     val filesDir = File(workspaceDir, "files")
     val linuxDir = File(workspaceDir, "linux")
     val tempDir = File(workspaceDir, "tmp")
+    val environment = RootfsCompatibility(File(appContext.applicationInfo.nativeLibraryDir)).requireCompatible(linuxDir)
     val spec = ProotLaunchSpec.from(
         nativeLibraryDir = File(appContext.applicationInfo.nativeLibraryDir),
         filesDir = filesDir,
         linuxDir = linuxDir,
         tempDir = tempDir,
         bindMounts = ProotLaunchSpec.appBindMounts(appContext.filesDir),
+        guestEnvironment = environment,
     )
-    RootfsCompatibility(File(appContext.applicationInfo.nativeLibraryDir)).requireCompatible(linuxDir)
 
     return WorkspacePtySession(
         spec.executable.absolutePath,

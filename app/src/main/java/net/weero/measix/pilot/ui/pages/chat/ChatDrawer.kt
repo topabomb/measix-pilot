@@ -75,6 +75,7 @@ import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.PanelLeftClose
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Settings03
+import me.rerere.hugeicons.stroke.ServerStack01
 import me.rerere.hugeicons.stroke.Sparkles
 import me.rerere.hugeicons.stroke.TransactionHistory
 import net.weero.measix.pilot.R
@@ -135,6 +136,7 @@ fun ChatDrawerContent(
     val activity = LocalActivity.current as? ComponentActivity
         ?: error("ChatDrawerContent requires a ComponentActivity host")
     val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
+    val webDavConfiguration by drawerVm.webDavConfiguration.collectAsStateWithLifecycle()
 
     val assistantCatalogState by drawerVm.assistantCatalog.collectAsStateWithLifecycle()
     val assistantCatalog = (assistantCatalogState as? AssistantCatalogReadState.Available)?.catalog
@@ -143,10 +145,19 @@ fun ChatDrawerContent(
     val folderDirectory = drawerVm.folderDirectory.collectAsStateWithLifecycle().value
     val folders = folderDirectory?.folders.orEmpty()
     val selectedFolderId by drawerVm.selectedFolderId.collectAsStateWithLifecycle()
+    val sortOrder by drawerVm.sortOrder.collectAsStateWithLifecycle()
+    val sortFailure by drawerVm.sortFailure.collectAsStateWithLifecycle()
     val conversationListState = rememberLazyListState(
         initialFirstVisibleItemIndex = drawerVm.scrollIndex,
         initialFirstVisibleItemScrollOffset = drawerVm.scrollOffset,
     )
+    var previousSort by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(sortOrder) }
+    LaunchedEffect(sortOrder) {
+        if (sortOrder == null) return@LaunchedEffect
+        if (previousSort != null && previousSort != sortOrder) conversationListState.scrollToItem(0)
+        previousSort = sortOrder
+    }
+
 
     LaunchedEffect(conversationListState) {
         snapshotFlow {
@@ -343,7 +354,7 @@ fun ChatDrawerContent(
                 navigateFromDrawer = navigateFromDrawer,
             )
 
-            folderDirectory?.diagnostic?.let { detail ->
+            (sortFailure ?: folderDirectory?.diagnostic)?.let { detail ->
                 androidx.compose.foundation.text.selection.SelectionContainer(
                     Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())
                 ) {
@@ -493,6 +504,16 @@ fun ChatDrawerContent(
                     },
                     onClick = {
                         navigateFromDrawer { navController.navigate(Screen.Stats) }
+                    },
+                )
+
+                DrawerAction(
+                    icon = { Icon(HugeIcons.ServerStack01, stringResource(R.string.webdav_file_manager)) },
+                    label = { Text(stringResource(R.string.webdav_file_manager)) },
+                    enabled = (webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available)?.current != null,
+                    onClick = {
+                        val current = webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available
+                        if (current?.current != null) navigateFromDrawer { navController.navigate(Screen.WebDavFiles(selection = current.selection)) }
                     },
                 )
 
@@ -907,13 +928,15 @@ private fun DrawerAction(
     icon: @Composable () -> Unit,
     label: @Composable () -> Unit,
     onClick: () -> Unit,
+    enabled: Boolean = true,
 ) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier,
-        color = MaterialTheme.colorScheme.primaryContainer,
+        color = if (enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
         shape = CircleShape,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+        contentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.38f),
     ) {
         Tooltip(
             tooltip = {

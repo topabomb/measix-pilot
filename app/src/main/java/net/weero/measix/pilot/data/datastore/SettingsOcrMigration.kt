@@ -78,10 +78,11 @@ internal fun migrateOcrPreferences(
 }
 
 /**
- * 旧备份 settings.json 导入边界的一次性映射：顶层 `ocrModelId` → `attachmentInspectionModelId`。
- * `ocrPrompt` 忽略；新字段已存在时以新值为准。模型有效性交给恢复后的运行时校验。
+ * 旧备份 settings.json 先转换 DAV 配置，再将顶层 `ocrModelId` 映射为 `attachmentInspectionModelId`。
+ * `ocrPrompt` 忽略；新字段已存在时以新值为准。损坏 DAV 数据不能被 OCR 兼容回退掩盖。
  */
-fun migrateLegacySettingsJson(raw: String): String {
+fun migrateLegacySettingsJson(source: String): String {
+    val raw = migrateWebDavSettingsJson(source)
     return runCatching {
         val element = JsonInstant.parseToJsonElement(raw) as? kotlinx.serialization.json.JsonObject
             ?: return raw

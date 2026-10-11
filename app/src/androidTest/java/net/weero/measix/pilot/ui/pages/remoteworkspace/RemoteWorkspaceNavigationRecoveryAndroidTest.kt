@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.remoteworkspace
 
+import net.weero.measix.pilot.service.files.*
+
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
@@ -65,8 +67,8 @@ import kotlin.uuid.Uuid
 class RemoteWorkspaceNavigationRecoveryAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private var fixture: Fixture? = null
-    private val file = RemoteFile("notes.txt", false, 8, null, "\"v1\"")
-    private val document = RemoteTextDocument(file, WorkspaceText("original", false, "\n"))
+    private val file = BrowserFile("notes.txt", false, 8, null, "\"v1\"")
+    private val document = BrowserTextDocument(file, WorkspaceText("original", false, "\n"))
 
     @After fun dispose() {
         compose.runOnUiThread { compose.activity.viewModelStore.clear() }
@@ -107,7 +109,7 @@ class RemoteWorkspaceNavigationRecoveryAndroidTest {
             coEvery { service.open(selection) } returns handle
             coEvery { service.refresh(selection) } coAnswers { refreshes.incrementAndGet(); Unit }
             coEvery { service.isValid(handle) } answers { valid.get() }
-            coEvery { service.list(handle, any()) } answers { RemoteDirectory(secondArg(), listOf(file), null, null) }
+            coEvery { service.list(handle, any()) } answers { BrowserDirectory(secondArg(), listOf(file), null, null) }
             coEvery { service.readText(handle, file) } returns document
             every { service.acceptExport(handle, file, any(), any()) } returns CompletableDeferred(Unit)
         }
@@ -185,12 +187,13 @@ class RemoteWorkspaceNavigationRecoveryAndroidTest {
         f.show()
         f.edit("draft never submitted")
         val original = f.vm
+        val originalSession = original.state.value.handle
         val editor = original.state.value.editorSession
         assertNotNull(editor)
         f.recreate()
         compose.runOnIdle {
             assertSame(original, f.vm)
-            assertSame(f.handle, f.vm.state.value.handle)
+            assertSame(originalSession, f.vm.state.value.handle)
             assertSame(editor, f.vm.state.value.editorSession)
             assertEquals("draft never submitted", editor!!.editor.snapshot())
             assertTrue(editor.editing)
@@ -213,7 +216,7 @@ class RemoteWorkspaceNavigationRecoveryAndroidTest {
         assertSame(original, f.vm)
         compose.waitUntil(5_000) { f.refreshes.get() > refreshes }
         f.returnDownload()
-        compose.waitUntil(5_000) { f.vm.state.value.results.singleOrNull()?.outcome == RemoteOutcome.SUCCEEDED }
+        compose.waitUntil(5_000) { f.vm.state.value.results.singleOrNull()?.outcome == BrowserOutcome.SUCCEEDED }
         verify(exactly = 1) { f.service.acceptExport(f.handle, file, any(), any()) }
         verify(exactly = 0) { f.service.discardExport(any(), any()) }
         coVerify(exactly = 1) { f.service.open(f.selection) }
@@ -222,25 +225,26 @@ class RemoteWorkspaceNavigationRecoveryAndroidTest {
 
     @Test fun activityRecreationKeepsAnUnknownSaveAndNeverReplaysItsSubmittedDraft() {
         val f = Fixture()
-        val answer = CompletableDeferred<RemoteOperationResult>()
+        val answer = CompletableDeferred<BrowserOperationResult>()
         coEvery { f.service.save(f.handle, document, "submitted draft", file.path) } coAnswers { answer.await() }
         f.show()
         f.edit("submitted draft")
         val original = f.vm
-        compose.runOnIdle { original.save(f.handle, document, "submitted draft", file.path) }
+        val originalSession = requireNotNull(original.state.value.handle)
+        compose.runOnIdle { original.save(originalSession, document, "submitted draft", file.path) }
         compose.waitUntil(5_000) { original.state.value.save != null }
         f.recreate()
         compose.runOnIdle {
             assertSame(original, f.vm)
             assertTrue(original.state.value.running)
-            assertSame(f.handle, original.state.value.save!!.handle)
-            answer.complete(RemoteOperationResult(file.path, RemoteOutcome.UNKNOWN, "write result unavailable"))
+            assertSame(originalSession, original.state.value.save!!.handle)
+            answer.complete(BrowserOperationResult(file.path, BrowserOutcome.UNKNOWN, "write result unavailable"))
         }
         compose.waitUntil(5_000) { !original.state.value.running }
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("submitted draft")))
         compose.onNodeWithContentDescription(label(R.string.remote_workspace_save_close)).assertIsNotEnabled()
         compose.runOnIdle {
-            assertEquals(RemoteOutcome.UNKNOWN, original.state.value.save!!.result!!.outcome)
+            assertEquals(BrowserOutcome.UNKNOWN, original.state.value.save!!.result!!.outcome)
             assertEquals("submitted draft", original.state.value.save!!.text)
         }
         coVerify(exactly = 1) { f.service.save(f.handle, document, "submitted draft", file.path) }

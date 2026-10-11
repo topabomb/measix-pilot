@@ -38,7 +38,32 @@ sealed interface MessageMetadata : Metadata
 data class ClaudeReasoningMetadata(
     val signature: String? = null,
     val redactedData: String? = null,
+    val claudeReplay: ClaudeReplayEvidence? = null,
 ) : PartMetadata
+
+/** Evidence from the actual final Messages request and response block, never inferred from settings. */
+@Serializable
+data class ClaudeReplayEvidence(
+    val version: Int = 1,
+    val endpoint: String,
+    val model: String,
+    val prefixDigest: String,
+    val blockDigest: String,
+    val previousThinkingDigest: String? = null,
+)
+
+@Serializable
+data class ClaudeReplayState(val version: Int = 1, val retiredDigests: Set<String> = emptySet())
+
+@Serializable
+data class ClaudeResponseMetadata(val claudeReplayState: ClaudeReplayState) : MessageMetadata
+
+/** Original response grouping survives local Steps and prevents tool results from splitting its blocks. */
+@Serializable
+data class ClaudeResponseBlock(val responseId: String, val index: Int)
+
+@Serializable
+data class ClaudeContentBlockMetadata(val claudeBlock: ClaudeResponseBlock) : PartMetadata
 
 /**
  * OpenAI Responses API reasoning item 的元数据。id/encrypted_content 是 endpoint 产生的不透明状态，
@@ -192,6 +217,14 @@ fun mergeReasoningPartMetadata(
 ): JsonObject? {
     if (incoming == null) return existing
     if (existing == null) return incoming
+    if (existing.keys.any { it in setOf("signature", "redactedData", "claudeReplay") } ||
+        incoming.keys.any { it in setOf("signature", "redactedData", "claudeReplay") }) {
+        val merged = (existing + incoming).toMutableMap()
+        val before = (existing["signature"] as? JsonPrimitive)?.contentOrNull
+        val delta = (incoming["signature"] as? JsonPrimitive)?.contentOrNull
+        if (before != null && delta != null) merged["signature"] = JsonPrimitive(before + delta)
+        return JsonObject(merged)
+    }
     val existingDetails = existing.openRouterReasoningDetailsOrNull()
     val incomingDetails = incoming.openRouterReasoningDetailsOrNull()
     if (existingDetails.isNullOrEmpty() && incomingDetails.isNullOrEmpty()) return incoming
@@ -214,6 +247,8 @@ internal fun mergePartMetadata(
 
 private val OPAQUE_REPLAY_METADATA_KEYS = setOf(
     "signature",
+    "claudeReplay",
+    "claudeBlock",
     "redactedData",
     "reasoning_id",
     "encrypted_content",
@@ -303,6 +338,13 @@ private fun mergeOpenRouterReasoningItem(existing: JsonObject, incoming: JsonObj
 fun mergeMessageMetadata(current: JsonObject?, incoming: JsonObject?): JsonObject? {
     if (incoming == null) return current
     if (current == null) return incoming
+    val currentClaude = current["claudeReplayState"]?.let { runCatching { json.decodeFromJsonElement<ClaudeReplayState>(it) }.getOrNull() }
+    val incomingClaude = incoming["claudeReplayState"]?.let { runCatching { json.decodeFromJsonElement<ClaudeReplayState>(it) }.getOrNull() }
+    if (currentClaude?.version == 1 && incomingClaude?.version == 1) {
+        return JsonObject(current + incoming + ClaudeResponseMetadata(ClaudeReplayState(
+            retiredDigests = currentClaude.retiredDigests + incomingClaude.retiredDigests,
+        )).toMetadata())
+    }
 
     val currentResponse = runCatching {
         json.decodeFromJsonElement<OpenAIResponseMetadata>(current)
@@ -324,5 +366,19 @@ fun mergeMessageMetadata(current: JsonObject?, incoming: JsonObject?): JsonObjec
         ).toMetadata()
     } else {
         incoming
+    }
+}
+
+/** Only committed replay exclusions survive a terminal projection; opaque draft state does not. */
+internal fun completedClaudeReplayMetadata(parts: List<UIMessagePart>): JsonObject? {
+    val states = parts.filterIsInstance<UIMessagePart.Step>().mapNotNull { step ->
+        step.modelResult?.providerMetadata?.let { metadata ->
+            runCatching { json.decodeFromJsonElement<ClaudeResponseMetadata>(metadata) }.getOrNull()
+        }?.claudeReplayState?.takeIf { it.version == 1 }
+    }
+    return states.takeIf { it.isNotEmpty() }?.let {
+        ClaudeResponseMetadata(ClaudeReplayState(retiredDigests = it.flatMap { state ->
+            state.retiredDigests
+        }.toSet())).toMetadata()
     }
 }

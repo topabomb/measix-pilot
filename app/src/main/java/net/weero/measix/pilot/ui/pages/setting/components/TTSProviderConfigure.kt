@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -19,6 +20,7 @@ import net.weero.measix.pilot.ui.components.ui.SelectTextField
 import me.rerere.tts.provider.TTSProviderSetting
 import me.rerere.tts.provider.SystemTtsParameterPolicy
 import kotlin.reflect.KClass
+import kotlin.math.roundToInt
 
 @Composable
 fun TTSProviderConfigure(
@@ -39,6 +41,7 @@ fun TTSProviderConfigure(
             TTSProviderSetting.Gemini::class to stringResource(R.string.setting_tts_page_provider_gemini),
             TTSProviderSetting.SystemTTS::class to stringResource(R.string.setting_tts_page_provider_system),
             TTSProviderSetting.MiMo::class to stringResource(R.string.setting_tts_page_provider_mimo),
+            TTSProviderSetting.Volcengine::class to stringResource(R.string.setting_tts_page_provider_volcengine),
         )
 
         FormItem(
@@ -73,6 +76,7 @@ fun TTSProviderConfigure(
                             name = "MiMo TTS"
                         )
 
+                        TTSProviderSetting.Volcengine::class -> TTSProviderSetting.Volcengine(id = setting.id)
                         else -> setting
                     }
                     onValueChange(newSetting)
@@ -101,7 +105,38 @@ fun TTSProviderConfigure(
             is TTSProviderSetting.Gemini -> GeminiTTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.SystemTTS -> SystemTTSConfiguration(setting, onValueChange)
             is TTSProviderSetting.MiMo -> MiMoTTSConfiguration(setting, onValueChange)
+            is TTSProviderSetting.Volcengine -> VolcengineTTSConfiguration(setting, onValueChange)
         }
+    }
+}
+
+@Composable
+private fun VolcengineTTSConfiguration(
+    setting: TTSProviderSetting.Volcengine,
+    onValueChange: (TTSProviderSetting) -> Unit,
+) {
+    FormItem(label = { Text(stringResource(R.string.setting_tts_page_api_key)) }) {
+        OutlinedTextField(value = setting.apiKey, onValueChange = { onValueChange(setting.copy(apiKey = it)) },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    FormItem(label = { Text(stringResource(R.string.setting_tts_page_base_url)) }) {
+        OutlinedTextField(value = setting.baseUrl, onValueChange = { onValueChange(setting.copy(baseUrl = it)) },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    FormItem(label = { Text(stringResource(R.string.setting_tts_page_resource_id)) },
+        description = { Text(stringResource(R.string.setting_tts_page_volcengine_resource_description)) }) {
+        OutlinedTextField(value = setting.resourceId, onValueChange = { onValueChange(setting.copy(resourceId = it)) },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    FormItem(label = { Text(stringResource(R.string.setting_tts_page_voice)) }) {
+        OutlinedTextField(value = setting.speaker, onValueChange = { onValueChange(setting.copy(speaker = it)) },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
+    FormItem(label = { Text("${stringResource(R.string.setting_tts_page_speech_rate)}: ${setting.speechRate}") },
+        description = { Text(stringResource(R.string.setting_tts_page_volcengine_rate_description)) }) {
+        Slider(value = setting.speechRate.coerceIn(-50, 100).toFloat(),
+            onValueChange = { onValueChange(setting.copy(speechRate = it.roundToInt())) },
+            valueRange = -50f..100f, steps = 149, modifier = Modifier.fillMaxWidth())
     }
 }
 

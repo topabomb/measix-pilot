@@ -63,6 +63,14 @@ class ArtifactPayloadStore(private val context: Context) {
         text: String,
     ): StagedPayload = stageOnIo(reserved) { it.writeText(text) }
 
+    suspend fun stageFromStream(
+        reserved: ReservedPayload,
+        write: suspend (java.io.OutputStream) -> Unit,
+    ): StagedPayload = stageOnIo(reserved) { file -> file.outputStream().use { write(it) } }
+
+    fun stagedMimeType(staged: StagedPayload, displayName: String): String =
+        FileUtils.guessMimeType(stagingFile(staged.stagingToken), displayName)
+
     /** Atomically occupies a candidate; metadata and naming decisions stay in ArtifactStore. */
     suspend fun reserve(folder: String, fileName: String): ReservedPayload {
         val acquired = AtomicReference<ReservedPayload?>()
@@ -87,7 +95,7 @@ class ArtifactPayloadStore(private val context: Context) {
      * Owns the staging file until the completed descriptor is delivered back to ArtifactStore.
      * This closes the prompt-cancellation gap at the IO dispatcher return boundary.
      */
-    private suspend fun stageOnIo(reserved: ReservedPayload, writer: (File) -> Unit): StagedPayload {
+    private suspend fun stageOnIo(reserved: ReservedPayload, writer: suspend (File) -> Unit): StagedPayload {
         return try {
             withContext(Dispatchers.IO) {
                 val staging = stagingFile(reserved.stagingToken)

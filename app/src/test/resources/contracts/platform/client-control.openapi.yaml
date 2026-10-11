@@ -760,6 +760,25 @@ paths:
         description: Expected space from WorkspaceProjection; mismatch is 409. Never selects a user.
         schema:
           $ref: '#/components/schemas/AgentSpaceId'
+      - name: preview
+        in: query
+        required: false
+        description: Native video preview; requires expectedEtag. Supported video types are served inline; default downloads remain attachments.
+        schema:
+          type: string
+          enum: [video]
+      - name: expectedEtag
+        in: query
+        required: false
+        description: Strong ETag forwarded as If-Match for a fixed-version media URL; conflicting If-Match is rejected.
+        schema:
+          type: string
+          maxLength: 1024
+      - name: If-Range
+        in: header
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           description: Full content or HEAD metadata.
@@ -1079,6 +1098,25 @@ paths:
         description: Expected space from WorkspaceProjection; mismatch is 409. Never selects a user.
         schema:
           $ref: '#/components/schemas/AgentSpaceId'
+      - name: preview
+        in: query
+        required: false
+        description: Native video preview; requires expectedEtag. Supported video types are served inline; default downloads remain attachments.
+        schema:
+          type: string
+          enum: [video]
+      - name: expectedEtag
+        in: query
+        required: false
+        description: Strong ETag forwarded as If-Match for a fixed-version media URL; conflicting If-Match is rejected.
+        schema:
+          type: string
+          maxLength: 1024
+      - name: If-Range
+        in: header
+        required: false
+        schema:
+          type: string
       responses:
         '200':
           description: Full content or HEAD metadata.
@@ -1222,6 +1260,52 @@ paths:
         bytes. '
 components:
   schemas:
+    DAVResourceId:
+      type: string
+      pattern: ^dav_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    DAVAccessMode:
+      type: string
+      enum: [READ_ONLY, FULL]
+    WebDAVDefinition:
+      type: object
+      required: [resourceId, displayName, enabled, clientProtocol, authOwnership, rootPathTemplate, purpose]
+      properties:
+        resourceId:
+          $ref: '#/components/schemas/DAVResourceId'
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 160
+        enabled:
+          type: boolean
+        purpose:
+          type: string
+          enum: [WORKSPACE_FILE_EXCHANGE]
+        clientProtocol:
+          type: string
+          enum: [WEBDAV]
+        authOwnership:
+          type: string
+          enum: [ENTERPRISE_MANAGED]
+        rootPathTemplate:
+          type: string
+          pattern: '^/runtime/v1/resources/dav_[0-9a-f-]{36}/spaces/\{agentSpaceId\}/dav/$'
+    WorkspaceDAVProjection:
+      type: object
+      required: [resourceId, available, reason]
+      properties:
+        resourceId:
+          $ref: '#/components/schemas/DAVResourceId'
+        available:
+          type: boolean
+        reason:
+          type: string
+        accessMode:
+          $ref: '#/components/schemas/DAVAccessMode'
+        bindingRevision:
+          type: integer
+          format: int64
+          minimum: 1
     WorkspaceServiceId:
       type: string
       pattern: ^wss_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
@@ -1340,6 +1424,11 @@ components:
       - mcpReason
       - filesReason
       properties:
+        fileExchangeWebdavResourceId:
+          $ref: '#/components/schemas/DAVResourceId'
+          # Sole designated DAV; absent when service or published resource is disabled.
+        webdav:
+          $ref: '#/components/schemas/WorkspaceDAVProjection'
         schemaVersion:
           type: integer
           enum:
@@ -1539,10 +1628,11 @@ components:
       pattern: ^sha256:[0-9a-f]{64}$
     ResourceKind:
       type: string
-      enum: [MODEL, TTS, ASR, MCP, IMAGE_GENERATION]
+      enum: [MODEL, TTS, ASR, MCP, IMAGE_GENERATION, WEBDAV]
     UsageClientProtocol:
       type: string
       enum:
+      - WEBDAV
       - OPENAI_CHAT_COMPLETIONS
       - OPENAI_RESPONSES
       - ANTHROPIC_MESSAGES
@@ -1827,6 +1917,10 @@ components:
       type: object
       required: [requestId, resourceKind, clientProtocol, startedAt, completedAt, forwarded, requestBytes, responseBytes, durationMs, requestCompleteness, settlementState, semanticMeters]
       properties:
+        httpMethod:
+          type: string
+        statisticsOnly:
+          type: boolean
         requestId:
           $ref: '#/components/schemas/RequestId'
         interactionId:
@@ -2443,6 +2537,10 @@ components:
       - assistants
       - starters
       properties:
+        webdav:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebDAVDefinition'
         deploymentId:
           $ref: '#/components/schemas/DeploymentId'
         schemaVersion:

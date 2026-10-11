@@ -13,14 +13,34 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.serialization.SerializationException
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.MessageModelInfo
+import me.rerere.ai.ui.ClaudeResponseMetadata
+import me.rerere.ai.ui.ClaudeReplayState
+import me.rerere.ai.ui.ClaudeReasoningMetadata
+import me.rerere.ai.ui.ClaudeReplayEvidence
+import me.rerere.ai.ui.ClaudeContentBlockMetadata
+import me.rerere.ai.ui.ClaudeResponseBlock
+import me.rerere.ai.ui.StepModelResult
+import me.rerere.ai.ui.StepUsage
+import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.core.UsageCompleteness
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.service.runtime.*
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.ai.mcp.McpCatalogStore
 import net.weero.measix.pilot.data.configuration.AssistantUsagePreferences
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.UsageValue
+import net.weero.measix.pilot.data.configuration.WebDavBackupPreferences
+import net.weero.measix.pilot.data.datastore.ScopedUserPreferences
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.UserSettingsMigration
 import net.weero.measix.pilot.data.db.AppDatabase
@@ -129,6 +149,173 @@ class PersonalBackupGraphAndroidTest {
         assertTrue(room.artifactReferenceDao().existsInConversation(own.entity.id, userId, ArtifactReferenceType.CONTEXT.name))
         assertTrue(room.artifactReferenceDao().existsInConversation(managed.entity.id, enterpriseId, ArtifactReferenceType.CONTEXT.name))
         assertTrue(artifacts.collectGarbage(protectionWindowMillis = 0).isEmpty())
+        room.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
+        PendingBackupRestore.complete(context)
+    }
+
+    @Test
+    fun settingsOnlyRestoreKeepsOrphanedHistoryReachableAndMovableWithoutChangingEnterprise() = runBlocking {
+        val restoredAssistants = settings.snapshotLocal().assistants
+        val restoredAssistant = restoredAssistants.first()
+        val archive = archiveService.prepare(BackupSelection(false, false))
+        val removedAssistant = Assistant(name = "Created after backup")
+        settings.updateLocal { it.copy(assistants = listOf(removedAssistant)) }
+        val personalId = Uuid.parse(conversation(personal, "personal after backup"))
+        val enterpriseId = Uuid.parse(conversation(enterprise, "enterprise after backup"))
+        fun repository() = ConversationRepository(room.conversationDao(), room.messageNodeDao(), room.favoriteDao(),
+            room, MessageFtsManager(room), room.turnExecutionDao(), room.toolExecutionDao(), room.conversationModelContextDao(), artifacts)
+        val created = requireNotNull(repository().getConversationSnapshotById(personalId))
+        val orphan = ConversationTransition.plan(created, MoveToAssistant(removedAssistant.id), 2) as? ConversationChange.Durable
+        orphan?.let { repository().commit(it.write) }
+        val personalBefore = requireNotNull(repository().getConversationSnapshotById(personalId))
+        assertEquals(removedAssistant.id, personalBefore.header.assistantId)
+        val enterpriseBefore = requireNotNull(repository().getConversationSnapshotById(enterpriseId))
+        archiveService.stageRestore(archive, BackupSelection(false, false))
+        room.close()
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+        openOwners()
+        PendingBackupRestore.restoreSettingsIfPending(context, artifacts, catalogs, JsonInstant)
+        PendingBackupRestore.complete(context)
+        assertEquals(restoredAssistants.map { it.id }, settings.snapshotLocal().assistants.map { it.id })
+        assertFalse(settings.snapshotLocal().assistants.any { it.id == removedAssistant.id })
+        val repository = repository()
+        assertEquals(personalBefore, repository.getConversationSnapshotById(personalId))
+        assertEquals(listOf(personalId), repository.getRootConversations(personal).first().map { it.id })
+        assertEquals(listOf(enterpriseId), repository.getRootConversations(enterprise).first().map { it.id })
+        val move = ConversationTransition.plan(personalBefore, MoveToAssistant(restoredAssistant.id), 10) as ConversationChange.Durable
+        repository.commit(move.write)
+        val moved = requireNotNull(repository.getConversationSnapshotById(personalId))
+        assertEquals(restoredAssistant.id, moved.header.assistantId)
+        assertEquals(personalBefore.nodes, moved.nodes)
+        assertNull(moved.header.folderId)
+        assertEquals(enterpriseBefore, repository.getConversationSnapshotById(enterpriseId))
+        room.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
+    }
+
+    @Test
+    fun preparedLegacyWebDavRestorePreservesConnectionAndPersonalBackupPreferences() = runBlocking {
+        val personalId = conversation(personal, "archived personal")
+        val pending = prepareLegacyWebDavPending(
+            """{"url":"https://dav.example/root/","username":"legacy-user","password":" secret ","path":"/copies/","items":["FILES"]}""",
+        )
+        val originalSettings = File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes()
+        val originalDatabase = File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes()
+        val enterpriseId = conversation(enterprise, "live enterprise")
+        val enterpriseBackup = WebDavBackupPreferences("enterprise-resource", "enterprise-copies", false)
+        val before = settings.snapshotUserDocument()
+        val current = before.copy(preferences = before.preferences.copy(scopes = before.preferences.scopes +
+            ScopedUserPreferences(enterprise, webDavBackup = enterpriseBackup)))
+        preferences.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(current) }
+
+        room.close()
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+        assertArrayEquals(originalSettings, File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes())
+        assertArrayEquals(originalDatabase, File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes())
+        openOwners()
+        PendingBackupRestore.restoreSettingsIfPending(context, artifacts, catalogs, JsonInstant)
+        val restored = settings.snapshotLocal()
+        val connection = restored.webDavConnections.single()
+        assertEquals("https://dav.example/root/", connection.rootUrl)
+        assertEquals("legacy-user", connection.username)
+        assertEquals(" secret ", connection.password)
+        assertEquals(WebDavBackupPreferences(connection.id.toString(), "copies", true), restored.webDavBackup)
+        assertNull(restored.currentWebDavConnectionId)
+        assertEquals(enterpriseBackup, settings.snapshotUserDocument().preferences.scopes
+            .single { it.scope == enterprise }.webDavBackup)
+        assertEquals("archived personal", title(personalId))
+        assertEquals("live enterprise", title(enterpriseId))
+        PendingBackupRestore.complete(context)
+    }
+
+    @Test
+    fun invalidPreparedLegacyWebDavKeepsOriginalPendingAndLiveState() = runBlocking {
+        val personalId = conversation(personal, "archived personal")
+        artifact(1, personal, "upload/preserved.txt", "archived bytes")
+        val pending = prepareLegacyWebDavPending(
+            """{"url":"https://dav.example/root/","username":"legacy-user","password":"secret","path":"copies","items":["UNKNOWN"]}""",
+        )
+        val originalSettings = File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes()
+        val originalDatabase = File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes()
+        room.openHelper.writableDatabase.execSQL("UPDATE ConversationEntity SET title='live personal' WHERE id=?", arrayOf(personalId))
+        file("upload/preserved.txt").writeText("live bytes")
+        settings.updateLocal { it.copy(themeId = "kept-live-theme") }
+        val liveSettings = settings.snapshotUserDocument()
+        room.close()
+        try {
+            PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+            fail("Invalid prepared DAV settings accepted")
+        } catch (error: SerializationException) {
+            assertTrue(error.message.orEmpty().contains("UNKNOWN"))
+        }
+        assertArrayEquals(originalSettings, File(pending, BackupArchiveService.SETTINGS_ENTRY).readBytes())
+        assertArrayEquals(originalDatabase, File(pending, BackupArchiveService.DATABASE_ENTRY).readBytes())
+        assertTrue(File(pending, BackupArchiveService.PREPARED_MARKER).isFile)
+        assertEquals("archived bytes", File(pending, "upload/preserved.txt").readText())
+        assertFalse(File(pending, ".apply_started").exists())
+        assertFalse(File(pending, ".apply_complete").exists())
+        assertFalse(File(pending, ".resolved_settings.json").exists())
+        openOwners()
+        assertEquals("live personal", title(personalId))
+        assertEquals("live bytes", file("upload/preserved.txt").readText())
+        assertEquals(liveSettings, settings.snapshotUserDocument())
+    }
+
+    @Test
+    fun summaryEvidenceAndModelIdentitySurviveReopenAndPersonalRestoreWithoutReplacingEnterprise() = runBlocking {
+        val userId = Uuid.parse(conversation(personal, "original request"))
+        val enterpriseId = Uuid.parse(conversation(enterprise, "managed history"))
+        fun repository() = ConversationRepository(room.conversationDao(), room.messageNodeDao(), room.favoriteDao(),
+            room, MessageFtsManager(room), room.turnExecutionDao(), room.toolExecutionDao(), room.conversationModelContextDao(), artifacts)
+        var repository = repository()
+        val original = requireNotNull(repository.getConversationSnapshotById(userId))
+        val modelInfo = MessageModelInfo(ConfigurationReference.random(), "wire-at-generation", "Name at generation")
+        val replayState = ClaudeResponseMetadata(ClaudeReplayState(retiredDigests = setOf("retired-a", "retired-b"))).toMetadata()
+        val reasoningMetadata = JsonObject(ClaudeReasoningMetadata(signature = "saved-signature",
+            claudeReplay = ClaudeReplayEvidence(endpoint = "https://example.com/messages", model = "claude-opus-5-5",
+                prefixDigest = "prefix", blockDigest = "block", previousThinkingDigest = "previous")).toMetadata() +
+            ClaudeContentBlockMetadata(ClaudeResponseBlock("saved-response", 0)).toMetadata())
+        val response = UIMessage.assistant("saved answer").let { message ->
+            message.copy(modelId = modelInfo.id, modelInfo = modelInfo, providerMetadata = replayState, parts = listOf(
+                UIMessagePart.Step(Uuid.random(), 0, kotlin.time.Instant.fromEpochMilliseconds(1),
+                    modelResult = StepModelResult("end_turn", StepUsage(), 1, null, null, UsageCompleteness.COMPLETE, replayState),
+                    outcome = me.rerere.ai.ui.StepOutcome.Final),
+                UIMessagePart.Reasoning("", metadata = reasoningMetadata),
+            ) + message.parts)
+        }.toMessageNode()
+        val append = ConversationTransition.plan(original, ReplaceMessageTree(original.nodes + response), 2) as ConversationChange.Durable
+        repository.commit(append.write)
+        val before = requireNotNull(repository.getConversationSnapshotById(userId))
+        val locators = before.nodes.map { ContextMessageLocator(it.id, it.currentMessage.id) }
+        val checkpoint = HistorySummaryCheckpoint(covered = before.nodes.mapIndexed { index, node ->
+            HistorySummaryCoveredMessage(locators[index], historySummaryFingerprint(node.currentMessage, before.modelContextEntries, locators))
+        })
+        val summary = UIMessage.user("preserved facts").toMessageNode()
+        val origin = messageOriginEntry(summary, ConversationContextSource.HistorySummary(null, "prompt", checkpoint = checkpoint))
+        val insertion = ConversationTransition.plan(before, InsertHistorySummaryCheckpoint(before.nodes,
+            before.modelContextEntries, summary, origin, before.nodes.size), 3) as ConversationChange.Durable
+        repository.commit(insertion.write)
+        val expected = requireNotNull(repository.getConversationSnapshotById(userId))
+        room.close()
+        openOwners()
+        repository = repository()
+        assertEquals(expected, repository.getConversationSnapshotById(userId))
+        val archive = archiveService.prepare(BackupSelection(true, true))
+        val managedBefore = requireNotNull(repository.getConversationSnapshotById(enterpriseId))
+        val managedChange = ConversationTransition.plan(managedBefore, UpdateHeader(title = "new enterprise title"), 4) as ConversationChange.Durable
+        repository.commit(managedChange.write)
+        val managedExpected = requireNotNull(repository.getConversationSnapshotById(enterpriseId))
+        archiveService.stageRestore(archive, BackupSelection(true, true))
+        room.close()
+        PendingBackupRestore.applyBeforeDatabaseOpen(context, readSettings = settings::snapshotUserDocument)
+        openOwners()
+        repository = repository()
+        val restored = requireNotNull(repository.getConversationSnapshotById(userId))
+        assertEquals(expected, restored)
+        assertEquals(modelInfo, restored.nodes[1].currentMessage.modelInfo)
+        assertEquals(managedExpected, repository.getConversationSnapshotById(enterpriseId))
+        assertEquals(origin.id, selectHistorySummary(restored.currentMessages(), restored.nodes.associate {
+            it.currentMessage.id to ContextMessageLocator(it.id, it.currentMessage.id)
+        }, restored.modelContextEntries)?.entry?.id)
         room.openHelper.readableDatabase.query("PRAGMA foreign_key_check").use { assertFalse(it.moveToFirst()) }
         PendingBackupRestore.complete(context)
     }
@@ -380,6 +567,25 @@ class PersonalBackupGraphAndroidTest {
             check(!sidecar.exists() || sidecar.delete())
         }
         walImage.copyTo(File(live.path + "-wal"))
+    }
+
+    /** Emulates an already prepared archive from before DAV fields were replaced. */
+    private suspend fun prepareLegacyWebDavPending(legacy: String): File {
+        val archive = archiveService.prepare(BackupSelection(true, true))
+        val pending = PendingBackupRestore.pendingDir(context).apply { assertTrue(mkdirs()) }
+        ZipFile(archive).use { zip ->
+            zip.entries().asSequence().filter { it.name != BackupArchiveService.MANIFEST_ENTRY }.forEach { entry ->
+                val target = File(pending, entry.name).also { it.parentFile?.mkdirs() }
+                zip.getInputStream(entry).use { input -> target.outputStream().use(input::copyTo) }
+            }
+        }
+        val settingsFile = File(pending, BackupArchiveService.SETTINGS_ENTRY)
+        val oldFields = JsonInstant.parseToJsonElement(settingsFile.readText(Charsets.UTF_8)).jsonObject -
+            setOf("webDavConnections", "currentWebDavConnectionId", "webDavBackup")
+        settingsFile.writeText(JsonObject(oldFields + ("webDavConfig" to JsonInstant.parseToJsonElement(legacy))).toString(), Charsets.UTF_8)
+        File(pending, BackupArchiveService.PREPARED_MARKER).writeText("1", Charsets.UTF_8)
+        File(pending, BackupArchiveService.AGGREGATE_MARKER).writeText("1", Charsets.UTF_8)
+        return pending
     }
 
     private fun openOwners() {

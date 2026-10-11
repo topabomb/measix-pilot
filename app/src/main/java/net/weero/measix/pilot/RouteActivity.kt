@@ -102,6 +102,7 @@ import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantPromptPage
 import net.weero.measix.pilot.ui.pages.assistant.detail.AssistantRequestPage
 import net.weero.measix.pilot.ui.pages.backup.BackupPage
 import net.weero.measix.pilot.ui.pages.remoteworkspace.remoteWorkspaceEntry
+import net.weero.measix.pilot.ui.pages.webdav.webDavFileEntry
 import net.weero.measix.pilot.ui.pages.chat.ChatPage
 import net.weero.measix.pilot.ui.pages.chat.ConversationUnavailable
 import net.weero.measix.pilot.ui.pages.chat.conversationLoadFailureMessage
@@ -153,6 +154,12 @@ import androidx.compose.runtime.setValue
 private const val TAG = "RouteActivity"
 
 class RouteActivity : ComponentActivity() {
+    private var pendingImageShortcut by mutableStateOf(false)
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("pending_image_shortcut", pendingImageShortcut)
+        super.onSaveInstanceState(outState)
+    }
     private val settingsStore by inject<SettingsStore>()
     private val conversations by inject<ConversationApplicationService>()
     private val conversationQueries by inject<ConversationQueryService>()
@@ -183,6 +190,8 @@ class RouteActivity : ComponentActivity() {
         enableEdgeToEdge()
         disableNavigationBarContrast()
         super.onCreate(savedInstanceState)
+        pendingImageShortcut = savedInstanceState?.getBoolean("pending_image_shortcut")
+            ?: (intent?.action == "net.weero.measix.pilot.action.IMAGE_GENERATION")
         if (CrashHandler.hasCrashed(this)) {
             startActivity(Intent(this, SafeModeActivity::class.java))
             finish()
@@ -230,6 +239,11 @@ class RouteActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (intent.action == "net.weero.measix.pilot.action.IMAGE_GENERATION") {
+            setIntent(intent)
+            pendingImageShortcut = true
+            return
+        }
         val id = intent.getStringExtra("conversationId")?.let(Uuid::parseOrNull) ?: return
         lifecycleScope.launch {
             try {
@@ -281,6 +295,12 @@ class RouteActivity : ComponentActivity() {
         )
         val adaptiveLayoutInfo = rememberAdaptiveLayoutInfo()
         SideEffect { this@RouteActivity.navStack = backStack }
+        LaunchedEffect(recoveryState, pendingImageShortcut) {
+            if (recoveryState is ApplicationRecoveryState.Ready && pendingImageShortcut) {
+                if (backStack.lastOrNull() != Screen.ImageGen) backStack.add(Screen.ImageGen)
+                pendingImageShortcut = false
+            }
+        }
 
         ShareHandler(backStack)
 
@@ -417,6 +437,7 @@ class RouteActivity : ComponentActivity() {
                             }
 
                             remoteWorkspaceEntry()
+                            webDavFileEntry()
 
                             entry<Screen.EnterpriseUsage> {
                                 net.weero.measix.pilot.ui.pages.enterprise.EnterprisePage(openUsage = true)
@@ -490,6 +511,10 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.SettingMcp> {
                                 SettingMcpPage()
+                            }
+
+                            entry<Screen.SettingWebDav> {
+                                net.weero.measix.pilot.ui.pages.setting.SettingWebDavPage()
                             }
 
                             entry<Screen.SettingFiles> {
@@ -707,6 +732,12 @@ sealed interface Screen : NavKey {
     ) : Screen
 
     @Serializable
+    data class WebDavFiles(
+        val id: String = java.util.UUID.randomUUID().toString(),
+        @kotlinx.serialization.Transient internal val selection: net.weero.measix.pilot.data.enterprise.RealmSelection? = null,
+    ) : Screen
+
+    @Serializable
     data class Startup(val notificationId: String? = null) : Screen
     @Serializable
     data class Chat(
@@ -808,6 +839,9 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object SettingMcp : Screen
+
+    @Serializable
+    data object SettingWebDav : Screen
 
     @Serializable
     data object SettingFiles : Screen

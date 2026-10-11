@@ -24,6 +24,24 @@ import org.junit.Test
 
 class ApplicationRecoveryCoordinatorTest {
     @Test
+    fun `temporary file maintenance failure holds the gate closed and retries before backup completion`() = runTest {
+        val failure = java.io.IOException("Workspace temporary file cleanup denied")
+        var failed = true
+        var completed = false
+        val env = Env(this,
+            postRecoveryMaintenance = { if (failed) throw failure },
+            completePendingBackup = { completed = true },
+        )
+        env.coordinator.recoverNow()
+        assertEquals(failure, (env.gate.state.value as ApplicationRecoveryState.Failed).error)
+        org.junit.Assert.assertFalse(completed)
+        failed = false
+        env.coordinator.recoverNow()
+        assertEquals(ApplicationRecoveryState.Ready, env.gate.state.value)
+        assertTrue(completed)
+    }
+
+    @Test
     fun `pending backup is completed only after recovery maintenance succeeds`() = runTest {
         val events = mutableListOf<String>()
         val env = Env(

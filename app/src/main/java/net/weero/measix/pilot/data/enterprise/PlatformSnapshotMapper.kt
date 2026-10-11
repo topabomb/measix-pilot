@@ -13,6 +13,7 @@ internal object PlatformSnapshotMapper {
         val providers = snapshot.providers.unique { it.providerId }
         val models = snapshot.models.unique { it.modelId }
         val imageGenerators = snapshot.imageGenerators.orEmpty().unique { it.imageId }
+        snapshot.webdav.orEmpty().unique { it.resourceId }
         val tts = snapshot.tts.unique { it.ttsId }
         val asr = snapshot.asr.unique { it.asrId }
         val mcp = snapshot.mcp.unique { it.mcpServerId }
@@ -85,6 +86,10 @@ internal object PlatformSnapshotMapper {
             policy = EnterprisePolicy(policy.allowLocalProviders, policy.allowLocalTts, policy.allowLocalAsr,
                 policy.allowLocalMcp, policy.allowLocalAssistants),
             providers = snapshot.providers.map { EnterpriseProvider(it.providerId, it.displayName, it.clientProtocol, it.enabled) },
+            webdav = snapshot.webdav.orEmpty().map { value -> EnterpriseWebDavResource(
+                value.resourceId, value.displayName, value.enabled, value.purpose, value.clientProtocol,
+                value.authOwnership, value.rootPathTemplate,
+            ).also(EnterpriseWebDavResource::validate) },
             models = snapshot.models.map { model -> EnterpriseModel(
                 id = model.modelId, name = model.displayName, modelId = model.upstreamModelKey,
                 enabled = model.enabled, providerId = model.providerId,

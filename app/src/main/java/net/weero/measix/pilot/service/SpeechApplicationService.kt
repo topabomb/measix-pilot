@@ -530,6 +530,7 @@ internal class SpeechApplicationService(
         is TTSProviderSetting.OpenAI -> { check(current is TTSProviderSetting.OpenAI && frozen.baseUrl == current.baseUrl); frozen.copy(apiKey = current.apiKey) }
         is TTSProviderSetting.Gemini -> { check(current is TTSProviderSetting.Gemini && frozen.baseUrl == current.baseUrl); frozen.copy(apiKey = current.apiKey) }
         is TTSProviderSetting.MiMo -> { check(current is TTSProviderSetting.MiMo && frozen.baseUrl == current.baseUrl); frozen.copy(apiKey = current.apiKey) }
+        is TTSProviderSetting.Volcengine -> { check(current is TTSProviderSetting.Volcengine && frozen.baseUrl == current.baseUrl) { "speech_resource_changed" }; frozen.copy(apiKey = current.apiKey) }
         is TTSProviderSetting.SystemTTS -> { check(current is TTSProviderSetting.SystemTTS); frozen }
     }
     private fun asrCredentials(frozen: ASRProviderSetting, current: ASRProviderSetting): ASRProviderSetting = when (frozen) {

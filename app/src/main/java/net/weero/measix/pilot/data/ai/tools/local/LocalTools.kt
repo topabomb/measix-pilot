@@ -10,8 +10,6 @@ class LocalTools internal constructor(
     private val speech: net.weero.measix.pilot.service.SpeechApplicationService,
     private val imageGenerationToolFactory: ImageGenerationToolFactory,
 ) {
-    val javascriptTool by lazy { buildJavascriptTool() }
-
     val timeTool by lazy { buildTimeInfoTool() }
 
     val clipboardTool by lazy { buildClipboardTool(context) }
@@ -28,9 +26,7 @@ class LocalTools internal constructor(
         buildContext: AssistantToolBuildContext? = null,
     ): List<Tool> {
         val tools = mutableListOf<Tool>()
-        if (options.contains(LocalToolOption.JavascriptEngine)) {
-            tools.add(javascriptTool)
-        }
+        if (options.contains(LocalToolOption.ChartDisplay)) tools.add(buildChartDisplayTool())
         if (options.contains(LocalToolOption.TimeInfo)) {
             tools.add(timeTool)
         }

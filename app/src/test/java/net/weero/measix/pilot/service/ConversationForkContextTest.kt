@@ -49,7 +49,8 @@ class ConversationForkContextTest {
             if (failCreate) message.copy(parts = message.parts + me.rerere.ai.ui.UIMessagePart.Image(android.net.Uri.fromFile(sourceFile).toString()))
             else message
         }
-        val owner = UIMessage.assistant("answer")
+        val modelInfo = me.rerere.ai.ui.MessageModelInfo(ConfigurationReference.random(), "wire-model", "Original model")
+        val owner = UIMessage.assistant("answer").copy(modelId = modelInfo.id, modelInfo = modelInfo)
         val futureAnchor = UIMessage.user("future")
         val futureOwner = UIMessage.assistant("future answer")
         val anchorNode = MessageNode.of(anchor)
@@ -170,6 +171,8 @@ class ConversationForkContextTest {
 
             val fork = created.captured
             assertEquals("Source(2)", fork.header.title)
+            assertEquals(modelInfo, fork.nodes[1].currentMessage.modelInfo)
+            assertEquals(modelInfo.id, fork.nodes[1].currentMessage.modelId)
             assertEquals(folderId, fork.header.folderId)
             assertEquals("src/main", fork.header.workspaceCwd)
             assertEquals(1, fork.modelContextEntries.size)

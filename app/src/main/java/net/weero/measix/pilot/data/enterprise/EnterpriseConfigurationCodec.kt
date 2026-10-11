@@ -45,9 +45,9 @@ internal object EnterpriseConfigurationCodec {
         }
         val ids = config.models.map { it.id } + config.imageGenerators.map { it.id } + config.tts.map { it.id } + config.asr.map { it.id } +
             config.mcpServers.map { it.id } + config.gateways.map { it.id } + config.assistants.map { it.id } +
-            config.memorySeeds.map { it.id } + config.starters.map { it.id }
+            config.memorySeeds.map { it.id } + config.starters.map { it.id } + config.webdav.map { it.id }
         val expectedCount = config.models.size + config.imageGenerators.size + config.tts.size + config.asr.size + config.mcpServers.size +
-            config.gateways.size + config.assistants.size + config.memorySeeds.size + config.starters.size
+            config.gateways.size + config.assistants.size + config.memorySeeds.size + config.starters.size + config.webdav.size
         check(ids.size == expectedCount && ids.distinct().size == ids.size, "duplicate_enterprise_resource_id")
         ids.forEach { id ->
             try { identity.reference(id) } catch (_: IllegalArgumentException) { fail("invalid_enterprise_resource_id") }
@@ -63,6 +63,7 @@ internal object EnterpriseConfigurationCodec {
         config.imageGenerators.forEach {
             it.validate()
         }
+        config.webdav.forEach(EnterpriseWebDavResource::validate)
         config.tts.forEach(EnterpriseTtsResource::validate)
         config.asr.forEach(EnterpriseAsrResource::validate)
         (config.mcpServers.map { it.name } + config.gateways.map { it.name }).forEach {

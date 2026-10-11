@@ -33,14 +33,16 @@ internal fun FileRow(
     ), shape = if (compact) androidx.compose.ui.graphics.RectangleShape else MaterialTheme.shapes.medium,
         colors = if (compact) CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
         else CustomColors.cardColorsOnSurfaceContainer) {
-        Row(Modifier.fillMaxWidth().heightIn(min = if (compact) { if (metadata != null) 48.dp else 64.dp } else 0.dp)
+        Row(Modifier.fillMaxWidth().heightIn(min = if (compact) { if (metadata != null) 48.dp else 56.dp } else 0.dp)
             .padding(start = if (compact) 12.dp else 16.dp,
                 top = verticalPadding, bottom = verticalPadding, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically) {
             if (selecting && onSelect != null) Checkbox(selected, { onSelect() })
-            else if (thumbnail != null) thumbnail()
-            else Icon(if (directory) HugeIcons.Folder01 else HugeIcons.File02, null, Modifier.size(22.dp),
-                tint = if (directory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            else Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                if (thumbnail != null) thumbnail()
+                else Icon(if (directory) HugeIcons.Folder01 else HugeIcons.File02, null, Modifier.size(22.dp),
+                    tint = if (directory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp)) {
                 Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall,

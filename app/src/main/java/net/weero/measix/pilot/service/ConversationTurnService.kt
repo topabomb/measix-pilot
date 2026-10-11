@@ -588,6 +588,10 @@ class ConversationTurnService internal constructor(
                 check(nodeIndex >= 0) { "Message not found: $messageId" }
                 val node = snapshot.nodes[nodeIndex]
                 check(node.messages.first { it.id == messageId }.role == MessageRole.USER) { "edit-and-resend requires a USER message" }
+                check(snapshot.modelContextEntries.none { it.ownerNodeId == node.id &&
+                    it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary }) {
+                    "summary_cannot_be_sent_as_user_input"
+                }
                 val assistant = configuration.assistants[snapshot.header.assistantId] ?: error("conversation_assistant_unavailable")
                 val parts = preprocessUserInputParts(content, assistant)
                 commandCoordinator.executeOrThrow(runtime.id, EditMessageVariant(node.id,
@@ -615,6 +619,10 @@ class ConversationTurnService internal constructor(
                 check(nodeIndex >= 0) { "Message not found: ${message.id}" }
                 val original = snapshot.nodes[nodeIndex].messages.first { it.id == message.id }
                 check(original.role == message.role) { "regeneration_message_changed" }
+                check(snapshot.modelContextEntries.none { it.ownerNodeId == snapshot.nodes[nodeIndex].id &&
+                    it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary }) {
+                    "summary_cannot_be_sent_as_user_input"
+                }
                 if (original.role == MessageRole.USER || regenerateAssistantMsg) {
                     commandCoordinator.executeOrThrow(runtime.id, TruncateToNodeIndex(nodeIndexInclusive = nodeIndex))
                     subAssistantLifecycle.applyRetentionAfterTreeMutation(runtime.id)
@@ -861,6 +869,7 @@ class ConversationTurnService internal constructor(
                             runtime = runtime,
                             turnId = turnId,
                             turnFinalizer = turnFinalizer,
+                            model = requireNotNull(launchPlan).model.model,
                         )
 
                         TurnEntry.CONTINUE_USER_INTERACTION -> {
@@ -938,7 +947,7 @@ class ConversationTurnService internal constructor(
                     messages = generationMessages,
                     assistantMessageId = started.assistantMessageId,
                     providerSessionId = conversationId.toString(),
-                    inputTransformers = turnPipelineFactory.input(TurnKind.USER),
+                    inputTransformers = turnPipelineFactory.input(),
                     outputTransformers = turnPipelineFactory.output(),
                     onCheckpoint = { checkpoint ->
                         activeTurnCommitter.onCheckpoint(checkpoint)

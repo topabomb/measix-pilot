@@ -38,7 +38,7 @@ class McpProtocolDiscoveryTest {
             "annotations":{"readOnlyHint":true,"vendorHint":"preserve"},
             "_meta":{"com.example/catalog":{"version":7}},"futureField":{"kept":true}
         }""") as JsonObject
-        val second = Json.parseToJsonElement("""{"name":"invoke_tool","inputSchema":{"type":"object","additionalProperties":false}}""") as JsonObject
+        val second = Json.parseToJsonElement("""{"name":"invoke_tool","inputSchema":{"type":["object","null"],"additionalProperties":false,"anyOf":[{"required":["value"]}],"x-vendor":{"nested":true}}}""") as JsonObject
         val methods = java.util.Collections.synchronizedList(mutableListOf<String>())
         val failure = AtomicReference<Throwable?>()
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -48,6 +48,8 @@ class McpProtocolDiscoveryTest {
         val reopened = CountDownLatch(1)
         val getCount = java.util.concurrent.atomic.AtomicInteger()
         val stream = AtomicReference<OutputStream?>()
+        val structures = listOf("[1,true,\"text\",null]", "42", "true", "\"value\"", "null")
+        var callCount = 0
         var pageCount = 0
         server.executor = executor
         server.createContext("/mcp") { exchange ->
@@ -76,7 +78,7 @@ class McpProtocolDiscoveryTest {
                         val result = when (method) {
                             "initialize" -> """{"protocolVersion":"2025-11-25","serverInfo":{"name":"local","version":"1"},"capabilities":{"tools":{}}}"""
                             "tools/list" -> if (pageCount++ == 0) """{"tools":[$first],"nextCursor":"second"}""" else """{"tools":[$second]}"""
-                            "tools/call" -> """{"content":[{"type":"text","text":"done"}]}"""
+                            "tools/call" -> """{"content":[{"type":"text","text":"done"}],"structuredContent":${structures[callCount++]}}"""
                             else -> error("Unexpected method $method")
                         }
                         val envelope = """{"jsonrpc":"2.0","id":${body.getValue("id")},"result":$result}"""
@@ -140,11 +142,15 @@ class McpProtocolDiscoveryTest {
                 assertEquals(snapshot, roundTrip.validated())
                 assertEquals(managed, roundTrip.managed)
                 assertEquals(first, roundTrip.tools.first().definition)
-                val result = client.callTool(io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest(
-                    params = io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams(name = "invoke_tool")
-                ))
-                assertEquals(1, result.content.size)
-                assertEquals(listOf("initialize", "notifications/initialized", "tools/list", "tools/list", "tools/call"), methods)
+                structures.forEach { structure ->
+                    val result = client.callTool(io.modelcontextprotocol.kotlin.sdk.types.CallToolRequest(
+                        params = io.modelcontextprotocol.kotlin.sdk.types.CallToolRequestParams(name = "invoke_tool")
+                    ))
+                    assertEquals(1, result.content.size)
+                    // The SDK treats a top-level null as absent, preserving nested null values.
+                    assertEquals(if (structure == "null") null else Json.parseToJsonElement(structure), result.structuredContent)
+                }
+                assertEquals(listOf("initialize", "notifications/initialized", "tools/list", "tools/list") + List(structures.size) { "tools/call" }, methods)
                 if (mode == 2) assertEquals(2, getCount.get())
             }
             failure.get()?.let { throw it }

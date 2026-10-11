@@ -111,11 +111,11 @@ class AuxiliaryGenerationOwnershipTest {
         fixture { f ->
             val operation = launch { f.application.compress(f.page.commandTarget, "", 100, 0) }
             f.awaitStarted(operation)
-            f.onCommit = { write -> if (write is ConversationWrite.MutateTree) operation.cancel() }
+            f.onCommit = { write -> if (write is ConversationWrite.Mutate && write.mutation.insertedModelContextEntries.isNotEmpty()) operation.cancel() }
             f.reply.complete("committed summary")
             operation.join()
             assertTrue(operation.isCancelled)
-            assertEquals("committed summary", f.runtime.durable.currentMessages().single().toText())
+            assertEquals("committed summary", f.runtime.durable.currentMessages().last().toText())
             assertTrue(f.runtime.durable.header.chatSuggestions.isEmpty())
             assertFalse(f.runtime.hasAuxiliaryWork)
         }
@@ -192,7 +192,7 @@ class AuxiliaryGenerationOwnershipTest {
         }
     }
 
-    @Test fun `summary releases model resources before committing replacement history`() = runTest {
+    @Test fun `summary releases model resources before committing its checkpoint`() = runTest {
         fixture { f ->
             val initial = f.runtime.durable
             var releases = 0
@@ -345,8 +345,8 @@ class AuxiliaryGenerationOwnershipTest {
             f.reply.complete("  compressed facts  ")
             assertTrue(operation.await().isSuccess)
             val actual = f.runtime.durable
-            assertEquals(listOf(recentUser, recentAssistant), actual.nodes.drop(1))
-            val summary = actual.nodes.first()
+            assertEquals(listOf(recentUser, recentAssistant), actual.nodes.takeLast(2))
+            val summary = actual.nodes[actual.nodes.size - 3]
             assertEquals("compressed facts", summary.currentMessage.toText())
             val entry = actual.modelContextEntries.single()
             val source = entry.payload.source as ConversationContextSource.HistorySummary
@@ -361,13 +361,53 @@ class AuxiliaryGenerationOwnershipTest {
         }
     }
 
+    @Test fun `empty chunk rejects the entire summary without hiding any covered history`() = runTest {
+        fixture { f ->
+            val nodes = (0 until 258).map { UIMessage.user("request $it").toMessageNode() }
+            f.coordinator.executeOrThrow(f.runtime.id, ReplaceMessageTree(nodes))
+            val before = f.runtime.durable
+            var calls = 0
+            coEvery { f.provider.generateText(any(), any(), any()) } coAnswers {
+                val text = if (calls++ == 0) "valid first chunk" else "  "
+                MessageChunk("reply", "test", listOf(UIMessageChoice(0, null, UIMessage.assistant(text), "stop")))
+            }
+            val result = f.application.compress(f.page.commandTarget, "", 100, 0)
+            assertTrue(result.isFailure)
+            assertEquals("empty_history_summary_chunk", result.exceptionOrNull()?.message)
+            assertEquals(2, calls)
+            assertEquals(before, f.runtime.durable)
+        }
+    }
+
+    @Test fun `repeated summary sends full prior summary and only newly covered history`() = runTest {
+        fixture { f ->
+            val longSummary = "retained detail ".repeat(400) + "END-OF-FIRST-SUMMARY"
+            f.reply.complete(longSummary)
+            assertTrue(f.application.compress(f.page.commandTarget, "", 100, 0).isSuccess)
+            val first = f.runtime.durable
+            f.coordinator.executeOrThrow(f.runtime.id, AppendUserMessage(UIMessage.user("new request")))
+            var input = ""
+            coEvery { f.provider.generateText(any(), any(), any()) } coAnswers {
+                input = secondArg<List<me.rerere.ai.core.ModelRequestMessage>>().joinToString("\n") { it.toText() }
+                MessageChunk("reply", "test", listOf(UIMessageChoice(0, null, UIMessage.assistant("combined facts"), "stop")))
+            }
+            assertTrue(f.application.compress(f.page.commandTarget, "", 100, 0).isSuccess)
+            assertTrue(input.contains(longSummary))
+            assertTrue(input.contains("new request"))
+            assertEquals(first.nodes, f.runtime.durable.nodes.take(first.nodes.size))
+            val checkpoint = (f.runtime.durable.modelContextEntries.last().payload.source as ConversationContextSource.HistorySummary).checkpoint!!
+            assertEquals(first.modelContextEntries.single().id, checkpoint.previousEntryId)
+            assertEquals(2, checkpoint.covered.size)
+        }
+    }
+
     @Test fun `failed summary transaction publishes neither summary nor source and preserves diagnostic`() = runTest {
         fixture { f ->
             val initial = f.runtime.durable
             val failure = IllegalStateException("summary transaction disk failure")
             val operation = async { f.application.compress(f.page.commandTarget, "", 100, 0) }
             f.awaitStarted(operation)
-            f.onCommit = { write -> if (write is ConversationWrite.MutateTree) throw failure }
+            f.onCommit = { write -> if (write is ConversationWrite.Mutate && write.mutation.insertedModelContextEntries.isNotEmpty()) throw failure }
             f.reply.complete("uncommitted summary")
             val actual = operation.await()
             assertTrue(actual.isFailure)

@@ -16,7 +16,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
@@ -37,6 +36,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.rerere.workspace.WorkspaceStorageArea
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.provider.WorkspaceDocumentsDependencies
 import net.weero.measix.pilot.data.provider.ExportTargetDocumentsProvider
@@ -491,7 +491,35 @@ class WorkspaceExportLifecycleAndroidTest {
         }
     }
 
-    private fun showPage(source: String): DelayedPickerRegistry {
+    @Test
+    fun toolbarAndSystemBackCancelSelectionThenGoUpBeforeLeaving() = fixture { files ->
+        val commands = (files.context.applicationContext as WorkspaceDocumentsDependencies).workspaceCommands
+        runBlocking { withTimeout(15_000) { commands.writeText(files.source, "nested/child.txt", "nested file") } }
+        val backStack = mutableStateListOf<NavKey>(Screen.Workspaces, Screen.WorkspaceDetail(files.source))
+        val picker = showPage(files.source, backStack)
+        selectFile("first.txt")
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_cancel)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.workspace_export_selected, 1)).assertDoesNotExist()
+        compose.runOnIdle { assertEquals(2, backStack.size) }
+        compose.onNodeWithText("nested").performScrollTo().performClick()
+        compose.waitUntil(15_000) { observedVm.get().state.value.let { !it.loading && it.path == "nested" } }
+        selectFile("child.txt", expectFilesTabSelected = true)
+        androidx.test.espresso.Espresso.pressBack()
+        compose.onNodeWithText(compose.activity.getString(R.string.workspace_export_selected, 1)).assertDoesNotExist()
+        compose.runOnIdle { assertEquals("nested", observedVm.get().state.value.path); assertEquals(2, backStack.size) }
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.back)).performClick()
+        compose.waitUntil(15_000) { observedVm.get().state.value.let { !it.loading && it.path.isEmpty() } }
+        compose.runOnIdle { assertEquals(2, backStack.size) }
+
+        // Directory actions remain available through the compact toolbar menu.
+        compose.onNodeWithTag("workspace-directory-actions").performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.workspace_detail_import_file)).performClick()
+        assertEquals(Intent.ACTION_OPEN_DOCUMENT, picker.launches.single().second.action)
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Workspaces), backStack.toList()) }
+    }
+
+    private fun showPage(source: String, backStack: MutableList<NavKey> = mutableStateListOf()): DelayedPickerRegistry {
         lateinit var registry: DelayedPickerRegistry
         observedVm.set(null)
         compose.activityRule.scenario.onActivity { activity ->
@@ -510,7 +538,7 @@ class WorkspaceExportLifecycleAndroidTest {
                         LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(),
                         LocalSettings provides Settings.dummy(),
                         LocalDarkMode provides false,
-                        LocalNavController provides Navigator(remember { mutableStateListOf<NavKey>() }),
+                        LocalNavController provides Navigator(backStack),
                         LocalToaster provides rememberToasterState(),
                     ) {
                         val vm: WorkspaceDetailVM = koinViewModel(parameters = { parametersOf(source) })

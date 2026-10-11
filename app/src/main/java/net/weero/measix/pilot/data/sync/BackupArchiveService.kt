@@ -155,7 +155,12 @@ class BackupArchiveService(
         }
     }
 
-    suspend fun stageRestore(archive: File, selection: BackupSelection) {
+    suspend fun stageRestore(archive: File, selection: BackupSelection) =
+        stageRestore(archive, selection) { publish -> publish() }
+
+    /** Remote sources recheck their captured authority at the atomic publication boundary. */
+    internal suspend fun stageRestore(archive: File, selection: BackupSelection,
+        publication: suspend (suspend () -> Unit) -> Unit) {
         withContext(Dispatchers.IO) {
             if (!restoreMutex.tryLock()) throw BackupRestoreInProgressException()
             try {
@@ -226,9 +231,12 @@ class BackupArchiveService(
                         }
                         prepareMcpCatalogRestore(staging, restoredSettings)
                         currentCoroutineContext().ensureActive()
-                        withContext(NonCancellable) {
-                            File(staging, PREPARED_MARKER).writeText("1", Charsets.UTF_8)
-                            check(staging.renameTo(pending)) { "Unable to atomically publish pending restore" }
+                        publication {
+                            currentCoroutineContext().ensureActive()
+                            withContext(NonCancellable) {
+                                File(staging, PREPARED_MARKER).writeText("1", Charsets.UTF_8)
+                                check(staging.renameTo(pending)) { "Unable to atomically publish pending restore" }
+                            }
                         }
                     } catch (error: Throwable) {
                         staging.deleteRecursively()

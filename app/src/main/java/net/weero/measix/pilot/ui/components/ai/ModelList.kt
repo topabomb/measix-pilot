@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.ui.components.ai
 
 import android.util.Log
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -446,12 +447,12 @@ private fun ColumnScope.ModelList(
     }
     val favoriteModelIds by favoriteFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     val favoriteModels = catalog.selectableFavorites(favoriteModelIds, modelType)
+    val collapsedFlow = remember(catalog.selection) { configurationQueries.observeCollapsedModelGroups(catalog.selection) }
+    val collapsedRead by collapsedFlow.collectAsStateWithLifecycle(initialValue = null)
+    val loadedCollapsedGroups = collapsedRead?.getOrNull()
+    val collapsedGroups = loadedCollapsedGroups.orEmpty()
 
     var searchKeywords by remember { mutableStateOf("") }
-
-    val typeFilteredModelsByProvider = remember(providers, modelType) {
-        providers.associate { provider -> provider.id to provider.models }
-    }
 
     val searchFilteredModelsByProvider = remember(providers, modelType, searchKeywords) {
         providers.associate { provider ->
@@ -478,76 +479,38 @@ private fun ColumnScope.ModelList(
     val leadingUnresolvedCount = if (unavailableSelection != null) 1 else 0
     val leadingItemCount = leadingDefaultCount + leadingUnresolvedCount
 
-    // 计算当前选中模型的位置
-    val selectedModelPosition = remember(
-        currentModel,
-        favoriteModels,
-        providers,
-        typeFilteredModelsByProvider,
-        leadingItemCount,
-    ) {
-        if (currentModel == null) return@remember 0
-
-        var position = leadingItemCount
-
-        // 跳过无providers提示
-        if (providers.isEmpty()) {
-            position += 1
-        }
-
-        // 检查是否在收藏列表中
-        val favoriteIndex = favoriteModels.indexOfFirst { it.reference == currentModel }
-        if (favoriteIndex >= 0) {
-            if (favoriteModels.isNotEmpty()) {
-                position += 1 // favorite header
-            }
-            position += favoriteIndex
-            return@remember position
-        }
-
-        // 跳过收藏列表
-        if (favoriteModels.isNotEmpty()) {
-            position += 1 // favorite header
-            position += favoriteModels.size
-        }
-
-        // 在providers中查找
-        for (provider in providers) {
-            position += 1 // provider header
-            val models = typeFilteredModelsByProvider[provider.id].orEmpty()
-            val modelIndex = models.indexOfFirst { it.model.id == currentModel }
-            if (modelIndex >= 0) {
-                position += modelIndex
-                return@remember position
-            }
-            position += models.size
-        }
-
-        0
+    val visibleModelsByProvider = searchFilteredModelsByProvider.mapValues { (id, models) ->
+        if (searchKeywords.isBlank() && id in collapsedGroups) emptyList() else models
     }
-
-    val lazyListState = rememberLazyListState(
-        initialFirstVisibleItemIndex = selectedModelPosition
-    )
-    val providerPositions = remember(displayedProviders, displayedFavorites, searchFilteredModelsByProvider, leadingItemCount) {
-        var currentIndex = leadingItemCount
-        if (displayedProviders.isEmpty()) {
-            currentIndex = 1 // no providers item
+    val providerPositions = buildMap {
+        var position = leadingItemCount + if (displayedFavorites.isNotEmpty()) 1 + displayedFavorites.size else 0
+        displayedProviders.forEach { provider ->
+            put(provider.id, position)
+            position += 1 + visibleModelsByProvider[provider.id].orEmpty().size
         }
-        if (displayedFavorites.isNotEmpty()) {
-            currentIndex += 1 // favorite header
-            currentIndex += displayedFavorites.size // favorite models
+    }
+    val selectedModelPosition = run {
+        val favoriteIndex = displayedFavorites.indexOfFirst { it.reference == currentModel }
+        if (favoriteIndex >= 0) leadingItemCount + 1 + favoriteIndex
+        else displayedProviders.firstOrNull { group -> group.models.any { it.model.id == currentModel } }?.let { group ->
+            val header = providerPositions.getValue(group.id)
+            val index = visibleModelsByProvider[group.id].orEmpty().indexOfFirst { it.model.id == currentModel }
+            if (index >= 0) header + 1 + index else header
+        } ?: 0
+    }
+    val lazyListState = rememberLazyListState(initialFirstVisibleItemIndex = selectedModelPosition)
+    var initialPositionApplied by remember(catalog.selection, modelType) { mutableStateOf(false) }
+    LaunchedEffect(loadedCollapsedGroups, selectedModelPosition) {
+        if (loadedCollapsedGroups != null && !initialPositionApplied) {
+            lazyListState.scrollToItem(selectedModelPosition)
+            initialPositionApplied = true
         }
-
-        displayedProviders.map { provider ->
-            val position = currentIndex
-            currentIndex += 1 // provider header
-            currentIndex += searchFilteredModelsByProvider[provider.id].orEmpty().size
-            provider.id to position
-        }.toMap()
     }
 
     commandError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    collapsedRead?.exceptionOrNull()?.let {
+        net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it.userVisibleDiagnostic())
+    }
     Surface(
         shape = RoundedCornerShape(50),
         modifier = Modifier
@@ -690,11 +653,26 @@ private fun ColumnScope.ModelList(
             item(key = "header:${providerSetting.id}") {
                 Row(
                     modifier = Modifier
-                        .padding(bottom = 4.dp, top = 8.dp),
+                        .fillMaxWidth()
+                        .clickable(enabled = searchKeywords.isBlank() && loadedCollapsedGroups != null, role = Role.Button) {
+                            coroutineScope.launch {
+                                command { configurationCommands.setModelGroupCollapsed(catalog.selection,
+                                    providerSetting.id, providerSetting.id !in collapsedGroups) }
+                            }
+                        }
+                        .padding(vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    val collapsed = searchKeywords.isBlank() && providerSetting.id in collapsedGroups
+                    Icon(if (collapsed) HugeIcons.ArrowRight01 else HugeIcons.ArrowDown01,
+                        contentDescription = stringResource(if (collapsed) R.string.code_block_expand else R.string.code_block_collapse),
+                        modifier = Modifier.size(18.dp))
                     Text(
                         text = providerSetting.name,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -702,7 +680,7 @@ private fun ColumnScope.ModelList(
             }
 
             items(
-                items = searchFilteredModelsByProvider[providerSetting.id].orEmpty(),
+                items = visibleModelsByProvider[providerSetting.id].orEmpty(),
                 key = { providerSetting.id + ":" + it.model.id.toString() }
             ) { model ->
                 val favorite = model.model.id in favoriteModelIds
@@ -745,7 +723,7 @@ private fun ColumnScope.ModelList(
 
     // 供应商Badge行
     val providerBadgeListState = rememberLazyListState()
-    LaunchedEffect(lazyListState) {
+    LaunchedEffect(lazyListState, providerPositions) {
         // 当LazyColumn滚动时，LazyRow也跟随滚动
         @OptIn(kotlinx.coroutines.FlowPreview::class)
         snapshotFlow { lazyListState.firstVisibleItemIndex }
@@ -754,7 +732,7 @@ private fun ColumnScope.ModelList(
             .collect { index ->
                 if (index > 0) {
                     val currentProvider = providerPositions.entries.findLast {
-                        index > it.value
+                        index >= it.value
                     }
                     val index = displayedProviders.indexOfFirst { it.id == currentProvider?.key }
                     if (index >= 0) {

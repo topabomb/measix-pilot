@@ -148,6 +148,28 @@ class McpApplicationServiceTest {
         assertEquals(receipt, service.restart(server.id))
     }
 
+    @Test fun `editing invalid legacy endpoints clears credentials and permits repair`() = runTest {
+        for (oldUrl in listOf("", "invalid", "https://example.test/#fragment")) {
+            for (oauth in listOf(null, McpOAuthState(enabled = true, accessToken = "old"))) {
+                val existing = remote(name = "Legacy", url = oldUrl, oauth = oauth)
+                local = Settings(mcpServers = listOf(existing))
+                effective.value = local
+                service.upsert(existing.copy(url = "https://example.test/"))
+                assertEquals("https://example.test/", (local.mcpServers.single() as McpServerConfig.StreamableHTTPServer).url)
+                assertEquals(null, local.mcpServers.single().commonOptions.oauth)
+            }
+        }
+    }
+
+    @Test fun `root slash equivalent editor URL preserves existing authorization audience`() = runTest {
+        val oauth = McpOAuthState(enabled = true, accessToken = "old", authorizedResource = "https://example.test/")
+        val existing = remote(name = "Legacy", url = "https://example.test/", oauth = oauth)
+        local = Settings(mcpServers = listOf(existing))
+        effective.value = local
+        service.upsert(existing.copy(url = "https://example.test"))
+        assertEquals(oauth, local.mcpServers.single().commonOptions.oauth)
+    }
+
     private fun remote(
         id: ConfigurationReference = ConfigurationReference.random(),
         name: String,

@@ -25,6 +25,70 @@ import java.io.File
 import java.io.IOException
 
 class DocumentAsPromptTransformerTest {
+    @Test
+    fun `downloaded files remain references without automatic document body reads`() = runTest {
+        val reads = mockk<ArtifactReadLease>()
+        val text = document()
+        val binary = UIMessagePart.Document(url = "file:///managed/archive.zip", fileName = "archive.zip", mime = "application/zip")
+        val tool = UIMessagePart.Tool(localCallId = kotlin.uuid.Uuid.random(), stepId = kotlin.uuid.Uuid.random(),
+            providerCallId = "download", toolName = "webdav_download", input = "{}", output = listOf(text, binary))
+        val original = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
+        val result = DocumentAsPromptTransformer().transform(contextFor(reads), listOf(original)).single()
+        assertEquals(original, result)
+        verify(exactly = 0) { reads.resolveUri(any()) }
+        verify(exactly = 0) { reads.file(any()) }
+    }
+
+    @Test
+    fun `missing downloaded file drops document without changing successful execution fact`() {
+        val rewriter = net.weero.measix.pilot.data.files.ToolArtifactRewriter(File("managed"), mockk())
+        val ref = LocalArtifactRef(relativePath = "upload/file.zip", mimeType = "application/zip")
+        val reads = mockk<ArtifactReadLease> { every { resolve(ref) } returns null }
+        val output = rewriter.materializeToolOutput(reads,
+            listOf(UIMessagePart.Text("""{"status":"completed","file":{"path":"/upload/file.zip"}}"""),
+                UIMessagePart.Document(url = "file:///managed/upload/file.zip", fileName = "file.zip", mime = "application/zip")),
+            rewriter.encodeArtifactRef(null, ref))
+        assertEquals(1, output.size)
+        val value = kotlinx.serialization.json.Json.parseToJsonElement((output.single() as UIMessagePart.Text).text).toString()
+        assertTrue(value.contains("\"status\":\"completed\""))
+        assertTrue(value.contains("\"available\":false"))
+        assertTrue(value.contains("artifact_missing"))
+        assertTrue(!value.contains("/upload/"))
+    }
+
+    @Test
+    fun `shared request pipeline projects downloaded documents as references and degrades missing files`() = runTest {
+        val rewriter = net.weero.measix.pilot.data.files.ToolArtifactRewriter(File("managed"), mockk())
+        val ref = LocalArtifactRef(relativePath = "upload/doc.txt", mimeType = "text/plain")
+        val doc = UIMessagePart.Document(url = ref.fileUri(File("managed")), fileName = "doc.txt", mime = "text/plain")
+        val tool = UIMessagePart.Tool(localCallId = kotlin.uuid.Uuid.random(), stepId = kotlin.uuid.Uuid.random(),
+            providerCallId = "download", toolName = "webdav_download", input = "{}", metadata = rewriter.encodeArtifactRef(null, ref),
+            output = listOf(UIMessagePart.Text("""{"status":"completed","file":{"path":"/upload/doc.txt"}}"""), doc))
+        val factory = net.weero.measix.pilot.service.turn.TurnPipelineFactory(
+            TemplateTransformer(PebbleEngine.Builder().autoEscaping(false).build()), ToolArtifactReplayTransformer(rewriter),
+            AttachmentProjectionTransformer(), mockk(), DocumentAsPromptTransformer())
+        for (available in listOf(true, false)) {
+            val reads = mockk<ArtifactReadLease> {
+                every { resolve(ref) } returns if (available) ref else null
+                every { resolveUri(any()) } returns if (available) ref else null
+            }
+            val ctx = contextFor(reads)
+            val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))
+            val result = factory.input().fold(listOf(message)) { messages, transformer -> transformer.transform(ctx, messages) }
+            val output = (result.single().parts.single() as UIMessagePart.Tool).output
+            assertEquals(available, output.any { it is UIMessagePart.Document })
+            val text = output.filterIsInstance<UIMessagePart.Text>().joinToString { it.text }
+            if (available) {
+                assertTrue(text.contains("[Attachment path=/upload/doc.txt type=document]"))
+                assertTrue(output.filterIsInstance<UIMessagePart.Text>().any { ctx.requestOrigins.source(it) is RequestPartSource.AttachmentInput })
+            } else {
+                assertTrue(text.contains("artifact_missing"))
+                assertTrue(!text.contains("/upload/"))
+            }
+            verify(exactly = 0) { reads.file(any()) }
+        }
+    }
+
     private fun contextFor(reads: ArtifactReadLease) = TransformerContext(
         realmAccess = RealmAccess.Personal, context = mockk(), model = Model(modelId = "test", displayName = "Test"),
         assistant = resolveTurnAssistantSnapshot(Assistant()),

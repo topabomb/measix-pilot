@@ -199,6 +199,7 @@ class TurnInteractionContinuationIntegrationTest {
                     turnId = turnId,
 
                     turnFinalizer = turnFinalizer,
+                    model = model,
                 )
                 // 与 ConversationTurnService.launchRun 同一协议：START 提交后立即绑定冻结
                 // projection，审批续接才能复用同一引用。

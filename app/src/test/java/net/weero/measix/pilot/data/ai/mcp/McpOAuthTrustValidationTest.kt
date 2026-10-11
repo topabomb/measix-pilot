@@ -5,6 +5,18 @@ import org.junit.Test
 
 class McpOAuthTrustValidationTest {
     @Test
+    fun `resource normalization only removes an empty root slash and preserves old token audience`() {
+        org.junit.Assert.assertEquals("https://example.com", McpOAuthClient.canonicalResource("https://EXAMPLE.com/"))
+        org.junit.Assert.assertEquals("https://example.com/", McpOAuthClient.legacyAuthorizedResource("https://example.com"))
+        for (url in listOf("https://example.com/mcp/", "https://example.com/?q=1", "https://example.com/a%2Fb")) {
+            org.junit.Assert.assertEquals(url, McpOAuthClient.canonicalResource(url))
+        }
+        for (url in listOf("https://example.com/#fragment", "https://user:secret@example.com")) {
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { McpOAuthClient.canonicalResource(url) }
+        }
+    }
+
+    @Test
     fun `protected resource metadata is bound to the requested HTTPS resource`() {
         McpOAuthClient.validateProtectedResourceMetadata(
             expectedResource = "https://mcp.example/api",

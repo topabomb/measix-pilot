@@ -26,13 +26,13 @@ System
   → PlaceholderTransformer
   → DocumentAsPromptTransformer
   → TemplateTransformer
-  → ToolArtifactReplayTransformer（主助手）
+  → ToolArtifactReplayTransformer
   → AttachmentProjectionTransformer
   → TurnRequestAdmission / applyContextProjections
 ```
 
 `APPLICATION_CONTEXT_RULES` 与 `MODEL_RULES` 不随本 Step 是否新增状态披露而变化。
-主助手与子助手共用 `TurnPipelineFactory`，子助手管线不包含 `ToolArtifactReplayTransformer`。
+主助手与子助手共用 `TurnPipelineFactory`，工具附件均按原授权读视图重放。
 输出管线依次为 `ThinkTagTransformer`、`Base64ImageToLocalFileTransformer`、`RegexOutputTransformer`，只处理当前 open Step；
 采样提交后的工具阶段不再次转换正文。`ThinkTagTransformer` 仅在本 Step 没有 Provider 原生 Reasoning 时，
 解释首个非空 Text 开头的 `<think>`：从 Step 开始时间计时，首次闭合时固定结束时间，流结束只补未闭合时间。
@@ -240,11 +240,21 @@ create 只返回 `id`，edit/delete 返回 `success+id`；正文已在 input，�
 | `workspace_read_file`、`workspace_write_file`、`workspace_edit_file`、`workspace_shell` | 文件工具使用 Rootfs 绝对路径，shell cwd 相对 /workspace；写/编辑只返回结果及元数据，diff 仅进入 UI metadata。审批、安全路径与 uploads 副本见 [Workspace](workspace-architecture.md) |
 | `use_skill` | name 按 canonical name 精确匹配；省略 path 读 SKILL.md，工具说明要求仅使用正文 Markdown 链接给出的相对路径。返回文件原文，严格 UTF-8 和大小限制由 SkillManager 校验 |
 
-`eval_javascript` 在每次调用独立的 QuickJS runtime 执行，不提供 DOM、Node.js 或网络 fetch。
-成功输出为真实换行的 `[console]` 段及最后的 `[result]` 段，便于归档后按行回查，不再套成 JSON 字符串。
-`evaluateJavascript` 的调用期限、原生 deadline、内存/栈与输出限制覆盖执行、getter/toJSON、stringify 和 console 格式化；
-取消在实际原生执行停止后关闭 runtime。超时/结果超限提交 `javascript_timeout/javascript_output_limit`，
-不是成功文本里的错误；其他异常沿 `runtime_error` 保留诊断。具体限额以源码常量为准。
+本地 JS 执行工具已移除。`LocalToolOptionsSerializer` 在助手及按域使用偏好的列表读取边界清除退休的
+`javascript_engine` 选项，保留其他工具和显式空列表；历史工具消息仍按原结果显示，不重新执行。
+
+`webdav_upload`、`webdav_download` 在 START 捕获本域当前 WebDAV，两个工具成对启用，无单独开关或审批。
+上传参数为 `file_path`（已披露的精确 `/upload/<file>`）、`remote_path`（DAV 根内相对文件路径）和默认 false 的
+`overwrite`，自动创建远端父目录。下载只接收 `remote_path`，由 ArtifactStore 分配独立文件，不覆盖已有附件。
+两者支持任意文件类型，装配和执行都不要求本地 Workspace 或 mount。
+上传成功返回 `status=completed/remote_path/bytes/overwritten`；下载返回 `status=completed/remote_path` 及
+`file.path/name/mime_type/bytes`，附带现有 Image 或 Document part。图片复用既有多模态投影，非图片只披露附件、类型和路径，
+保留查看入口，不自动读取正文。工具结果沿原检查点提交并发布，不能只保存 JSON 路径。
+企业当前项仅按 `fileExchangeWebdavResourceId` 指定，不回退个人资源或目录第一项。
+缺省定义不发起 DAV 目标查询；投影查询暂时失败时保留诊断，本 Turn 不装配未能确定目标的 DAV 工具，普通聊天仍可继续。
+已知指定目标只读或暂不可用不隐藏任一工具，执行阶段按实时权限拒绝；取消及 Session 失效继续传播。
+只读目标的上传拒绝返回 `failed/webdav_read_only`，说明需要管理员授予写入权限；不读取本地附件或发起写入。
+上传结果无法确认时返回 `unknown/outcome_unknown`，先在文件管理器核实目标，不能盲重试。
 
 ### MCP
 

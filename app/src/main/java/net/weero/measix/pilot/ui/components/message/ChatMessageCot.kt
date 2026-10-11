@@ -90,7 +90,7 @@ fun List<UIMessagePart>.groupMessageParts(
 /** Pending tools stay interactive; [GENERATE_IMAGE_TOOL_NAME] stays on the collapsed timeline. */
 fun ThinkingStep.shouldStayVisibleWhenCollapsed(): Boolean {
     val tool = (this as? ThinkingStep.ToolStep)?.tool ?: return false
-    return tool.isPending || tool.toolName == GENERATE_IMAGE_TOOL_NAME
+    return tool.isPending || tool.toolName == GENERATE_IMAGE_TOOL_NAME || tool.toolName == "chart_display"
 }
 
 /**

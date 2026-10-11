@@ -6,6 +6,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.net.toUri
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -16,16 +17,14 @@ import java.util.concurrent.CompletableFuture
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.time.Duration
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * MCP OAuth loopback 回调接收器（RFC 8252）。
  *
  * 它只拥有一次授权所需的 loopback socket 与 callback session：
- * - 只绑定 loopback（优先 127.0.0.1，回退 [::1]），绝不监听 0.0.0.0；
+ * - 只绑定 loopback；旧 IP 合同优先 127.0.0.1，新 localhost 合同绑定全部本机解析地址；
  * - 每次授权绑定 OS 分配的 ephemeral port（port 0），redirect path 固定为 [CALLBACK_PATH]；
  * - 只有 exact path、exact state 且恰好携带 code/error 的请求才能完成 session；
  * - 无效或畸形请求只结束当前连接，listener 继续等待合法回调；
@@ -42,7 +41,12 @@ internal class McpOAuthCallbackServer {
         val error: String?,
     )
 
-    private var serverSocket: ServerSocket? = null
+    private val ownership = Any()
+    private val listeners = mutableListOf<ServerSocket>()
+    private val clients = mutableSetOf<Socket>()
+    private val workers = mutableListOf<Thread>()
+    private var started = false
+    private var closed = false
     private var redirectUriValue: String? = null
     private var expectedStateValue: String? = null
     private val pending = CompletableFuture<Callback?>()
@@ -50,94 +54,122 @@ internal class McpOAuthCallbackServer {
     val redirectUri: String
         get() = checkNotNull(redirectUriValue) { "callback server not started" }
 
-    /** 绑定 loopback 端口并派生 redirect_uri；失败抛错，不留下半开 socket。 */
-    fun start(expectedState: String) {
-        check(serverSocket == null) { "callback server already started" }
-        require(expectedState.isNotBlank()) { "OAuth callback state must not be blank" }
-        val socket = bindLoopback()
-        serverSocket = socket
-        expectedStateValue = expectedState
-        redirectUriValue = buildRedirectUri(socket)
-        acceptLoop(socket)
+    /** Every address advertised by localhost must reach the same one-shot session and ephemeral port. */
+    fun start(expectedState: String, hostPolicy: McpOAuthCallbackHost = McpOAuthCallbackHost.IP) {
+        synchronized(ownership) {
+            check(!started && !closed) { "callback server already started or closed" }
+            require(expectedState.isNotBlank()) { "OAuth callback state must not be blank" }
+            expectedStateValue = expectedState
+            try {
+                if (hostPolicy == McpOAuthCallbackHost.LOCALHOST) {
+                    val addresses = InetAddress.getAllByName("localhost").distinct()
+                    check(addresses.isNotEmpty() && addresses.all { it.isLoopbackAddress }) {
+                        "oauth_callback_localhost_not_loopback"
+                    }
+                    addresses.forEach { address ->
+                        listeners += bind(address, listeners.firstOrNull()?.localPort ?: 0)
+                    }
+                } else {
+                    var failure: IOException? = null
+                    for (address in listOf("127.0.0.1", "::1")) {
+                        try {
+                            listeners += bind(InetAddress.getByName(address), 0)
+                            break
+                        } catch (error: IOException) { failure = error }
+                    }
+                    if (listeners.isEmpty()) throw IOException("oauth_callback_loopback_bind_failed", failure)
+                }
+                val socket = listeners.first()
+                val address = requireNotNull(socket.inetAddress.hostAddress)
+                val host = if (hostPolicy == McpOAuthCallbackHost.LOCALHOST) "localhost"
+                    else if (address.contains(':')) "[$address]" else address
+                redirectUriValue = "http://$host:${socket.localPort}$CALLBACK_PATH"
+                started = true
+                listeners.forEach { listener ->
+                    workers += Thread({ acceptLoop(listener) }, "mcp-oauth-callback").apply { isDaemon = true }
+                }
+                workers.forEach(Thread::start)
+            } catch (error: Exception) {
+                listeners.forEach { socket -> try { socket.close() } catch (cleanup: IOException) { error.addSuppressed(cleanup) } }
+                closed = true
+                throw error
+            }
+        }
     }
 
-    /** 使用实际成功绑定的 loopback 地址拼 URI；IPv6 字面量按 RFC 3986 加方括号。 */
-    private fun buildRedirectUri(socket: ServerSocket): String {
-        val host = socket.inetAddress.hostAddress ?: "127.0.0.1"
-        val displayHost = if (host.contains(':')) "[$host]" else host
-        return "http://$displayHost:${socket.localPort}$CALLBACK_PATH"
-    }
-
-    /** 等待唯一合法 callback。超时返回 null；调用方取消会关闭 socket 并传播。 */
     suspend fun awaitCallback(timeout: Duration): Callback? {
-        if (serverSocket == null) return null
+        if (!synchronized(ownership) { started && !closed }) return null
         return try {
-            withTimeout(timeout.inWholeMilliseconds) { pending.awaitCancellable() }
-        } catch (_: TimeoutCancellationException) {
+            withTimeoutOrNull(timeout.inWholeMilliseconds) { pending.awaitCancellable() }
+        } finally {
+            // Socket ownership has been acquired; stop includes accepted reads and actual worker exit.
             close()
-            null
-        } catch (cancelled: CancellationException) {
-            close()
-            throw cancelled
         }
     }
 
     fun close() {
-        serverSocket?.close()
-        serverSocket = null
-        pending.complete(null)
+        val ownedWorkers = synchronized(ownership) {
+            closed = true
+            var failure: IOException? = null
+            val sockets: List<java.io.Closeable> = listeners + clients
+            sockets.forEach { socket ->
+                try { socket.close() } catch (error: IOException) {
+                    val previous = failure
+                    if (previous == null) failure = error else previous.addSuppressed(error)
+                }
+            }
+            pending.complete(null)
+            workers.toList() to failure
+        }
+        ownedWorkers.first.filter { it !== Thread.currentThread() }.forEach(Thread::join)
+        ownedWorkers.second?.let { throw it }
     }
 
     private fun acceptLoop(socket: ServerSocket) {
-        Thread {
-            try {
-                while (!socket.isClosed && !pending.isDone) {
-                    val client = try {
-                        socket.accept()
-                    } catch (_: SocketException) {
-                        break
-                    }
-                    val callback = try {
-                        processCallback(client)
-                    } catch (_: SocketTimeoutException) {
-                        client.close()
-                        null
-                    } catch (_: RequestLimitExceededException) {
-                        writeAndClose(client, 431, "Request Header Fields Too Large")
-                        null
-                    } catch (_: Throwable) {
-                        client.close()
-                        null
-                    }
-                    if (callback != null && pending.complete(callback)) {
-                        socket.close()
-                        return@Thread
-                    }
+        try {
+            while (!socket.isClosed && !pending.isDone) {
+                val client = try { socket.accept() } catch (error: SocketException) {
+                    if (socket.isClosed) break else throw error
                 }
-                pending.complete(null)
-            } catch (error: Throwable) {
-                pending.completeExceptionally(error)
+                val accepted = synchronized(ownership) {
+                    if (closed) false else { clients += client; true }
+                }
+                if (!accepted) { client.close(); break }
+                val callback = try {
+                    processCallback(client)
+                } catch (_: SocketTimeoutException) {
+                    null
+                } catch (_: RequestLimitExceededException) {
+                    writeAndClose(client, 431, "Request Header Fields Too Large")
+                    null
+                } catch (error: IOException) {
+                    if (!synchronized(ownership) { closed }) {
+                        android.util.Log.d("McpOAuthCallback", "Callback connection ended", error)
+                    }
+                    null
+                } finally {
+                    client.close()
+                    synchronized(ownership) { clients -= client }
+                }
+                if (callback != null) { pending.complete(callback); break }
             }
-        }.apply {
-            isDaemon = true
-            name = "mcp-oauth-callback"
-            start()
+        } catch (error: Exception) {
+            pending.completeExceptionally(error)
+        } finally {
+            socket.close()
         }
     }
 
-    private fun bindLoopback(): ServerSocket {
-        var lastFailure: Throwable? = null
-        for (address in listOf("127.0.0.1", "::1")) {
-            try {
-                return ServerSocket().apply {
-                    reuseAddress = false
-                    bind(InetSocketAddress(InetAddress.getByName(address), 0))
-                }
-            } catch (error: Throwable) {
-                lastFailure = error
-            }
+    private fun bind(address: InetAddress, port: Int): ServerSocket {
+        val socket = ServerSocket()
+        try {
+            socket.reuseAddress = false
+            socket.bind(InetSocketAddress(address, port))
+            return socket
+        } catch (error: Exception) {
+            try { socket.close() } catch (cleanup: IOException) { error.addSuppressed(cleanup) }
+            throw error
         }
-        throw IllegalStateException("无法在 loopback 上启动 OAuth 回调服务", lastFailure)
     }
 
     /** 返回 null 表示当前连接无效，但不能消费整个授权 session。 */

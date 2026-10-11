@@ -1,8 +1,6 @@
 package net.weero.measix.pilot.ui.pages.backup.tabs
 
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.View
-import me.rerere.hugeicons.stroke.ViewOff
 import me.rerere.hugeicons.stroke.Upload02
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,20 +18,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
-import androidx.compose.material3.MultiChoiceSegmentedButtonRow
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.SheetValue
@@ -47,16 +45,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.datastore.WebDavConfig
-import net.weero.measix.pilot.data.sync.webdav.WebDavBackupItem
+import net.weero.measix.pilot.service.webdav.WebDavBackupItem
+import net.weero.measix.pilot.service.WebDavConfigurationReadState
+import net.weero.measix.pilot.data.configuration.WebDavBackupPreferences
+import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.Screen
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.LaunchedEffect
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.pages.backup.BackupVM
@@ -77,7 +80,18 @@ fun WebDavTab(
     onShowRestartDialog: () -> Unit
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val webDavConfig = settings.webDavConfig
+    val configuration by vm.webDavConfiguration.collectAsStateWithLifecycle()
+    val available = configuration as? WebDavConfigurationReadState.Available
+    val ready by vm.webDavReady.collectAsStateWithLifecycle()
+    val targetIdentity by vm.webDavTargetIdentity.collectAsStateWithLifecycle()
+    val issue by vm.webDavIssue.collectAsStateWithLifecycle()
+    val navigation = LocalNavController.current
+    var draft by remember(available?.selection, available?.backup) {
+        mutableStateOf(available?.backup ?: WebDavBackupPreferences())
+    }
+    var saving by remember { mutableStateOf(false) }
+    var errorDetail by remember(available?.selection, available?.backup) { mutableStateOf<String?>(null) }
+    val dirty = available != null && draft != available.backup
     val backupItemsState by vm.webDavBackupItems.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
@@ -96,10 +110,14 @@ fun WebDavTab(
     val restoreInProgress = stringResource(R.string.backup_page_restore_in_progress)
     val restorePendingRestart = stringResource(R.string.backup_page_restore_pending_restart)
 
-    fun updateWebDavConfig(transform: (WebDavConfig) -> WebDavConfig) {
-        vm.updateSettings { current ->
-            current.copy(webDavConfig = transform(current.webDavConfig))
-        }
+    LaunchedEffect(targetIdentity) {
+        showBackupFiles = false
+        pendingWebDavRestore = null
+    }
+
+    fun report(error: Exception) {
+        errorDetail = error.stackTraceToString()
+        android.util.Log.e("WebDavBackup", "Backup operation failed", error)
     }
 
     val lastBackupText = if (settings.backupReminderConfig.lastBackupTime == 0L) {
@@ -126,180 +144,166 @@ fun WebDavTab(
             modifier = Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            BackupStatusCard(
-                title = stringResource(R.string.backup_page_webdav_backup),
-                lastBackupText = lastBackupText,
-                fileSummaryText = backupFileSummary
-            )
-
-            CardGroup {
-                item(
-                    headlineContent = { Text(stringResource(R.string.backup_page_webdav_server_address)) },
-                    supportingContent = {
-                        OutlinedTextField(
-                            modifier = Modifier.fillMaxWidth(),
-                            value = webDavConfig.url,
-                            onValueChange = { value -> updateWebDavConfig { it.copy(url = value.trim()) } },
-                            placeholder = { Text("https://example.com/dav") },
-                            singleLine = true
-                        )
-                    },
-                )
-                item(
-                    headlineContent = { Text(stringResource(R.string.backup_page_username)) },
-                    supportingContent = {
-                        OutlinedTextField(
-                            modifier = Modifier.fillMaxWidth(),
-                            value = webDavConfig.username,
-                            onValueChange = {
-                                updateWebDavConfig { current -> current.copy(username = it.trim()) }
-                            },
-                            singleLine = true
-                        )
-                    },
-                )
-                item(
-                    headlineContent = { Text(stringResource(R.string.backup_page_password)) },
-                    supportingContent = {
-                        var passwordVisible by remember { mutableStateOf(false) }
-                        OutlinedTextField(
-                            modifier = Modifier.fillMaxWidth(),
-                            value = webDavConfig.password,
-                            onValueChange = { value -> updateWebDavConfig { it.copy(password = value.trim()) } },
-                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            trailingIcon = {
-                                val image = if (passwordVisible) {
-                                    HugeIcons.ViewOff
-                                } else {
-                                    HugeIcons.View
-                                }
-                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                    Icon(imageVector = image, contentDescription = null)
-                                }
-                            },
-                            singleLine = true
-                        )
-                    },
-                )
-                item(
-                    headlineContent = { Text(stringResource(R.string.backup_page_path)) },
-                    supportingContent = {
-                        OutlinedTextField(
-                            modifier = Modifier.fillMaxWidth(),
-                            value = webDavConfig.path,
-                            onValueChange = { value -> updateWebDavConfig { it.copy(path = value.trim()) } },
-                            singleLine = true
-                        )
-                    },
-                )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(lastBackupText, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(backupFileSummary, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-
-            CardGroup {
-                item(
-                    headlineContent = { Text(stringResource(R.string.backup_page_backup_items)) },
-                    supportingContent = {
-                    MultiChoiceSegmentedButtonRow(
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                            SegmentedButton(
-                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 1),
-                                onCheckedChange = { checked ->
-                                    updateWebDavConfig { current ->
-                                        current.copy(
-                                            items = if (checked) WebDavConfig.BackupItem.entries else emptyList()
-                                        )
-                                    }
-                                },
-                                checked = webDavConfig.items.isNotEmpty()
-                            ) {
-                                Text(stringResource(R.string.backup_page_durable_aggregate))
-                            }
+            OutlinedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.webdav_backup_resource), Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall)
+                        TextButton(onClick = { navigation.navigate(Screen.SettingWebDav) }) {
+                            Text(stringResource(R.string.webdav_settings_title))
+                        }
                     }
-                    },
-                )
+                    var expanded by remember { mutableStateOf(false) }
+                    Box {
+                        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth(),
+                            enabled = available != null && !saving && !isBackingUp) {
+                            Text(available?.resources?.singleOrNull { it.id.toString() == draft.resourceId }?.name
+                                ?: stringResource(R.string.webdav_backup_select))
+                        }
+                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            DropdownMenuItem(text = { Text(stringResource(R.string.webdav_backup_select)) }, onClick = {
+                                draft = draft.copy(resourceId = null); expanded = false
+                            })
+                            available?.resources?.forEach { connection ->
+                                DropdownMenuItem(enabled = connection.available, text = { Text(connection.name) }, onClick = {
+                                    draft = draft.copy(resourceId = connection.id.toString()); expanded = false
+                                })
+                            }
+                        }
+                    }
+                    Text(stringResource(R.string.webdav_backup_resource_hint), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(
+                        modifier = Modifier.fillMaxWidth(), value = draft.path,
+                        label = { Text(stringResource(R.string.backup_page_path)) },
+                        onValueChange = { draft = draft.copy(path = it) },
+                        enabled = available != null && !saving && !isBackingUp, singleLine = true,
+                    )
+                    Row(Modifier.fillMaxWidth().toggleable(value = draft.includeDurableAggregate,
+                        enabled = available != null && !saving && !isBackingUp, role = Role.Checkbox,
+                        onValueChange = { draft = draft.copy(includeDurableAggregate = it) }),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = draft.includeDurableAggregate, onCheckedChange = null,
+                            enabled = available != null && !saving && !isBackingUp, modifier = Modifier.padding(12.dp))
+                        Text(stringResource(R.string.backup_page_durable_aggregate), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
+            (configuration as? WebDavConfigurationReadState.Unavailable)?.let { DiagnosticDisclosure(it.detail) }
+            issue?.let {
+                DiagnosticDisclosure(it.stackTraceToString())
+                TextButton(onClick = vm::retryWebDavConnection, enabled = !saving && !isBackingUp) {
+                    Text(stringResource(R.string.webdav_retry_connection))
+                }
+            }
+            errorDetail?.let { DiagnosticDisclosure(it) }
+
         }
 
         HorizontalDivider()
         FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
         ) {
-            OutlinedButton(
-                onClick = {
+            if (dirty) {
+                Button(onClick = {
+                    val captured = available
+                    val proposed = draft
                     scope.launch {
-                        try {
-                            vm.testWebDav()
-                            toaster.show(
-                                connectionSuccess,
-                                type = ToastType.Success
-                            )
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (error: Exception) {
-                            toaster.show(
-                                connectionFailedFmt.format(error.message ?: ""),
-                                type = ToastType.Error
-                            )
+                        saving = true
+                        try { vm.saveWebDavPreferences(captured, proposed) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (error: Exception) { report(error) }
+                        finally { saving = false }
+                    }
+                }, enabled = !saving && !isBackingUp) { Text(stringResource(R.string.webdav_save)) }
+            } else {
+                OutlinedButton(
+                    enabled = ready && !dirty && !saving && !isBackingUp,
+                    onClick = {
+                        scope.launch {
+                            try {
+                                vm.testWebDav()
+                                toaster.show(
+                                    connectionSuccess,
+                                    type = ToastType.Success
+                                )
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                report(error)
+                                toaster.show(
+                                    connectionFailedFmt.format(error.message ?: ""),
+                                    type = ToastType.Error
+                                )
+                            }
                         }
                     }
+                ) {
+                    Text(stringResource(R.string.setting_provider_page_test))
                 }
-            ) {
-                Text(stringResource(R.string.backup_page_test_connection))
-            }
-            OutlinedButton(
-                onClick = {
-                    vm.loadBackupFileItems()
-                    showBackupFiles = true
-                }
-            ) {
-                Text(stringResource(R.string.backup_page_restore))
-            }
-            Button(
-                onClick = {
-                    scope.launch {
-                        isBackingUp = true
-                        try {
-                            vm.backup()
-                            vm.loadBackupFileItems()
-                            toaster.show(
-                                backupSuccess,
-                                type = ToastType.Success
-                            )
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (error: Exception) {
-                            toaster.show(
-                                error.message ?: unknownError,
-                                type = ToastType.Error
-                            )
-                        } finally {
-                            isBackingUp = false
-                        }
+                OutlinedButton(
+                    enabled = ready && !dirty && !saving && !isBackingUp,
+                    onClick = {
+                        vm.loadBackupFileItems()
+                        showBackupFiles = true
                     }
-                },
-                enabled = !isBackingUp
-            ) {
-                if (isBackingUp) {
-                    CircularWavyProgressIndicator(
-                        modifier = Modifier.size(18.dp)
-                    )
-                } else {
-                    Icon(HugeIcons.Upload02, contentDescription = null, modifier = Modifier.size(18.dp))
+                ) {
+                    Text(stringResource(R.string.backup_page_restore))
                 }
-                Spacer(Modifier.width(8.dp))
-                Text(
+                Button(
+                    onClick = {
+                        scope.launch {
+                            isBackingUp = true
+                            try {
+                                vm.backup()
+                                vm.loadBackupFileItems()
+                                toaster.show(
+                                    backupSuccess,
+                                    type = ToastType.Success
+                                )
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (error: Exception) {
+                                report(error)
+                                toaster.show(
+                                    error.message ?: unknownError,
+                                    type = ToastType.Error
+                                )
+                            } finally {
+                                isBackingUp = false
+                            }
+                        }
+                    },
+                    enabled = ready && !dirty && !saving && !isBackingUp
+                ) {
                     if (isBackingUp) {
-                        stringResource(R.string.backup_page_backing_up)
+                        CircularWavyProgressIndicator(
+                            modifier = Modifier.size(18.dp)
+                        )
                     } else {
-                        stringResource(R.string.backup_page_backup_now)
+                        Icon(HugeIcons.Upload02, contentDescription = null, modifier = Modifier.size(18.dp))
                     }
-                )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (isBackingUp) {
+                            stringResource(R.string.backup_page_backing_up)
+                        } else {
+                            stringResource(R.string.backup_page_backup_now)
+                        }
+                    )
+                }
             }
         }
     }
@@ -345,6 +349,7 @@ fun WebDavTab(
                                         } catch (cancelled: CancellationException) {
                                             throw cancelled
                                         } catch (error: Exception) {
+                                            report(error)
                                             toaster.show(
                                                 deleteFailedFmt.format(error.message ?: ""),
                                                 type = ToastType.Error
@@ -364,10 +369,8 @@ fun WebDavTab(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = stringResource(R.string.backup_page_loading_failed, it.message ?: ""),
-                            color = MaterialTheme.colorScheme.error
-                        )
+                        DiagnosticDisclosure(it.stackTraceToString(),
+                            label = stringResource(R.string.backup_page_loading_failed, it.message ?: ""))
                     }
                 }.onLoading {
                     Box(
@@ -400,6 +403,7 @@ fun WebDavTab(
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (error: Exception) {
+                            report(error)
                             toaster.show(
                                 when (error) {
                                     is BackupRestoreOperationInProgressException -> restoreInProgress
@@ -416,40 +420,6 @@ fun WebDavTab(
             },
             onDismiss = {
                 pendingWebDavRestore = null
-            },
-        )
-    }
-}
-
-@Composable
-private fun BackupStatusCard(
-    title: String,
-    lastBackupText: String,
-    fileSummaryText: String,
-) {
-    CardGroup {
-        item(
-            headlineContent = {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium
-                )
-            },
-            supportingContent = {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text(
-                        text = lastBackupText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = fileSummaryText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
             },
         )
     }

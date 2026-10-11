@@ -23,7 +23,6 @@ import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.ToolRuntimeState
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.buildAskUserTool
-import net.weero.measix.pilot.data.ai.tools.local.buildJavascriptTool
 import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.service.runtime.resolveToolLivePhase
 import org.junit.Assert.assertEquals
@@ -104,16 +103,6 @@ class ToolCallRuntimeTest {
     /** The batch as it stands after replacements (keyed by stable localCallId) are applied. */
     private fun List<UIMessagePart.Tool>.after(preparation: ToolBatchPreparation): List<UIMessagePart.Tool> =
         map { tool -> preparation.replacements[tool.localCallId] ?: tool }
-
-    @Test
-    fun `native javascript output limit commits a failed replay result`() = kotlinx.coroutines.runBlocking {
-        val input = buildJsonObject { put("code", "'x'.repeat(2*1024*1024)") }.toString()
-        val outcome = runtime.execute(prepared(buildJavascriptTool(), input), hooks())
-        assertEquals(ToolResultStatus.FAILED, outcome.resultStatus)
-        val output = Json.parseToJsonElement((outcome.output.single() as UIMessagePart.Text).text).jsonObject
-        assertEquals("failed", output.getValue("status").jsonPrimitive.content)
-        assertEquals("javascript_output_limit", output.getValue("reason").jsonPrimitive.content)
-    }
 
     @Test
     fun `unexpected preparation error becomes a bounded failed tool result`() {
@@ -393,6 +382,18 @@ class ToolCallRuntimeTest {
         assertEquals(expected, outcome.output)
         assertEquals(ToolOutputPolicy.ARCHIVABLE_TEXT, outcome.outputPolicy)
         assertEquals(ToolResultStatus.FAILED, outcome.resultStatus)
+    }
+
+    @Test
+    fun `domain unknown outcome preserves result and unexpected cause diagnostic`() = runTest {
+        val expected = listOf(UIMessagePart.Text("{\"status\":\"unknown\",\"reason\":\"outcome_unknown\"}"))
+        val cause = java.io.IOException("connection reset after PUT")
+        val outcome = runtime.execute(prepared(Tool("dav", "dav", execute = {
+            throw ToolExecutionFailure(expected, "outcome_unknown", cause)
+        })), hooks())
+        assertEquals(expected, outcome.output)
+        assertEquals(ToolResultStatus.FAILED, outcome.resultStatus)
+        assertTrue(requireNotNull(outcome.clientDiagnostic).detail.contains("IOException: connection reset after PUT"))
     }
 
     @Test

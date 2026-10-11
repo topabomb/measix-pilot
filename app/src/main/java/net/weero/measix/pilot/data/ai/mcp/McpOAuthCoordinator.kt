@@ -110,7 +110,13 @@ internal class McpOAuthCoordinator(
         clientSecret: String?,
     ) {
         mutateState(serverId) { existing ->
-            (existing ?: McpOAuthState()).copy(clientId = clientId, clientSecret = clientSecret)
+            val current = existing ?: McpOAuthState()
+            if (current.clientId == clientId) current.copy(clientSecret = clientSecret)
+            else current.copy(
+                clientId = clientId, clientSecret = clientSecret,
+                accessToken = null, refreshToken = null, expiresAt = 0L, authorizedResource = null,
+                callbackHost = McpOAuthCallbackHost.IP,
+            )
         }
     }
 
@@ -120,6 +126,7 @@ internal class McpOAuthCoordinator(
                 accessToken = null,
                 refreshToken = null,
                 expiresAt = 0L,
+                authorizedResource = null,
             )
         }
     }
@@ -142,8 +149,8 @@ internal class McpOAuthCoordinator(
         val protectedResource = withTimeout(IO_TIMEOUT_MS) {
             oauthClient.discoverProtectedResource(serverUrl)
         }
-        val issuer = protectedResource.authorizationServers.firstOrNull()
-            ?: error("受保护资源未声明授权服务器")
+        val issuer = protectedResource?.authorizationServers?.first()
+            ?: McpOAuthClient.resourceOrigin(serverUrl)
         val authorizationServer = withTimeout(IO_TIMEOUT_MS) {
             oauthClient.discoverAuthorizationServer(issuer)
         }
@@ -152,7 +159,7 @@ internal class McpOAuthCoordinator(
         val tokenEndpoint = authorizationServer.tokenEndpoint
             ?: error("授权服务器缺少 token_endpoint")
         val scope = config.commonOptions.oauth?.scope
-            ?: protectedResource.scopesSupported?.joinToString(" ")
+            ?: protectedResource?.scopesSupported?.joinToString(" ")
             ?: authorizationServer.scopesSupported?.joinToString(" ")
 
         // loopback 回调必须先于 DCR/授权 URL 绑定：redirect_uri 需要真实端口。
@@ -161,11 +168,13 @@ internal class McpOAuthCoordinator(
         val pkce = oauthClient.generatePkce()
         val state = oauthClient.generateState()
         val callbackServer = McpOAuthCallbackServer()
-        callbackServer.start(expectedState = state)
+        val existing = config.commonOptions.oauth
+        val callbackHost = if (existing?.clientId.isNullOrBlank()) McpOAuthCallbackHost.LOCALHOST
+            else requireNotNull(existing).callbackHost
+        callbackServer.start(expectedState = state, hostPolicy = callbackHost)
         val redirectUri = callbackServer.redirectUri
         var keepAliveLease: OAuthCallbackKeepAliveLease? = null
         try {
-            val existing = config.commonOptions.oauth
             var clientId = existing?.clientId
             var clientSecret = existing?.clientSecret
             if (clientId.isNullOrBlank()) {
@@ -195,6 +204,7 @@ internal class McpOAuthCoordinator(
                         tokenEndpoint = tokenEndpoint,
                         registrationEndpoint = authorizationServer.registrationEndpoint,
                         scope = scope,
+                        callbackHost = callbackHost,
                     ),
                 )
             ) {
@@ -251,14 +261,15 @@ internal class McpOAuthCoordinator(
                         accessToken = accessToken,
                         refreshToken = token.refreshToken,
                         expiresAt = computeExpiry(token.expiresIn),
+                        callbackHost = callbackHost,
+                        authorizedResource = expectedResource,
                     ),
                 )
             ) {
                 error("Server trust boundary changed during authorization")
             }
         } finally {
-            callbackServer.close()
-            keepAliveLease?.close()
+            try { callbackServer.close() } finally { keepAliveLease?.close() }
         }
     }
 
@@ -270,13 +281,17 @@ internal class McpOAuthCoordinator(
         val tokenEndpoint = oauth.tokenEndpoint
             ?: error("OAuth refresh metadata is missing token_endpoint")
         val clientId = oauth.clientId ?: error("OAuth refresh metadata is missing client_id")
+        val authorizedResource = oauth.authorizedResource ?: McpOAuthClient.legacyAuthorizedResource(config.serverUrl)
+        require(McpOAuthClient.canonicalResource(authorizedResource) == trustBoundary.canonicalResource) {
+            "oauth_resource_changed: authorize this server again"
+        }
         return try {
             val token = oauthClient.refreshToken(
                 tokenEndpoint = tokenEndpoint,
                 clientId = clientId,
                 clientSecret = oauth.clientSecret,
                 refreshToken = requireNotNull(oauth.refreshToken),
-                resource = trustBoundary.canonicalResource,
+                resource = authorizedResource,
                 scope = oauth.scope,
             )
             val accessToken = token.accessToken
@@ -286,6 +301,7 @@ internal class McpOAuthCoordinator(
                 refreshToken = token.refreshToken ?: oauth.refreshToken,
                 expiresAt = computeExpiry(token.expiresIn),
                 scope = token.scope ?: oauth.scope,
+                authorizedResource = authorizedResource,
             )
             if (!persistStateFor(trustBoundary, config.id, oauth.revision, updated)) {
                 logger(config.commonOptions.name, "Token refresh discarded: OAuth lease changed")

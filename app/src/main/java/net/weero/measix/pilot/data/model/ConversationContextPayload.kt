@@ -135,6 +135,7 @@ internal sealed interface ConversationContextSource {
         val prompt: String,
         val additionalPrompt: String = "",
         val targetTokens: Int? = null,
+        val checkpoint: HistorySummaryCheckpoint? = null,
     ) : ConversationContextSource
 }
 

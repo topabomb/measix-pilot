@@ -210,6 +210,11 @@ internal class TurnRequestAdmission(
         }
         val system = inline(ConversationContextSource.System(context.system.contributions), context.system.text)
         use(system, MessageRole.SYSTEM, ContextPlacement.System)
+        val selectedIds = plan.messages.mapTo(hashSetOf()) { it.id }
+        val sealedOriginIds = if (existing == null) null else resolveUsesAt(snapshot.contextAdmissions, owner, stepId, steps).uses
+            .filter { it.placement == ContextPlacement.MessageOrigin }.mapTo(hashSetOf()) { it.entryId }
+        entries.filter { it.payload.source is ConversationContextSource.HistorySummary && it.ownerMessageId in selectedIds &&
+            (sealedOriginIds == null || it.id in sealedOriginIds) }.forEach { use(it, MessageRole.USER, ContextPlacement.MessageOrigin) }
         val rules = context.promptInputs.promptInjections.associate { rule ->
             rule.id to inline(rule.source(context), rule.content)
         }

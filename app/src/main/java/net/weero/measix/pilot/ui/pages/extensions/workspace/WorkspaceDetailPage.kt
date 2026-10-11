@@ -72,6 +72,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -105,7 +106,7 @@ import net.weero.measix.pilot.data.ai.tools.resolveWorkspaceToolApproval
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
 import androidx.compose.ui.res.stringResource
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.ui.components.nav.BackButton
+import me.rerere.hugeicons.stroke.ArrowLeft01
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.components.ui.Tooltip
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
@@ -140,6 +141,7 @@ fun WorkspaceDetailPage(id: String) {
     var selectedFiles by remember(id, state.area, state.path) { mutableStateOf(emptySet<String>()) }
     var pendingBatch by remember(id) { mutableStateOf<WorkspaceExportRequest?>(null) }
     val pagerState = rememberPagerState { 2 }
+    var directoryMenu by remember { mutableStateOf(false) }
     LaunchedEffect(state.entries) {
         selectedFiles = selectedFiles.intersect(state.entries.filterNot { it.isDirectory }.map { it.path }.toSet())
     }
@@ -192,9 +194,15 @@ fun WorkspaceDetailPage(id: String) {
         }
     }
 
-    BackHandler(enabled = pagerState.currentPage == 1 && (selectedFiles.isNotEmpty() || state.path.isNotBlank())) {
-        if (selectedFiles.isNotEmpty()) selectedFiles = emptySet() else vm.goUp()
+    fun back() {
+        when {
+            selectedFiles.isNotEmpty() -> selectedFiles = emptySet()
+            pagerState.currentPage == 1 && state.path.isNotBlank() -> vm.goUp()
+            else -> navController.popBackStack()
+        }
     }
+    BackHandler { back() }
+    LaunchedEffect(pagerState.currentPage, selectedFiles.isNotEmpty()) { directoryMenu = false }
 
     Scaffold(
         topBar = {
@@ -205,12 +213,14 @@ fun WorkspaceDetailPage(id: String) {
                             else state.workspace?.name ?: stringResource(R.string.workspace_detail_title),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleMedium,
                     )
                 },
                 navigationIcon = {
-                    if (selectedFiles.isNotEmpty()) IconButton(onClick = { selectedFiles = emptySet() }) {
-                        Icon(HugeIcons.Cancel01, stringResource(R.string.common_cancel))
-                    } else BackButton()
+                    IconButton(onClick = { back() }) {
+                        Icon(if (selectedFiles.isNotEmpty()) HugeIcons.Cancel01 else HugeIcons.ArrowLeft01,
+                            stringResource(if (selectedFiles.isNotEmpty()) R.string.common_cancel else R.string.back))
+                    }
                 },
                 actions = {
                     if (exportState?.running == true) {
@@ -223,20 +233,26 @@ fun WorkspaceDetailPage(id: String) {
                             }) { Icon(HugeIcons.Download01, stringResource(R.string.common_export)) }
                         }
                     }
-                    if (pagerState.currentPage == 1 && selectedFiles.isEmpty()) {
-                        IconButton(onClick = { filePicker.launch(arrayOf("*/*")) }) {
-                            Icon(
-                                HugeIcons.FileImport,
-                                contentDescription = stringResource(R.string.workspace_detail_import_file),
-                            )
-                        }
-                    }
                     IconButton(onClick = { vm.refresh() }) {
                         Icon(HugeIcons.Refresh01, contentDescription = stringResource(R.string.enterprise_budget_refresh))
                     }
-                    if (selectedFiles.isEmpty() && state.workspace?.shellStatus != WorkspaceShellStatus.DISABLED) {
-                        IconButton(onClick = { navController.navigate(Screen.WorkspaceTerminal(id)) }) {
-                            Icon(HugeIcons.ComputerTerminal01, contentDescription = stringResource(R.string.workspace_terminal))
+                    if (selectedFiles.isEmpty() && (pagerState.currentPage == 1 || state.workspace?.shellStatus != WorkspaceShellStatus.DISABLED)) {
+                        Box {
+                            IconButton(onClick = { directoryMenu = true }, modifier = Modifier.testTag("workspace-directory-actions")) {
+                                Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options))
+                            }
+                            DropdownMenu(directoryMenu, { directoryMenu = false }) {
+                                if (pagerState.currentPage == 1) DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.workspace_detail_import_file)) },
+                                    leadingIcon = { Icon(HugeIcons.FileImport, null) },
+                                    onClick = { directoryMenu = false; filePicker.launch(arrayOf("*/*")) },
+                                )
+                                if (state.workspace?.shellStatus != WorkspaceShellStatus.DISABLED) DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.workspace_terminal)) },
+                                    leadingIcon = { Icon(HugeIcons.ComputerTerminal01, null) },
+                                    onClick = { directoryMenu = false; navController.navigate(Screen.WorkspaceTerminal(id)) },
+                                )
+                            }
                         }
                     }
                 },

@@ -352,15 +352,18 @@ class WorkspaceManager(
     }
 
     fun cleanupAllTempDirs() {
-        val roots = baseDir.listFiles()?.filter { it.isDirectory } ?: return
+        if (!baseDir.exists()) return
+        val roots = checkNotNull(baseDir.listFiles()) { "Cannot list Workspace roots for temporary file recovery" }.filter { it.isDirectory }
         for (dir in roots) {
             val root = dir.name
             if (!root.matches(ROOT_NAME_REGEX)) continue
-            // PRoot temp files
-            tempDir(root).let { if (it.exists()) it.deleteRecursively() }
-            // Rootfs /tmp and /var/tmp
-            File(linuxDir(root), "tmp").let { if (it.exists()) it.deleteRecursively() }
-            File(linuxDir(root), "var/tmp").let { if (it.exists()) it.deleteRecursively() }
+            WorkspaceDirectoryHandle(workspaceDir(root)).use { workspace ->
+                workspace.delete(TEMP_DIR)
+                if (workspace.stat(LINUX_DIR)?.isDirectory == true) {
+                    workspace.delete("$LINUX_DIR/tmp")
+                    if (workspace.stat("$LINUX_DIR/var")?.isDirectory == true) workspace.delete("$LINUX_DIR/var/tmp")
+                }
+            }
         }
     }
 

@@ -91,6 +91,9 @@ data class McpCommonOptions(
  * OAuth 授权的 MCP Server 注入 `Authorization: Bearer` 请求头并支持刷新。
  */
 @Serializable
+enum class McpOAuthCallbackHost { IP, LOCALHOST }
+
+@Serializable
 data class McpOAuthState(
     val revision: Long = 0L,
     val enabled: Boolean = false,
@@ -103,6 +106,9 @@ data class McpOAuthState(
     val accessToken: String? = null,
     val refreshToken: String? = null,
     val expiresAt: Long = 0L, // epoch millis, 0 表示未知/不过期
+    val callbackHost: McpOAuthCallbackHost = McpOAuthCallbackHost.IP,
+    /** Null in old records means the original URL canonicalization, never today's new audience. */
+    val authorizedResource: String? = null,
 ) {
     val isAuthorized: Boolean get() = !accessToken.isNullOrBlank()
 
@@ -191,8 +197,14 @@ val McpServerConfig.serverUrl: String
     }
 
 /** OAuth secrets may survive an editor/import merge only inside the same transport trust boundary. */
-internal fun McpServerConfig.hasSameOAuthTrustBoundary(other: McpServerConfig): Boolean =
+internal fun McpServerConfig.hasSameOAuthTrustBoundary(other: McpServerConfig): Boolean = try {
     oauthTrustBoundary() == other.oauthTrustBoundary()
+} catch (_: IllegalArgumentException) {
+    // An invalid imported/legacy endpoint has no identity under which credentials can survive an edit.
+    false
+} catch (_: IllegalStateException) {
+    false
+}
 
 /**
  * JSON 解析结果。

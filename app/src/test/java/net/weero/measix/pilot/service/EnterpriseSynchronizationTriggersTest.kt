@@ -230,6 +230,7 @@ class EnterpriseSynchronizationTriggersTest {
             terminals = mockk(relaxed = true),
             speech = mockk(relaxed = true),
             platform = platform,
+            webDav = mockk(relaxed = true) { io.mockk.coEvery { changeConnection<Unit>(any(), any()) } coAnswers { secondArg<suspend () -> Unit>().invoke() } },
             remoteWorkspace = mockk(relaxed = true),
         )
     }

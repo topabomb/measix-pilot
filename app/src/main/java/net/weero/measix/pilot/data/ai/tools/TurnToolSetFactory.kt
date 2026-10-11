@@ -35,7 +35,7 @@ private const val TAG = "TurnToolSetFactory"
  * 按 Assistant、资源和 Run Mode 统一装配 Search/Local/Conversation/Workspace/Skill/MCP 工具。
  * 供 Master 和 Child（Target Run）共用的工具装配 owner。
  */
-class TurnToolSetFactory(
+class TurnToolSetFactory internal constructor(
     private val localTools: LocalTools,
     private val conversationQueryService: ConversationQueryService,
     private val skillManager: SkillManager,
@@ -44,6 +44,7 @@ class TurnToolSetFactory(
     private val mcpManager: McpRuntimeCoordinator,
     private val providerManager: ProviderManager,
     private val artifactStore: ArtifactStore,
+    private val webDavTransfers: net.weero.measix.pilot.service.webdav.WebDavTransferService,
     private val toolOutputStore: ToolOutputStore = ToolOutputStore(artifactStore),
 ) {
 
@@ -96,7 +97,7 @@ class TurnToolSetFactory(
                 addAll(createSearchTools(settings, configuration))
             }
 
-            inspectionModel?.let { add(createAttachmentInspectionTool(it, providerManager)) }
+            inspectionModel?.let { add(createAttachmentInspectionTool(it, providerManager, conversationId)) }
 
             val localToolOptions = if (turnKind == TurnKind.SUB_ASSISTANT) {
                 filterTargetLocalTools(assistant.localTools)
@@ -121,6 +122,7 @@ class TurnToolSetFactory(
             }
 
             addAll(createWorkspaceToolsIfReady(realmAccess, assistant.workspaceId?.toString(), workspaceCwd))
+            addAll(createWebDavTools(realmAccess, configuration, webDavTransfers))
 
             if (assistant.enabledSkills.isNotEmpty()) {
                 addAll(

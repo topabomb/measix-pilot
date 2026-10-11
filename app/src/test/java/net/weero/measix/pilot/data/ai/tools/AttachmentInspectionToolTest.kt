@@ -151,6 +151,7 @@ class AttachmentInspectionToolTest {
     fun `empty refs are invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(emptyList()),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -163,6 +164,7 @@ class AttachmentInspectionToolTest {
     fun `more than four refs are invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args((1..5).map { "/upload/a.png" }),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -175,6 +177,7 @@ class AttachmentInspectionToolTest {
     fun `unsupported URI schemes are invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(listOf("ftp://example.com/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -192,6 +195,7 @@ class AttachmentInspectionToolTest {
             "/upload/../a.png", "/upload/%61.png", "/upload/sub/a.png",
         ).forEach { path ->
             val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
                 args = args(listOf(path)), captured = capturedModel(model, providerSetting, inspectionCapabilities), providerManager = providerManager,
                 resolveAttachments = { error("invalid paths must not reach resolver") },
             ) }
@@ -204,7 +208,7 @@ class AttachmentInspectionToolTest {
     fun `schema describes supported attachment references and authentication`() {
         val settings = settingsFor(visionModel)
         every { providerManager.getProviderByType(any()) } returns provider
-        val tool = createAttachmentInspectionTool(capturedModel(requireNotNull(settings.findModelById(settings.attachmentInspectionModelId)), settings.providers.single()), providerManager)
+        val tool = createAttachmentInspectionTool(capturedModel(requireNotNull(settings.findModelById(settings.attachmentInspectionModelId)), settings.providers.single()), providerManager, kotlin.uuid.Uuid.random())
         val parameters = tool.parameters().toString()
         assertTrue(parameters.contains("/upload/<file>"))
         assertTrue(parameters.contains("HTTP(S)"))
@@ -234,12 +238,14 @@ class AttachmentInspectionToolTest {
         }
 
         val malformedResult = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = malformed,
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
             resolveAttachments = { error("resolver must not run") },
         ) }
         val blankResult = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = blank,
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -263,12 +269,14 @@ class AttachmentInspectionToolTest {
         }
 
         val objectResult = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = objectRequest,
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
             resolveAttachments = { error("resolver must not run") },
         ) }
         val booleanResult = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = booleanRequest,
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -286,7 +294,7 @@ class AttachmentInspectionToolTest {
             attachmentInspectionModelId = textModel.id,
         )
         val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
-            createAttachmentInspectionTool(capturedModel(requireNotNull(settings.findModelById(settings.attachmentInspectionModelId)), settings.providers.single()), providerManager)
+            createAttachmentInspectionTool(capturedModel(requireNotNull(settings.findModelById(settings.attachmentInspectionModelId)), settings.providers.single()), providerManager, kotlin.uuid.Uuid.random())
         }
         assertTrue(error.message!!.contains("IMAGE"))
     }
@@ -299,7 +307,7 @@ class AttachmentInspectionToolTest {
 
 
         val error = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
-            createAttachmentInspectionTool(capturedModel(visionModel, providerSetting, RequestMediaCapabilities.NONE), providerManager)
+            createAttachmentInspectionTool(capturedModel(visionModel, providerSetting, RequestMediaCapabilities.NONE), providerManager, kotlin.uuid.Uuid.random())
         }
 
         assertTrue(error.message!!.contains("Provider contract violation"))
@@ -309,6 +317,7 @@ class AttachmentInspectionToolTest {
     fun `runtime resolution failure reason is propagated as is`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(listOf("/upload/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -323,6 +332,7 @@ class AttachmentInspectionToolTest {
     fun `resolution without image parts is invalid`() = runTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(listOf("/upload/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -336,6 +346,7 @@ class AttachmentInspectionToolTest {
         val (model, providerSetting, provider) = resolveInspectionContract(visionModel)
         for (resolvedCount in listOf(1, 3)) {
             val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
                 args = args(listOf("/upload/u7km2n4p.png", "/upload/u7km2n4p.png")),
                 captured = capturedModel(model, providerSetting, inspectionCapabilities), providerManager = providerManager,
                 resolveAttachments = {
@@ -357,6 +368,7 @@ class AttachmentInspectionToolTest {
             successChunk("comparison")
         }
         val result = executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(refs), captured = capturedModel(model, providerSetting, inspectionCapabilities), providerManager = providerManager,
             resolveAttachments = { requested ->
                 assertEquals(refs, requested)
@@ -391,6 +403,7 @@ class AttachmentInspectionToolTest {
         }
 
         val result = executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(listOf("/upload/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -409,6 +422,8 @@ class AttachmentInspectionToolTest {
         assertEquals(listOf(resolvedImage), user.parts.filterIsInstance<UIMessagePart.Image>())
         assertEquals(RequestImageSupport.STRUCTURED, sentParams?.mediaCapabilities?.userImages)
         assertEquals(ReasoningLevel.AUTO, sentParams?.reasoningLevel)
+        assertEquals("11111111-1111-4111-8111-111111111111", sentParams?.openCodeSessionId)
+        assertEquals(null, sentParams?.providerSessionId)
     }
 
     @Test
@@ -431,6 +446,7 @@ class AttachmentInspectionToolTest {
         }
 
         executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(listOf("/upload/shared.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -451,6 +467,7 @@ class AttachmentInspectionToolTest {
         } throws IllegalStateException("network down")
 
         val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(listOf("/upload/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -475,6 +492,7 @@ class AttachmentInspectionToolTest {
         )
 
         val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(listOf("/upload/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -495,6 +513,7 @@ class AttachmentInspectionToolTest {
         } returns successChunk("   ")
 
         val result = failureResult { executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
             args = args(listOf("/upload/a.png")),
             captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,
@@ -515,6 +534,7 @@ class AttachmentInspectionToolTest {
 
         try {
             executeInspection(
+            conversationId = kotlin.uuid.Uuid.parse("11111111-1111-4111-8111-111111111111"),
                 args = args(listOf("/upload/a.png")),
                 captured = capturedModel(model, providerSetting, inspectionCapabilities),
             providerManager = providerManager,

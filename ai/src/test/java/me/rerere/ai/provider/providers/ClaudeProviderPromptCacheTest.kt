@@ -45,7 +45,7 @@ class ClaudeProviderPromptCacheTest {
             Boolean::class.javaPrimitiveType!!
         )
         method.isAccessible = true
-        return method.invoke(provider, providerSetting, messages.toModelRequests(), params, stream) as JsonObject
+        return (method.invoke(provider, providerSetting, messages.toModelRequests(), params, stream) as ClaudePreparedRequest).body
     }
 
     private fun dummyTool(): FrozenToolDefinition = FrozenToolDefinition(

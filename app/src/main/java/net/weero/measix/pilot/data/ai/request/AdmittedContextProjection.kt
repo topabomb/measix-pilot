@@ -93,8 +93,14 @@ internal fun projectAdmittedContext(
                 fun appendSegment(end: Int) {
                     if (end <= start) return
                     val segment = message.parts.subList(start, end)
-                    val metadata = metadataForParts(segment)
-                    check(message.providerMetadata == null || metadata != null || segment.none { it is UIMessagePart.Step && it.modelResult != null }) {
+                    // Terminal projection already established the complete, safe Step prefix.
+                    // A disclosure split must not reintroduce opaque state from its incomplete tail.
+                    val safePartCount = message.providerReplayProjection?.let {
+                        (it.completePartCount - start).coerceIn(0, segment.size)
+                    } ?: segment.size
+                    val safeParts = segment.take(safePartCount)
+                    val metadata = metadataForParts(safeParts)
+                    check(message.providerMetadata == null || metadata != null || safeParts.none { it is UIMessagePart.Step && it.modelResult != null }) {
                         "context_split_missing_step_protocol_state"
                     }
                     val replay = message.providerReplayProjection?.let { original -> original.copy(

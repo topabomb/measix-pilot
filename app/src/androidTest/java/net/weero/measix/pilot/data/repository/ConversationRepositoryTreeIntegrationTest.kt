@@ -127,7 +127,7 @@ class ConversationRepositoryTreeIntegrationTest {
     }
 
     @Test
-    fun summaryTreeCommitRollsBackMasterAndProjectionsWhenChildDeletionFails() = runBlocking<Unit> {
+    fun summaryCheckpointFailurePreservesHistoryAndChildProjections() = runBlocking<Unit> {
         val assistant = ConfigurationReference.random()
         val owned = artifactStore.createFromBytes(ConfigurationScope.Personal, byteArrayOf(1, 2, 3), "summary.txt", origin = ArtifactOrigin.USER)
         val attachment = UIMessagePart.Document(owned.uri.toString(), "summary.txt", "text/plain")
@@ -164,18 +164,26 @@ class ConversationRepositoryTreeIntegrationTest {
         val coordinator = net.weero.measix.pilot.service.runtime.ConversationCommandCoordinator(registry, repository, gate, locks)
         val rootRuntime = coordinator.load(master.id)
         val childRuntime = coordinator.load(child.id)
-        val replacements = mapOf(master.id to net.weero.measix.pilot.service.runtime.ReplaceMessageTree(
-            listOf(UIMessage.user("summary").toMessageNode()), clearSuggestions = true,
-        ))
+        val summary = UIMessage.user("summary").toMessageNode()
+        val locators = expectedMaster.nodes.map { net.weero.measix.pilot.data.model.ContextMessageLocator(it.id, it.currentMessage.id) }
+        val checkpoint = net.weero.measix.pilot.data.model.HistorySummaryCheckpoint(covered = expectedMaster.nodes.map { node ->
+            net.weero.measix.pilot.data.model.HistorySummaryCoveredMessage(
+                net.weero.measix.pilot.data.model.ContextMessageLocator(node.id, node.currentMessage.id),
+                net.weero.measix.pilot.data.model.historySummaryFingerprint(node.currentMessage, expectedMaster.modelContextEntries, locators))
+        })
+        val origin = net.weero.measix.pilot.data.model.messageOriginEntry(summary,
+            net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary(null, "summarize", checkpoint = checkpoint))
+        val command = net.weero.measix.pilot.service.runtime.InsertHistorySummaryCheckpoint(
+            expectedMaster.nodes, expectedMaster.modelContextEntries, summary, origin, expectedMaster.nodes.size)
         database.openHelper.writableDatabase.execSQL(
-            "CREATE TRIGGER fail_child_delete BEFORE DELETE ON ConversationEntity " +
-                "WHEN OLD.id = '${child.id}' BEGIN SELECT RAISE(ABORT, 'child deletion failed'); END"
+            "CREATE TRIGGER fail_summary_insert BEFORE INSERT ON message_node " +
+                "WHEN NEW.id = '${summary.id}' BEGIN SELECT RAISE(ABORT, 'summary insertion failed'); END"
         )
         try {
-            coordinator.commitTreeMutation(master.scope, master.id, replacements, setOf(child.id))
-            org.junit.Assert.fail("Expected child deletion failure")
+            coordinator.executeOrThrow(master.id, command)
+            org.junit.Assert.fail("Expected summary insertion failure")
         } catch (expected: android.database.SQLException) {
-            assertTrue(expected.message.orEmpty().contains("child deletion failed"))
+            assertTrue(expected.message.orEmpty().contains("summary insertion failed"))
         }
         assertEquals(expectedMaster, repository.getConversationSnapshotById(master.id))
         assertEquals(expectedChild, repository.getConversationSnapshotById(child.id))
@@ -185,18 +193,18 @@ class ConversationRepositoryTreeIntegrationTest {
         favorites.forEach { assertEquals(it, database.favoriteDao().getByRefKey(it.scope, it.refKey)) }
         assertEquals(setOf(master.id.toString(), child.id.toString()),
             database.artifactReferenceDao().referencingConversationIds(owned.entity.id).toSet())
-        database.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_child_delete")
-        coordinator.commitTreeMutation(master.scope, master.id, replacements, setOf(child.id))
+        database.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_summary_insert")
+        coordinator.executeOrThrow(master.id, command)
         val persisted = requireNotNull(repository.getConversationSnapshotById(master.id))
-        assertEquals(replacements.getValue(master.id).nodes, persisted.nodes)
+        assertEquals(expectedMaster.nodes + summary, persisted.nodes)
         assertTrue(persisted.header.chatSuggestions.isEmpty())
-        assertTrue(persisted.modelContextEntries.isEmpty())
+        assertEquals(expectedMaster.modelContextEntries + origin, persisted.modelContextEntries)
         assertEquals(persisted, rootRuntime.durable)
-        assertNull(repository.getConversationSnapshotById(child.id))
-        assertNull(registry.findRuntime(child.id))
-        assertEquals(listOf("summary"), indexedText())
-        favorites.forEach { assertNull(database.favoriteDao().getByRefKey(it.scope, it.refKey)) }
-        assertFalse(database.artifactReferenceDao().existsByArtifactId(owned.entity.id))
+        assertEquals(expectedChild, repository.getConversationSnapshotById(child.id))
+        assertEquals(childRuntime, registry.findRuntime(child.id))
+        assertEquals(listOf("answer", "request", "summary"), indexedText())
+        favorites.forEach { assertEquals(it, database.favoriteDao().getByRefKey(it.scope, it.refKey)) }
+        assertTrue(database.artifactReferenceDao().existsByArtifactId(owned.entity.id))
     }
 
     @Test

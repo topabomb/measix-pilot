@@ -103,6 +103,9 @@ internal object ConversationModelContextApplicability {
         clonedNodes: List<MessageNode>,
     ): List<ConversationModelContextEntry> {
         if (entries.isEmpty()) return emptyList()
+        val entryIds = entries.mapNotNull { entry -> nodeIdMap[entry.ownerNodeId]?.let { node ->
+            entry.id to contextEntryIdentity(node, messageIdMap[entry.ownerMessageId] ?: entry.ownerMessageId, entry.occurrence)
+        } }.toMap()
         return entries.mapNotNull { entry ->
             val ownerNodeId = nodeIdMap[entry.ownerNodeId] ?: return@mapNotNull null
             val anchorNodeId = nodeIdMap[entry.anchorNodeId] ?: return@mapNotNull null
@@ -112,7 +115,7 @@ internal object ConversationModelContextApplicability {
                 ownerMessageId = messageIdMap[entry.ownerMessageId] ?: entry.ownerMessageId,
                 anchorNodeId = anchorNodeId,
                 anchorMessageId = messageIdMap[entry.anchorMessageId] ?: entry.anchorMessageId,
-                payload = entry.payload.copy(source = entry.payload.source.remapLocators(nodeIdMap, messageIdMap),
+                payload = entry.payload.copy(source = entry.payload.source.remapLocators(nodeIdMap, messageIdMap, entryIds),
                     body = (entry.payload.body as? ConversationContextBody.MessageReference)?.let { body ->
                         ConversationContextBody.MessageReference(ContextMessageLocator(
                             nodeIdMap.getValue(body.message.nodeId), messageIdMap[body.message.messageId] ?: body.message.messageId))
@@ -126,12 +129,16 @@ internal object ConversationModelContextApplicability {
 }
 
 private fun ConversationContextSource.remapLocators(
-    nodes: Map<Uuid, Uuid>, messages: Map<Uuid, Uuid>,
+    nodes: Map<Uuid, Uuid>, messages: Map<Uuid, Uuid>, entries: Map<Uuid, Uuid>,
 ): ConversationContextSource {
     fun ContextMessageLocator.remap() = copy(nodeId = nodes[nodeId] ?: nodeId, messageId = messages[messageId] ?: messageId)
     return when (this) {
         is ConversationContextSource.MessageTime -> copy(message = message.remap(), previous = previous?.remap())
         is ConversationContextSource.Attachment -> copy(message = message.remap())
+        is ConversationContextSource.HistorySummary -> copy(checkpoint = checkpoint?.let { previous ->
+            previous.copy(covered = previous.covered.map { it.copy(message = it.message.remap()) },
+                previousEntryId = previous.previousEntryId?.let { entries[it] ?: it })
+        })
         else -> this
     }
 }

@@ -335,7 +335,6 @@ private fun DetailContent(
                         modifier = Modifier.padding(horizontal = 8.dp),
                         loading = false,
                         turnFinished = state.child.stream?.assistantMessageId != node.currentMessage.id,
-                        model = null,
                         assistant = targetAssistant,
                         onFork = {},
                         onRegenerate = {},

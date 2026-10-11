@@ -47,6 +47,7 @@ internal class EnterpriseExitService(
     private val speech: SpeechApplicationService,
     private val identityData: EnterpriseIdentityDataDisposer,
     private val remoteWorkspace: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService,
+    private val webDav: net.weero.measix.pilot.service.webdav.WebDavApplicationService,
     private val platformLogout: suspend (EnterpriseExitToken) -> Unit,
 ) {
     private val mutex = Mutex()
@@ -247,6 +248,7 @@ internal class EnterpriseExitService(
 
     /** Shared stop barrier after Session admission is durably revoked. */
     internal suspend fun closeEnterpriseDomain(token: EnterpriseExitToken, duringRecovery: Boolean = false) {
+        webDav.cancelAndAwait(token.access)
         remoteWorkspace.cancelAndAwait(token.access)
         sessions.awaitPlatformOperations(token.access)
         supervisorScope {

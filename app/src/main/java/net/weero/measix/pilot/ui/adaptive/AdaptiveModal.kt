@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.ui.adaptive
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuToolbarProvider
+import androidx.compose.foundation.text.contextmenu.provider.LocalTextContextMenuDropdownProvider
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -159,12 +161,18 @@ private fun AdaptiveModalDragHandle() {
 /** A caller-owned feedback state is displayed only by its active modal. */
 @Composable
 private fun AdaptiveModalContent(modifier: Modifier, feedback: ToasterState?, feedbackVisible: Boolean, content: @Composable ColumnScope.() -> Unit) {
-    if (feedback == null) Column(modifier.fillMaxWidth(), content = content)
-    else CompositionLocalProvider(LocalToaster provides feedback) {
-        Box(Modifier.fillMaxWidth()) {
-            Column(modifier.fillMaxWidth(), content = content)
-            if (feedbackVisible) Toaster(state = feedback, darkTheme = LocalDarkMode.current,
-                richColors = true, alignment = Alignment.TopCenter, showCloseButton = true)
+    // Text menus hold their creating window's View. A nested modal must create its own providers.
+    CompositionLocalProvider(
+        LocalTextContextMenuToolbarProvider provides null,
+        LocalTextContextMenuDropdownProvider provides null,
+    ) {
+        if (feedback == null) Column(modifier.fillMaxWidth(), content = content)
+        else CompositionLocalProvider(LocalToaster provides feedback) {
+            Box(Modifier.fillMaxWidth()) {
+                Column(modifier.fillMaxWidth(), content = content)
+                if (feedbackVisible) Toaster(state = feedback, darkTheme = LocalDarkMode.current,
+                    richColors = true, alignment = Alignment.TopCenter, showCloseButton = true)
+            }
         }
     }
 }

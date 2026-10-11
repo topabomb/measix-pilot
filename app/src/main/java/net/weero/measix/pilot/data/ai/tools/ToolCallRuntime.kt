@@ -449,6 +449,10 @@ internal class ToolCallRuntime(
                 },
             )
         } catch (failure: ToolExecutionFailure) {
+            val diagnostic = failure.cause?.let { cause ->
+                logDiagnosticFailure(TAG, "Tool ${call.source.toolName} failed", cause)
+                ToolClientDiagnostic(cause.userVisibleDiagnostic())
+            }
             ToolCallOutcome(
                 output = ensureProviderReplayResult(
                     failure.output,
@@ -456,6 +460,7 @@ internal class ToolCallRuntime(
                 ),
                 resultStatus = ToolResultStatus.FAILED,
                 outputPolicy = artifactSafeOutputPolicy(call, registeredArtifact),
+                clientDiagnostic = diagnostic,
             )
         } catch (timeout: TimeoutCancellationException) {
             // 外层 Turn/collector 超时属于取消，只有工具内部子超时且父协程仍 active 才归一化为工具失败。

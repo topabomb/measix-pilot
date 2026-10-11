@@ -43,7 +43,7 @@ internal data class AssistantUsagePreferences(
     val customHeaders: UsageValue<List<CustomHeader>>? = null,
     val customBodies: UsageValue<List<CustomBody>>? = null,
     val mcpServers: UsageValue<Set<ConfigurationReference>>? = null,
-    val localTools: UsageValue<List<LocalToolOption>>? = null,
+    val localTools: UsageValue<@Serializable(with = net.weero.measix.pilot.data.ai.tools.local.LocalToolOptionsSerializer::class) List<LocalToolOption>>? = null,
     val enableWebSearch: UsageValue<Boolean>? = null,
     val builtInSearch: UsageValue<Boolean?>? = null,
     val workspaceId: UsageValue<Uuid?>? = null,

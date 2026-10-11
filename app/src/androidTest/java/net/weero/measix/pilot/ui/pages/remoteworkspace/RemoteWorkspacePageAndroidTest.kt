@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.remoteworkspace
 
+import net.weero.measix.pilot.service.files.*
+
 import android.widget.EditText
 import android.content.ContentValues
 import android.content.res.Configuration
@@ -8,6 +10,12 @@ import android.graphics.Canvas
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.test.*
@@ -52,8 +60,8 @@ class RemoteWorkspacePageAndroidTest {
     private val store = ViewModelStore()
     @After fun dispose() { compose.runOnUiThread { store.clear() } }
 
-    private val file = RemoteFile("notes.txt", false, 8, null, "\"v1\"")
-    private val document = RemoteTextDocument(file, WorkspaceText("original", false, "\n"))
+    private val file = BrowserFile("notes.txt", false, 8, null, "\"v1\"")
+    private val document = BrowserTextDocument(file, WorkspaceText("original", false, "\n"))
 
     @Test fun commonCodeFilesUseSourcePreviewAndExplicitEditingWithFullBody() {
         val f = Fixture()
@@ -63,11 +71,11 @@ class RemoteWorkspacePageAndroidTest {
             "data.json" to "[\n" + (1..180).joinToString(",\n") { "  {\"id\": $it, \"content\": \"literal {{text}} 中文\"}" } + "\n]",
             "server.py" to "\"\"\"description\nimport literal text\n\"\"\"\n" + (1..100).joinToString("\n") { "value_$it = $it  # 中文" },
         )
-        val files = bodies.map { (name, body) -> RemoteFile(name, false, body.toByteArray().size.toLong(), null, "\"v1\"") }
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", files, null, null)
+        val files = bodies.map { (name, body) -> BrowserFile(name, false, body.toByteArray().size.toLong(), null, "\"v1\"") }
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", files, null, null)
         coEvery { f.service.readText(f.handle, any()) } answers {
-            val current = secondArg<RemoteFile>()
-            RemoteTextDocument(current, WorkspaceText(bodies.getValue(current.name), false, "\n"))
+            val current = secondArg<BrowserFile>()
+            BrowserTextDocument(current, WorkspaceText(bodies.getValue(current.name), false, "\n"))
         }
         f.show()
         files.forEach { current ->
@@ -133,14 +141,14 @@ class RemoteWorkspacePageAndroidTest {
             every { service.summary } returns summary
             coEvery { service.open(selection) } returns handle
             coEvery { service.isValid(handle) } returns true
-            coEvery { service.list(handle, any()) } answers { RemoteDirectory(secondArg(), listOf(file), null, null) }
+            coEvery { service.list(handle, any()) } answers { BrowserDirectory(secondArg(), listOf(file), null, null) }
             coEvery { service.readText(handle, file) } returns document
             compose.runOnUiThread {
                 vm = RemoteWorkspaceVM(selection, service, compose.activity)
                 store.put("remote", vm)
             }
         }
-        fun show(restoration: StateRestorationTester? = null) {
+        fun show(restoration: StateRestorationTester? = null, compactViewport: Boolean = false) {
             compose.runOnUiThread { vm.retry() }
             val content: @androidx.compose.runtime.Composable () -> Unit = {
                 MaterialTheme(colorScheme = if (androidx.compose.foundation.isSystemInDarkTheme())
@@ -149,21 +157,51 @@ class RemoteWorkspacePageAndroidTest {
                         LocalSettings provides Settings(),
                         net.weero.measix.pilot.ui.theme.LocalDarkMode provides androidx.compose.foundation.isSystemInDarkTheme(),
                         net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
-                        RemoteWorkspacePage(selection, vm)
+                        val density = LocalDensity.current
+                        CompositionLocalProvider(LocalDensity provides if (compactViewport) Density(density.density, 1.3f) else density) {
+                            Box(if (compactViewport) Modifier.height(280.dp) else Modifier) { RemoteWorkspacePage(selection, vm) }
+                        }
                     }
                 }
             }
             if (restoration == null) compose.setContent(content) else restoration.setContent(content)
-            compose.waitUntil(5_000) { vm.state.value.handle === handle }
+            compose.waitUntil(5_000) { vm.state.value.handle != null }
         }
+    }
+
+    @Test fun shortLargeFontViewportKeepsCompletionDetailsAndDirectoryNavigationReachable() {
+        val f = Fixture()
+        val folders = (1..20).map { BrowserFile("folder-$it", true, null, null, null) }
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", folders, 1024, 4096)
+        coEvery { f.service.list(f.handle, "folder-20") } returns BrowserDirectory("folder-20", listOf(file.copy(path = "folder-20/notes.txt")), null, null)
+        f.show(compactViewport = true)
+        compose.runOnIdle {
+            f.vm.execute(listOf("own-operation"), requireNotNull(f.vm.state.value.handle)) { _, _ ->
+                BrowserOperationResult("own-operation", BrowserOutcome.FAILED, "IOException: failure detail retained for diagnosis")
+            }
+        }
+        compose.waitUntil(5_000) { !f.vm.state.value.running && f.vm.state.value.results.isNotEmpty() && !f.vm.state.value.loading }
+        compose.onNodeWithText(text(R.string.remote_workspace_details)).performScrollTo().performClick()
+        compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
+        compose.onNodeWithText("IOException: failure detail retained for diagnosis").assertIsDisplayed()
+        compose.onNode(hasContentDescription(text(R.string.update_card_close)) and hasAnyAncestor(isDialog())).performClick()
+        compose.onNode(hasText(text(R.string.common_confirm)) and hasAnyAncestor(isDialog())).performClick()
+        capture("remote-compact-large-font-feedback.png")
+        compose.onNodeWithTag("remote-file-list").performScrollToNode(hasText("folder-20"))
+        compose.onNodeWithText("folder-20").assertIsDisplayed().performClick()
+        compose.waitUntil(5_000) { f.vm.state.value.path == "folder-20" && !f.vm.state.value.loading }
+        compose.onNodeWithText(file.name).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.waitUntil(5_000) { f.vm.state.value.path.isEmpty() && !f.vm.state.value.loading }
+        compose.onNodeWithText("folder-1").assertIsDisplayed()
     }
 
     @Test fun compactSourcePreviewShowsOptionalLogicalLineNumbers() {
         val f = Fixture()
         val source = file.copy(path = "data.json")
         val body = (1..100).joinToString("\n") { "  \"item$it\": \"value\"," }
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(source), null, null)
-        coEvery { f.service.readText(f.handle, source) } returns RemoteTextDocument(source, WorkspaceText(body, false, "\n"))
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", listOf(source), null, null)
+        coEvery { f.service.readText(f.handle, source) } returns BrowserTextDocument(source, WorkspaceText(body, false, "\n"))
         f.show()
         compose.onNodeWithText(source.name).performClick()
         compose.onNodeWithText(text(R.string.file_line_numbers)).performClick()
@@ -177,14 +215,14 @@ class RemoteWorkspacePageAndroidTest {
 
     @Test fun pullRefreshWorksOnEmptyDirectoryAndKeepsVisibleFilesWhileLoading() {
         val f = Fixture()
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", emptyList(), null, null)
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", emptyList(), null, null)
         f.show()
         compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.isEmpty() == true }
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(file), null, null)
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", listOf(file), null, null)
         compose.onNodeWithTag("remote-file-list").performTouchInput { swipeDown(startY = 10f, endY = height - 10f, durationMillis = 600) }
         compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.isNotEmpty() == true }
         val release = CompletableDeferred<Unit>()
-        coEvery { f.service.list(f.handle, "") } coAnswers { release.await(); RemoteDirectory("", listOf(file), null, null) }
+        coEvery { f.service.list(f.handle, "") } coAnswers { release.await(); BrowserDirectory("", listOf(file), null, null) }
         compose.onNodeWithTag("remote-file-list").performTouchInput { swipeDown(startY = 10f, endY = height - 10f, durationMillis = 600) }
         compose.waitUntil(5_000) { f.vm.state.value.loading }
         compose.onNodeWithText(file.name).assertIsDisplayed()
@@ -195,16 +233,16 @@ class RemoteWorkspacePageAndroidTest {
 
     @Test fun browseFilterCreateAndWorkspaceDetailsRemainAvailableWithoutMcp() {
         val f = Fixture()
-        val folder = RemoteFile("reports", true, null, null, null)
-        val hidden = RemoteFile(".hidden.txt", false, 10, null, "\"hidden\"")
-        val nested = RemoteFile("reports/result.txt", false, 16, "2026-09-30T10:00:00Z", "\"report\"")
-        val created = mutableListOf<RemoteFile>()
-        val longName = RemoteFile("这是一个用于检查窄屏与大字体的很长的远程文件名称.pdf", false, null, null, "\"long\"")
-        coEvery { f.service.list(f.handle, "") } answers { RemoteDirectory("", listOf(folder, file, hidden, longName) + created, 1024, 4096) }
-        coEvery { f.service.list(f.handle, "reports") } returns RemoteDirectory("reports", listOf(nested), null, null)
+        val folder = BrowserFile("reports", true, null, null, null)
+        val hidden = BrowserFile(".hidden.txt", false, 10, null, "\"hidden\"")
+        val nested = BrowserFile("reports/result.txt", false, 16, "2026-09-30T10:00:00Z", "\"report\"")
+        val created = mutableListOf<BrowserFile>()
+        val longName = BrowserFile("这是一个用于检查窄屏与大字体的很长的远程文件名称.pdf", false, null, null, "\"long\"")
+        coEvery { f.service.list(f.handle, "") } answers { BrowserDirectory("", listOf(folder, file, hidden, longName) + created, 1024, 4096) }
+        coEvery { f.service.list(f.handle, "reports") } returns BrowserDirectory("reports", listOf(nested), null, null)
         coEvery { f.service.createDirectory(f.handle, "new-folder") } answers {
-            created += RemoteFile("new-folder", true, null, null, null)
-            RemoteOperationResult("new-folder", RemoteOutcome.SUCCEEDED)
+            created += BrowserFile("new-folder", true, null, null, null)
+            BrowserOperationResult("new-folder", BrowserOutcome.SUCCEEDED)
         }
         f.show()
         compose.onNodeWithText("reports").assertIsDisplayed()
@@ -239,7 +277,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.any { it.name == "new-folder" } == true }
         onView(isRoot()).perform(closeSoftKeyboard())
-        compose.onNodeWithContentDescription(text(R.string.common_confirm)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         compose.onNodeWithTag("remote-file-list").performScrollToNode(hasText("new-folder"))
         compose.onNodeWithText("new-folder").assertIsDisplayed()
         coVerify(exactly = 1) { f.service.createDirectory(f.handle, "new-folder") }
@@ -252,7 +290,7 @@ class RemoteWorkspacePageAndroidTest {
     @Test fun previewStartsReadOnlyAndExplicitEditKeepsDraftAfterFailedSave() {
         val f = Fixture()
         coEvery { f.service.save(f.handle, document, "preserve my changes", file.path) } returns
-            RemoteOperationResult(file.path, RemoteOutcome.FAILED, "HTTP 409 file_version_conflict")
+            BrowserOperationResult(file.path, BrowserOutcome.FAILED, "HTTP 409 file_version_conflict")
         f.show()
         compose.onNodeWithText(file.name).performClick()
         onView(isAssignableFrom(EditText::class.java)).check { view, error ->
@@ -264,7 +302,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithContentDescription(text(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText("preserve my changes"), closeSoftKeyboard())
         compose.onNodeWithContentDescription(text(R.string.remote_workspace_save_close)).performClick()
-        compose.waitUntil(5_000) { f.vm.state.value.save?.result?.outcome == RemoteOutcome.FAILED }
+        compose.waitUntil(5_000) { f.vm.state.value.save?.result?.outcome == BrowserOutcome.FAILED }
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("preserve my changes")))
         capture("remote-workspace-editor-conflict.png")
         compose.onNodeWithContentDescription(text(R.string.more_options)).performClick()
@@ -300,7 +338,7 @@ class RemoteWorkspacePageAndroidTest {
     @Test fun saveAsValidationKeepsTheEnteredNameAndDraftAcrossErrorPublication() {
         val f = Fixture()
         coEvery { f.service.save(f.handle, document, "retained draft", "copied.txt") } returns
-            RemoteOperationResult("copied.txt", RemoteOutcome.FAILED, "HTTP 409 file_version_conflict")
+            BrowserOperationResult("copied.txt", BrowserOutcome.FAILED, "HTTP 409 file_version_conflict")
         f.show()
         compose.onNodeWithText(file.name).performClick()
         compose.onNodeWithContentDescription(text(R.string.edit)).performClick()
@@ -312,6 +350,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitForIdle()
         name.assert(hasText("invalid/name"))
+        compose.waitUntil(5_000) { compose.onNodeWithText(text(R.string.remote_workspace_invalid_name)).isDisplayed() }
         compose.onNodeWithText(text(R.string.remote_workspace_invalid_name)).assertIsDisplayed()
         compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
         compose.onNode(hasText("invalid_workspace_name", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
@@ -320,6 +359,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
         compose.waitForIdle()
         name.assert(hasText(file.name))
+        compose.waitUntil(5_000) { compose.onNodeWithText(text(R.string.remote_workspace_save_as_new_name)).isDisplayed() }
         compose.onNodeWithText(text(R.string.remote_workspace_save_as_new_name)).assertIsDisplayed()
         compose.onNode(hasText(text(R.string.remote_workspace_details)) and hasAnyAncestor(isDialog())).performClick()
         compose.onNode(hasText("workspace_save_as_requires_new_name", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
@@ -327,7 +367,7 @@ class RemoteWorkspacePageAndroidTest {
         coVerify(exactly = 0) { f.service.save(any(), any(), any(), any()) }
         name.performTextReplacement("copied.txt")
         compose.onNodeWithText(text(R.string.common_confirm)).performClick()
-        compose.waitUntil(5_000) { f.vm.state.value.save?.result?.outcome == RemoteOutcome.FAILED }
+        compose.waitUntil(5_000) { f.vm.state.value.save?.result?.outcome == BrowserOutcome.FAILED }
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("retained draft")))
         coVerify(exactly = 1) { f.service.save(f.handle, document, "retained draft", "copied.txt") }
     }
@@ -344,9 +384,9 @@ class RemoteWorkspacePageAndroidTest {
         f.show()
         try {
             compose.runOnIdle {
-                f.vm.execute(listOf(file.path), f.handle) { _, _ ->
+                f.vm.execute(listOf(file.path), requireNotNull(f.vm.state.value.handle)) { _, _ ->
                     completed = true
-                    RemoteOperationResult(file.path, RemoteOutcome.SUCCEEDED)
+                    BrowserOperationResult(file.path, BrowserOutcome.SUCCEEDED)
                 }
             }
             compose.waitUntil(5_000) { !f.vm.state.value.running && f.vm.state.value.results.isNotEmpty() }
@@ -357,18 +397,18 @@ class RemoteWorkspacePageAndroidTest {
 
     @Test fun directoryRefreshKeepsOnlySelectionsWhoseFilesStillExist() {
         val f = Fixture()
-        val remaining = RemoteFile("remaining.txt", false, 8, null, "\"remaining\"")
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(file, remaining), null, null)
+        val remaining = BrowserFile("remaining.txt", false, 8, null, "\"remaining\"")
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", listOf(file, remaining), null, null)
         f.show()
         compose.onNodeWithText(file.name).performTouchInput { longClick() }
         compose.onNodeWithText(remaining.name).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_selected, 2)).assertIsDisplayed()
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(remaining), null, null)
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", listOf(remaining), null, null)
         compose.runOnIdle { f.vm.retry() }
         compose.waitUntil(5_000) { f.vm.state.value.directory?.files == listOf(remaining) }
         compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_selected, 1)).assertIsDisplayed()
         compose.onNodeWithText(file.name).assertDoesNotExist()
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", emptyList(), null, null)
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", emptyList(), null, null)
         compose.runOnIdle { f.vm.retry() }
         compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.isEmpty() == true }
         compose.onNodeWithText(text(R.string.remote_workspace_title)).assertIsDisplayed()
@@ -397,17 +437,17 @@ class RemoteWorkspacePageAndroidTest {
 
     @Test fun frozenSaveSurvivesCompositionRecreationAndConflictRetainsSubmittedText() {
         val f = Fixture()
-        val answer = CompletableDeferred<RemoteOperationResult>()
+        val answer = CompletableDeferred<BrowserOperationResult>()
         coEvery { f.service.save(f.handle, document, "submitted draft", file.path) } coAnswers { answer.await() }
         val restoration = StateRestorationTester(compose)
         f.show(restoration)
-        compose.runOnIdle { f.vm.openPreview(file); f.vm.save(f.handle, document, "submitted draft", file.path) }
+        compose.runOnIdle { f.vm.openPreview(file); f.vm.save(requireNotNull(f.vm.state.value.handle), document, "submitted draft", file.path) }
         compose.waitUntil(5_000) { f.vm.state.value.save != null }
         restoration.emulateSavedInstanceStateRestore()
         compose.runOnIdle {
             assertTrue(f.vm.state.value.running)
             assertFalse(answer.isCancelled)
-            answer.complete(RemoteOperationResult(file.path, RemoteOutcome.FAILED, "HTTP 409 file_version_conflict"))
+            answer.complete(BrowserOperationResult(file.path, BrowserOutcome.FAILED, "HTTP 409 file_version_conflict"))
         }
         compose.waitUntil(5_000) { !f.vm.state.value.running }
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("submitted draft")))
@@ -480,12 +520,12 @@ class RemoteWorkspacePageAndroidTest {
         coEvery { f.service.verifyUnknown(f.handle, file.path) } returns file
         f.show()
         compose.runOnIdle {
-            f.vm.execute(listOf(file.path), f.handle) { _, _ -> RemoteOperationResult(file.path, RemoteOutcome.UNKNOWN) }
+            f.vm.execute(listOf(file.path), requireNotNull(f.vm.state.value.handle)) { _, _ -> BrowserOperationResult(file.path, BrowserOutcome.UNKNOWN) }
         }
         compose.waitUntil(5_000) { !f.vm.state.value.running && f.vm.state.value.results.isNotEmpty() }
-        compose.runOnIdle { f.vm.execute(listOf("another.txt"), f.handle) { _, _ -> RemoteOperationResult("another.txt", RemoteOutcome.SUCCEEDED) } }
+        compose.runOnIdle { f.vm.execute(listOf("another.txt"), requireNotNull(f.vm.state.value.handle)) { _, _ -> BrowserOperationResult("another.txt", BrowserOutcome.SUCCEEDED) } }
         compose.waitUntil(5_000) { !f.vm.state.value.running && f.vm.state.value.results.any { it.path == "another.txt" } }
-        compose.runOnIdle { f.vm.clearResults(); assertEquals(RemoteOutcome.UNKNOWN, f.vm.state.value.results.single().outcome) }
+        compose.runOnIdle { f.vm.clearResults(); assertEquals(BrowserOutcome.UNKNOWN, f.vm.state.value.results.single().outcome) }
         compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_read_verify)).performClick()
         compose.onNodeWithText("original").performScrollTo().assertIsDisplayed()
@@ -500,26 +540,26 @@ class RemoteWorkspacePageAndroidTest {
 
     @Test fun renameWaitsForOverwriteConfirmationAndUsesTheConfirmedVersion() {
         val f = Fixture()
-        val target = RemoteFile("existing.txt", false, 16, null, "\"target-v2\"")
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(file, target), null, null)
-        coEvery { f.service.mutate(f.handle, RemoteFileAction.MOVE, file, target.path, target, false) } returns
-            RemoteOperationResult(target.path, RemoteOutcome.SUCCEEDED)
+        val target = BrowserFile("existing.txt", false, 16, null, "\"target-v2\"")
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", listOf(file, target), null, null)
+        coEvery { f.service.mutate(f.handle, BrowserFileAction.MOVE, file, target.path, target, false) } returns
+            BrowserOperationResult(target.path, BrowserOutcome.SUCCEEDED)
         f.show()
-        compose.runOnIdle { f.vm.rename(f.handle, file, target.path) }
+        compose.runOnIdle { f.vm.rename(requireNotNull(f.vm.state.value.handle), file, target.path) }
         compose.waitUntil(5_000) { f.vm.state.value.overwrite != null }
         compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_overwrite)).assertIsDisplayed()
         coVerify(exactly = 0) { f.service.mutate(any(), any(), any(), any(), any(), any()) }
         compose.onNodeWithText(compose.activity.getString(R.string.common_confirm)).performClick()
         compose.waitUntil(5_000) { !f.vm.state.value.running }
-        coVerify(exactly = 1) { f.service.mutate(f.handle, RemoteFileAction.MOVE, file, target.path, target, false) }
+        coVerify(exactly = 1) { f.service.mutate(f.handle, BrowserFileAction.MOVE, file, target.path, target, false) }
     }
 
     @Test fun folderChoiceRejectsTheOriginalLocationAndFilteringDoesNotLeakIntoAnotherDirectory() {
         val f = Fixture()
-        val folder = RemoteFile("reports", true, null, null, null)
-        val nested = RemoteFile("reports/result.txt", false, 12, null, "\"result\"")
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(file, folder), null, null)
-        coEvery { f.service.list(f.handle, "reports") } returns RemoteDirectory("reports", listOf(nested), null, null)
+        val folder = BrowserFile("reports", true, null, null, null)
+        val nested = BrowserFile("reports/result.txt", false, 12, null, "\"result\"")
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", listOf(file, folder), null, null)
+        coEvery { f.service.list(f.handle, "reports") } returns BrowserDirectory("reports", listOf(nested), null, null)
         f.show()
         compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performClick()
         compose.onNodeWithContentDescription(text(R.string.remote_workspace_filter)).performTextReplacement("notes")
@@ -542,17 +582,17 @@ class RemoteWorkspacePageAndroidTest {
 
     @Test fun batchShowsTheActualActiveItemAndCancellationKeepsPendingItemsUnstarted() {
         val f = Fixture()
-        val pending = CompletableDeferred<RemoteOperationResult>()
-        every { f.service.outcomeAfterCancellation(f.handle, file.path) } returns RemoteOutcome.CANCELLED
+        val pending = CompletableDeferred<BrowserOperationResult>()
+        every { f.service.outcomeAfterCancellation(f.handle, file.path) } returns BrowserOutcome.CANCELLED
         f.show()
-        compose.runOnIdle { f.vm.execute(listOf(file.path, "second.txt"), f.handle) { _, _ -> pending.await() } }
+        compose.runOnIdle { f.vm.execute(listOf(file.path, "second.txt"), requireNotNull(f.vm.state.value.handle)) { _, _ -> pending.await() } }
         compose.waitUntil(5_000) { f.vm.state.value.activeIndex == 0 }
         compose.onNodeWithText(compose.activity.getString(R.string.remote_workspace_active_item, 1, 2, file.name)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.common_cancel)).performClick()
         compose.waitUntil(5_000) { !f.vm.state.value.running }
         compose.runOnIdle {
             assertNull(f.vm.state.value.activeIndex)
-            assertEquals(listOf(RemoteOutcome.CANCELLED, RemoteOutcome.NOT_STARTED), f.vm.state.value.results.map { it.outcome })
+            assertEquals(listOf(BrowserOutcome.CANCELLED, BrowserOutcome.NOT_STARTED), f.vm.state.value.results.map { it.outcome })
         }
         compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
         compose.onNodeWithText(text(R.string.remote_workspace_not_started)).assertIsDisplayed()
@@ -562,7 +602,7 @@ class RemoteWorkspacePageAndroidTest {
         val f = Fixture()
         f.show()
         compose.runOnIdle {
-            f.vm.mutate(RemoteFileAction.COPY, listOf(file), "x".repeat(4096), f.handle)
+            f.vm.mutate(BrowserFileAction.COPY, listOf(file), "x".repeat(4096), requireNotNull(f.vm.state.value.handle))
             assertFalse(f.vm.state.value.running)
             assertTrue(f.vm.state.value.error!!.contains("invalid_workspace_path"))
         }
@@ -571,7 +611,7 @@ class RemoteWorkspacePageAndroidTest {
 
     @Test fun corruptPdfStopsLoadingReleasesItsCopyAndCanRetryAFreshAuthorizedRead() {
         val f = Fixture()
-        val pdf = RemoteFile("report.pdf", false, 128, null, "\"pdf-v1\"")
+        val pdf = BrowserFile("report.pdf", false, 128, null, "\"pdf-v1\"")
         val broken = java.io.File(compose.activity.cacheDir, "broken-preview.pdf").apply { writeText("not a PDF") }
         val valid = java.io.File(compose.activity.cacheDir, "valid-preview.pdf")
         val document = android.graphics.pdf.PdfDocument()
@@ -583,7 +623,7 @@ class RemoteWorkspacePageAndroidTest {
             }
             valid.outputStream().use(document::writeTo)
         } finally { document.close() }
-        coEvery { f.service.list(f.handle, "") } returns RemoteDirectory("", listOf(pdf), null, null)
+        coEvery { f.service.list(f.handle, "") } returns BrowserDirectory("", listOf(pdf), null, null)
         coEvery { f.service.previewCopy(f.handle, pdf) } returnsMany listOf(broken, valid)
         try {
             f.show()

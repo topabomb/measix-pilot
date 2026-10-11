@@ -189,15 +189,18 @@ object SearchWebToolUI : ToolUIRenderer {
         context.arguments.getStringContent("query") ?: ""
     )
 
+    private fun content(context: ToolUIContext): JsonObject? =
+        if (context.outputProjection is ToolOutputProjection.Inline) searchPreviewContent(context.content) else null
+
     private fun items(context: ToolUIContext): List<JsonElement> =
-        context.content?.jsonObjectOrNull?.get("items")?.jsonArray ?: emptyList()
+        (content(context)?.get("items") as? JsonArray).orEmpty()
 
     override fun hasSummary(context: ToolUIContext): Boolean =
-        context.content.getStringContent("answer") != null || items(context).isNotEmpty()
+        content(context).getStringContent("answer") != null || items(context).isNotEmpty()
 
     @Composable
     override fun Summary(context: ToolUIContext) {
-        context.content.getStringContent("answer")?.let { answer ->
+        content(context).getStringContent("answer")?.let { answer ->
             Text(
                 text = answer,
                 style = MaterialTheme.typography.labelSmall,
@@ -228,13 +231,33 @@ object SearchWebToolUI : ToolUIRenderer {
 
     @Composable
     override fun Preview(context: ToolUIContext, onDismissRequest: () -> Unit) {
-        val content = context.content
+        val content = content(context)
         if (content == null) {
             DefaultToolPreview(context = context)
             return
         }
         SearchWebPreview(arguments = context.arguments, content = content)
     }
+}
+
+/** Archived summaries and malformed legacy output remain available through the generic details view. */
+internal fun searchPreviewContent(content: JsonElement?): JsonObject? {
+    val result = content as? JsonObject ?: return null
+    val items = result["items"] as? JsonArray ?: return null
+    if (items.any { item ->
+        item !is JsonObject || listOf("url", "title", "text").any { key ->
+            (item[key] as? kotlinx.serialization.json.JsonPrimitive)?.isString != true
+        }
+    }) return null
+    val images = result["images"]
+    if (images != null && images !is kotlinx.serialization.json.JsonNull &&
+        (images !is JsonArray || images.any { (it as? kotlinx.serialization.json.JsonPrimitive)?.isString != true })
+    ) return null
+    val answer = result["answer"]
+    if (answer != null && answer !is kotlinx.serialization.json.JsonNull &&
+        (answer as? kotlinx.serialization.json.JsonPrimitive)?.isString != true
+    ) return null
+    return result
 }
 
 /**
@@ -695,7 +718,7 @@ private fun SearchWebPreview(
     val items = content.jsonObject["items"]?.jsonArray ?: emptyList()
     val answer = content.getStringContent("answer")
     val query = arguments.getStringContent("query") ?: ""
-    val images = content.jsonObject["images"]?.jsonArray
+    val images = (content.jsonObject["images"] as? JsonArray)
         ?.mapNotNull { it.jsonPrimitive.contentOrNull }
         ?.filter { it.isNotBlank() }
         ?: emptyList()

@@ -40,6 +40,7 @@ internal data class StartTurn(
     val epoch: Long = 0L,
     /** Allocated once with the command; reducing the same START preserves identity and time. */
     val initialStep: me.rerere.ai.ui.UIMessagePart.Step = TurnTransition.openStep(0),
+    val modelInfo: me.rerere.ai.ui.MessageModelInfo? = null,
 ) : ConversationCommand
 
 /**

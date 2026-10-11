@@ -122,6 +122,8 @@ data class TextGenerationParams(
      * Requests targeting opencode.ai write it as `x-opencode-session`; other hosts ignore it.
      */
     val providerSessionId: String? = null,
+    /** Auxiliary calls need OpenCode routing affinity without adding an OpenRouter body session. */
+    val openCodeSessionId: String? = null,
     @kotlinx.serialization.Transient
     val credentials: RequestCredentials = RequestCredentials.UserSettings,
 )

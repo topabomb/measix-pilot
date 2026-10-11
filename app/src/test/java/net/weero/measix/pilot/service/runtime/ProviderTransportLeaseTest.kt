@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service.runtime
 import me.rerere.common.configuration.ConfigurationReference
 
 
+import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.Settings
@@ -17,6 +18,7 @@ class ProviderTransportLeaseTest {
         val start = ProviderSetting.OpenAI(
             id = id,
             apiKey = "start-secret",
+            customHeaders = listOf(CustomHeader("X-Wire", "start")),
             baseUrl = "https://start.example/v1",
             chatCompletionsPath = "/chat/start",
             responsesPath = "/responses/start",
@@ -31,6 +33,7 @@ class ProviderTransportLeaseTest {
             frozen = frozen,
             live = start.copy(
                 apiKey = "rotated-secret",
+                customHeaders = listOf(CustomHeader("X-Wire", "edited")),
                 baseUrl = "https://changed.example/v1",
                 chatCompletionsPath = "/chat/changed",
                 responsesPath = "/responses/changed",
@@ -39,6 +42,7 @@ class ProviderTransportLeaseTest {
             ),
         ) as ProviderSetting.OpenAI
 
+        assertEquals(listOf(CustomHeader("X-Wire", "start")), merged.customHeaders)
         assertEquals("rotated-secret", merged.apiKey)
         assertEquals("https://start.example/v1", merged.baseUrl)
         assertEquals("/chat/start", merged.chatCompletionsPath)

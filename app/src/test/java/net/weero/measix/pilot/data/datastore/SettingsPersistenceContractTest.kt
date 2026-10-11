@@ -26,12 +26,12 @@ class SettingsPersistenceContractTest {
         assertEquals(
             listOf(
                 "dynamicColor", "themeId", "customThemes", "displaySetting",
-                "favoriteModels", "chatModelId", "fastModelId", "titleModelId",
+                "favoriteModels", "collapsedModelGroupIds", "chatModelId", "fastModelId", "titleModelId",
                 "imageGenerationModelId", "titlePrompt", "enableSuggestion", "suggestionModelId",
                 "suggestionPrompt", "attachmentInspectionModelId", "compressModelId", "compressPrompt",
                 "assistantId", "providers", "assistants", "assistantTags", "searchServices",
-                "searchCommonOptions", "selectedSearchServiceId", "mcpServers", "webDavConfig",
-                "s3Config", "ttsProviders", "selectedTTSProviderId", "defaultTTSPlaybackSpeed",
+                "searchCommonOptions", "selectedSearchServiceId", "mcpServers", "webDavBackup",
+                "webDavConnections", "currentWebDavConnectionId", "s3Config", "ttsProviders", "selectedTTSProviderId", "defaultTTSPlaybackSpeed",
                 "asrProviders", "selectedASRProviderId", "modeInjections", "quickMessages",
                 "backupReminderConfig", "launchCount", "ignoredUpdateVersion",
             ),
@@ -55,12 +55,26 @@ class SettingsPersistenceContractTest {
 
         val encoded = JsonInstant.encodeToString(goldenFixture())
         assertEquals(golden, encoded)
+        val beforeProviderHeaders = golden.replace("\"balanceOption\":{\"enabled\":false,\"apiPath\":\"/credits\",\"resultPath\":\"data.total_usage\"},\"customHeaders\":[]", "\"balanceOption\":{\"enabled\":false,\"apiPath\":\"/credits\",\"resultPath\":\"data.total_usage\"}")
+        assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(beforeProviderHeaders)))
         val beforeResponsesPath = golden.replace("\"responsesPath\":\"/responses\",", "")
         assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(beforeResponsesPath)))
         val legacy = golden.replaceFirst("{", "{\"developerMode\":true,")
         assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(legacy)))
-        // 解码后再编码必须逐字相同；不用对象 equals，因为 search SDK 的 BingLocalOptions 非 data class。
+        // 备份载荷解码后再编码必须逐字相同，包含默认字段和枚举表示。
         assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(encoded)))
+    }
+
+    @Test
+    fun `Volcengine settings backup preserves type identity order selection and parameters`() {
+        val original = goldenFixture()
+        val voice = me.rerere.tts.provider.TTSProviderSetting.Volcengine(apiKey = "fixture-key", baseUrl = "https://voice.example",
+            resourceId = "resource", speaker = "voice", speechRate = -40)
+        val settings = original.copy(ttsProviders = original.ttsProviders + voice, selectedTTSProviderId = voice.id)
+        val decoded = JsonInstant.decodeFromString<Settings>(JsonInstant.encodeToString(settings))
+        assertEquals(settings.ttsProviders, decoded.ttsProviders)
+        assertEquals(voice.id, decoded.selectedTTSProviderId)
+        assertEquals(original.ttsProviders, decoded.ttsProviders.dropLast(1))
     }
 
     private fun goldenFixture(): Settings = Settings(
@@ -164,7 +178,7 @@ class SettingsPersistenceContractTest {
                 content = "quick content",
             ),
         ),
-        webDavConfig = WebDavConfig(url = "https://dav.example", username = "u", password = "p"),
+        webDavBackup = net.weero.measix.pilot.data.configuration.WebDavBackupPreferences(resourceId = "golden-dav", includeDurableAggregate = false),
         s3Config = net.weero.measix.pilot.data.sync.s3.S3Config(
             bucket = "golden-bucket",
             region = "us-east-1",

@@ -121,7 +121,7 @@ pending backup restore
   → pending assistant deletion
   → pending enterprise exit（复验原域运行已终止并清理）
   → pending enterprise data reset 再次完成待处理清理
-  → post-recovery maintenance → pending backup complete
+  → post-recovery maintenance（含 Workspace 临时目录清理）→ pending backup complete
   → Ready
 ```
 

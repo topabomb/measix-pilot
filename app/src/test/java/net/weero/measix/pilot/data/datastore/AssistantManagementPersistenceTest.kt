@@ -36,7 +36,7 @@ class AssistantManagementPersistenceTest {
         for (failure in listOf("admission", "artifact", "datastore")) {
             val appScope = AppScope(StandardTestDispatcher(testScheduler))
             val data = ControlledData(initial, fail = failure == "datastore")
-            val settings = SettingsStore(context(), appScope, data)
+            val settings = SettingsStore(context(), appScope, data, StandardTestDispatcher(testScheduler))
             val child = buildToolCreatedAssistant("Child", "d", "p")
             try {
                 runCurrent()
@@ -60,7 +60,7 @@ class AssistantManagementPersistenceTest {
         val appScope = AppScope(StandardTestDispatcher(testScheduler))
         val ack = CompletableDeferred<Unit>()
         val data = ControlledData(initial, acknowledgement = ack)
-        val settings = SettingsStore(context(), appScope, data)
+        val settings = SettingsStore(context(), appScope, data, StandardTestDispatcher(testScheduler))
         val child = buildToolCreatedAssistant("Child", "d", "p")
         try {
             val job = launch { settings.manageAssistant(packet.identity.scope, appliedConfiguration(packet), caller,
@@ -84,7 +84,7 @@ class AssistantManagementPersistenceTest {
     @Test fun `cancellation while waiting for artifact ownership is not shielded into a new commit`() = runTest {
         val appScope = AppScope(StandardTestDispatcher(testScheduler))
         val data = ControlledData(initial)
-        val settings = SettingsStore(context(), appScope, data)
+        val settings = SettingsStore(context(), appScope, data, StandardTestDispatcher(testScheduler))
         val readyToCommit = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         try {

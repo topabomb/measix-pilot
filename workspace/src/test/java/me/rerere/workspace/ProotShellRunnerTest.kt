@@ -55,12 +55,15 @@ class ProotShellRunnerTest {
             cwd = "projects/myapp",
             bindMounts = listOf(WorkspaceBindMount(skills, "/skills")),
         )
+        writeTestElf(File(linuxDir, "usr/bin/env"), 62)
+        writeTestElf(File(linuxDir, "bin/bash"), 62)
         val spec = ProotLaunchSpec.from(
             nativeLibraryDir = nativeDir,
             filesDir = context.filesDir,
             linuxDir = context.linuxDir,
             tempDir = context.tempDir,
             bindMounts = context.bindMounts,
+            guestEnvironment = RootfsEnvironment(listOf("/usr/bin/env"), "/bin/bash", null),
             guestCwd = context.cwd,
             command = context.command,
         )

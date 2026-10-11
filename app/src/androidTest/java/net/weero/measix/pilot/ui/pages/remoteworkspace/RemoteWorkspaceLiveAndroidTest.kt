@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.pages.remoteworkspace
 
+import net.weero.measix.pilot.service.files.*
+
 import android.content.ContentValues
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
@@ -88,11 +90,11 @@ class RemoteWorkspaceLiveAndroidTest {
                     assertEquals(input.optBoolean("expectedMcpAvailable", false), remote.summary.value!!.mcpAvailable)
                     evidence.put("mcpAvailable", remote.summary.value!!.mcpAvailable)
                     val folder = "android-validation-${System.currentTimeMillis()}"
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.createDirectory(opened, folder).outcome)
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.createDirectory(opened, folder).outcome)
                     val textPath = "$folder/notes.txt"
                     val original = byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) +
                         "# Android remote workspace\r\n\r\nBody \uFEFF marker. Files before configuration.\r\n".toByteArray()
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.upload(opened, textPath, null, original.size.toLong(), { original.inputStream() }).outcome)
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.upload(opened, textPath, null, original.size.toLong(), { original.inputStream() }).outcome)
                     var file = remote.list(opened, folder).files.single()
                     assertConflict(remote.upload(opened, textPath, null, 5, { "wrong".byteInputStream() }))
                     assertArrayEquals(original, readBytes(remote, opened, file))
@@ -109,11 +111,11 @@ class RemoteWorkspaceLiveAndroidTest {
                     evidence.put("configurationPendingWithoutAppliedSnapshot", !configurationPublished)
                         .put("configurationPublished", configurationPublished)
                     val competing = remote.readText(opened, file)
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.save(opened, competing, competing.content.text + "Second editor\n").outcome)
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.save(opened, competing, competing.content.text + "Second editor\n").outcome)
                     val conflict = remote.save(opened, document, document.content.text + "My unsaved draft\n")
-                    assertEquals(RemoteOutcome.FAILED, conflict.outcome)
+                    assertEquals(BrowserOutcome.FAILED, conflict.outcome)
                     assertTrue(conflict.diagnostic.orEmpty().contains("409") || conflict.diagnostic.orEmpty().contains("412"))
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.save(opened, document, "My unsaved draft\n", "$folder/draft-copy.txt").outcome)
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.save(opened, document, "My unsaved draft\n", "$folder/draft-copy.txt").outcome)
                     val copied = remote.list(opened, folder).files.single { it.name == "draft-copy.txt" }
                     assertArrayEquals(byteArrayOf(0xef.toByte(), 0xbb.toByte(), 0xbf.toByte()) +
                         "My unsaved draft\r\n".toByteArray(), readBytes(remote, opened, copied))
@@ -126,15 +128,15 @@ class RemoteWorkspaceLiveAndroidTest {
                     put(remote, opened, targetPath, "original target".toByteArray())
                     val staleSource = remote.list(opened, folder).files.single { it.path == sourcePath }
                     put(remote, opened, sourcePath, "updated source".toByteArray(), staleSource.etag)
-                    for (action in listOf(RemoteFileAction.COPY, RemoteFileAction.MOVE)) {
+                    for (action in listOf(BrowserFileAction.COPY, BrowserFileAction.MOVE)) {
                         assertConflict(remote.mutate(opened, action, staleSource, "$folder/stale-${action.name}.txt"))
                         assertFalse(remote.list(opened, folder).files.any { it.name == "stale-${action.name}.txt" })
                     }
                     val currentSource = remote.list(opened, folder).files.single { it.path == sourcePath }
                     assertArrayEquals("updated source".toByteArray(), readBytes(remote, opened, currentSource))
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.mutate(opened, RemoteFileAction.COPY, currentSource,
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.mutate(opened, BrowserFileAction.COPY, currentSource,
                         "$folder/copied.txt").outcome)
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.mutate(opened, RemoteFileAction.MOVE, currentSource,
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.mutate(opened, BrowserFileAction.MOVE, currentSource,
                         "$folder/moved.txt").outcome)
                     assertFalse(remote.list(opened, folder).files.any { it.path == sourcePath })
                     for (name in listOf("copied.txt", "moved.txt")) {
@@ -158,7 +160,7 @@ class RemoteWorkspaceLiveAndroidTest {
                             }
                         }
                     })
-                    assertEquals(result.diagnostic, RemoteOutcome.SUCCEEDED, result.outcome)
+                    assertEquals(result.diagnostic, BrowserOutcome.SUCCEEDED, result.outcome)
                     file = remote.list(opened, folder).files.single { it.path == largePath }
                     val downloadDigest = MessageDigest.getInstance("SHA-256")
                     var received = 0L
@@ -217,7 +219,7 @@ class RemoteWorkspaceLiveAndroidTest {
                         fail("Mismatching space must be rejected")
                     } catch (error: PlatformHttpException) { assertEquals("workspace_space_mismatch", error.problem?.code) }
                     evidence.put("foreignSpaceRejected", true)
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.mutate(opened, RemoteFileAction.DELETE, file).outcome)
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.mutate(opened, BrowserFileAction.DELETE, file).outcome)
                     val bitmap = android.graphics.Bitmap.createBitmap(512, 320, android.graphics.Bitmap.Config.ARGB_8888)
                     bitmap.eraseColor(android.graphics.Color.rgb(42, 88, 128))
                     android.graphics.Canvas(bitmap).drawText("Remote workspace", 40f, 160f,
@@ -235,8 +237,8 @@ class RemoteWorkspaceLiveAndroidTest {
                     }.toByteArray()
                     val markdown = "# Remote Markdown\n\n![Space image](images/space%20name.png)\n\n" +
                         "![Chinese image](images/%E4%B8%AD%E6%96%87.png)\n\n![Plus image](images/a+b.png)\n"
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.createDirectory(opened, "$folder/images").outcome)
-                    assertEquals(RemoteOutcome.SUCCEEDED, remote.createDirectory(opened, "$folder/docs").outcome)
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.createDirectory(opened, "$folder/images").outcome)
+                    assertEquals(BrowserOutcome.SUCCEEDED, remote.createDirectory(opened, "$folder/docs").outcome)
                     for (name in listOf("space name.png", "中文.png", "a+b.png")) {
                         put(remote, opened, "$folder/images/$name", picture)
                     }
@@ -244,7 +246,7 @@ class RemoteWorkspaceLiveAndroidTest {
                         "# Parent image\n\n![Parent image](../images/space%20name.png)\n".toByteArray())
                     for (name in listOf("selected-a.txt", "selected-b.txt")) put(remote, opened, "$folder/$name", name.toByteArray())
                     for ((name, bytes) in listOf("sample.png" to picture, "sample.pdf" to pdf, "readme.md" to markdown.toByteArray())) {
-                        assertEquals(RemoteOutcome.SUCCEEDED, remote.upload(opened, "$folder/$name", null,
+                        assertEquals(BrowserOutcome.SUCCEEDED, remote.upload(opened, "$folder/$name", null,
                             bytes.size.toLong(), { bytes.inputStream() }).outcome)
                     }
                     remote.close(opened); handle = null
@@ -294,7 +296,7 @@ class RemoteWorkspaceLiveAndroidTest {
                     compose.onNodeWithText(context.getString(net.weero.measix.pilot.R.string.remote_workspace_selected, 2)).assertIsDisplayed()
                     for ((name, remaining) in listOf("selected-a.txt" to 1, "selected-b.txt" to 0)) {
                         val selectedFile = remote.list(peer, folder).files.single { it.name == name }
-                        assertEquals(RemoteOutcome.SUCCEEDED, remote.mutate(peer, RemoteFileAction.DELETE, selectedFile).outcome)
+                        assertEquals(BrowserOutcome.SUCCEEDED, remote.mutate(peer, BrowserFileAction.DELETE, selectedFile).outcome)
                         compose.runOnIdle { vm.retry() }
                         compose.waitUntil(10_000) { vm.state.value.directory?.files?.none { it.name == name } == true }
                         compose.onNodeWithText(name).assertDoesNotExist()
@@ -318,7 +320,7 @@ class RemoteWorkspaceLiveAndroidTest {
                     compose.waitUntil(10_000) { vm.state.value.overwrite != null }
                     compose.onNodeWithText(context.getString(net.weero.measix.pilot.R.string.common_confirm)).performClick()
                     compose.waitUntil(10_000) {
-                        !vm.state.value.running && vm.state.value.results.firstOrNull()?.outcome == RemoteOutcome.SUCCEEDED &&
+                        !vm.state.value.running && vm.state.value.results.firstOrNull()?.outcome == BrowserOutcome.SUCCEEDED &&
                             vm.state.value.directory?.files?.none { it.path == source.path } == true
                     }
                     compose.onNodeWithText(source.name).assertDoesNotExist()
@@ -395,14 +397,14 @@ class RemoteWorkspaceLiveAndroidTest {
         path: String, bytes: ByteArray, etag: String? = null,
     ) {
         val result = remote.upload(handle, path, etag, bytes.size.toLong(), { bytes.inputStream() })
-        assertEquals(result.diagnostic, RemoteOutcome.SUCCEEDED, result.outcome)
+        assertEquals(result.diagnostic, BrowserOutcome.SUCCEEDED, result.outcome)
     }
 
-    private suspend fun readBytes(remote: RemoteWorkspaceService, handle: RemoteWorkspaceHandle, file: RemoteFile): ByteArray =
+    private suspend fun readBytes(remote: RemoteWorkspaceService, handle: RemoteWorkspaceHandle, file: BrowserFile): ByteArray =
         java.io.ByteArrayOutputStream().also { bytes -> remote.download(handle, file, { bytes }) }.toByteArray()
 
-    private fun assertConflict(result: RemoteOperationResult) {
-        assertEquals(result.diagnostic, RemoteOutcome.FAILED, result.outcome)
+    private fun assertConflict(result: BrowserOperationResult) {
+        assertEquals(result.diagnostic, BrowserOutcome.FAILED, result.outcome)
         assertTrue(result.diagnostic, result.diagnostic.orEmpty().contains("409") || result.diagnostic.orEmpty().contains("412"))
     }
 

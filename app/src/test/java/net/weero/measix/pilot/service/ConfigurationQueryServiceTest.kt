@@ -75,7 +75,7 @@ class ConfigurationQueryServiceTest {
         val selection: RealmSelection) {
         var beforeConfiguration: suspend () -> Unit = {}
         private val settings = mockk<SettingsStore>()
-        val queries = ConfigurationQueryService(settings, sessions, ApplicationRecoveryGate().apply { ready() })
+        val queries = ConfigurationQueryService(settings, sessions, ApplicationRecoveryGate().apply { ready() }, mockk())
         init {
             coEvery { settings.withResolvedConfiguration<Any?>(any(), any(), any()) } coAnswers {
                 beforeConfiguration()

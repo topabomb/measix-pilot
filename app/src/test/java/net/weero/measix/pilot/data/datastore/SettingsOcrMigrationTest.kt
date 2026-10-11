@@ -20,6 +20,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class SettingsOcrMigrationTest {
@@ -134,9 +135,9 @@ class SettingsOcrMigrationTest {
     }
 
     @Test
-    fun `invalid json is returned as is`() {
+    fun `invalid backup settings JSON fails before a typed decoder can ignore old fields`() {
         val raw = "not json"
-        assertEquals(raw, migrateLegacySettingsJson(raw))
+        assertThrows(Exception::class.java) { migrateLegacySettingsJson(raw) }
     }
 
     @Test

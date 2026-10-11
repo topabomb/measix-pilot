@@ -342,8 +342,7 @@ internal class PlatformEnterpriseService(
         val attempt = sessions.beginPlatformRefresh(sessionId)
         val response = client.refresh(connection ?: attempt.context.platform.connection, attempt.credential.refreshToken,
             requireNotNull(attempt.credential.pendingIdempotencyKey))
-        sessions.acceptPlatformRefresh(attempt, response)
-        return sessions.platformAccessToken(sessionId)
+        return sessions.acceptPlatformRefresh(attempt, response)
             ?: throw EnterpriseConfigurationException("platform_access_token_expired")
     }
 

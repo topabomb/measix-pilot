@@ -12,6 +12,7 @@ import net.weero.measix.pilot.data.configuration.configurationScopeFromStorageKe
 import net.weero.measix.pilot.data.configuration.storageKey
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.UserSettingsDocument
+import net.weero.measix.pilot.data.datastore.migrateLegacySettingsJson
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
 import net.weero.measix.pilot.data.db.createAppDatabase
@@ -89,7 +90,9 @@ internal class BackupDataGraph(private val context: Context) {
         current: UserSettingsDocument,
         output: File,
     ): Settings {
-        val restored = JsonInstant.decodeFromString<Settings>(File(personal, BackupArchiveService.SETTINGS_ENTRY).readText())
+        val restored = JsonInstant.decodeFromString<Settings>(
+            migrateLegacySettingsJson(File(personal, BackupArchiveService.SETTINGS_ENTRY).readText(Charsets.UTF_8)),
+        )
         val manifest = File(personal, BackupArchiveService.MANIFEST_ENTRY)
         val legacy = !manifest.isFile || JsonInstant.decodeFromString<DurableBackupManifest>(manifest.readText()).version != BackupArchiveService.MANIFEST_VERSION
         val retainedRoots = ArtifactReferencePolicy.scopedRoots(current).filterKeys { it != ConfigurationScope.Personal }

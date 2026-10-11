@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.repository
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
 import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.data.datastore.ConversationSortOrder
 import androidx.paging.PagingSource
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
@@ -97,20 +98,31 @@ class ConversationRepository(
         assistantId: ConfigurationReference,
     ): List<String> = conversationDAO.getRootConversationTitles(scope, assistantId.toString())
 
-    fun getConversationsOfAssistant(scope: ConfigurationScope, assistantId: ConfigurationReference): Flow<List<ConversationListRecord>> {
-        return conversationDAO
-            .getConversationsOfAssistant(scope, assistantId.toString())
-            .map { entities -> entities.map(::conversationEntityToListRecord) }
+    fun getConversationsOfAssistant(scope: ConfigurationScope, assistantId: ConfigurationReference,
+        sort: ConversationSortOrder = ConversationSortOrder.UPDATED): Flow<List<ConversationListRecord>> =
+        (when (sort) {
+            ConversationSortOrder.UPDATED -> conversationDAO.getConversationsOfAssistant(scope, assistantId.toString())
+            ConversationSortOrder.CREATED -> conversationDAO.getConversationsOfAssistantByCreated(scope, assistantId.toString())
+        }).map { entities -> entities.map(::conversationEntityToListRecord) }
+
+    fun getRootConversations(scope: ConfigurationScope,
+        sort: ConversationSortOrder = ConversationSortOrder.UPDATED): Flow<List<ConversationListRecord>> =
+        (when (sort) {
+            ConversationSortOrder.UPDATED -> conversationDAO.getRootConversations(scope)
+            ConversationSortOrder.CREATED -> conversationDAO.getRootConversationsByCreated(scope)
+        }).map { entities -> entities.map(::conversationEntityToListRecord) }
+
+    fun unfiledPagingSource(scope: ConfigurationScope, assistantId: ConfigurationReference,
+        sort: ConversationSortOrder = ConversationSortOrder.UPDATED): PagingSource<Int, LightConversationEntity> = when (sort) {
+        ConversationSortOrder.UPDATED -> conversationDAO.getUnfiledConversationsOfAssistantPaging(scope, assistantId.toString())
+        ConversationSortOrder.CREATED -> conversationDAO.getUnfiledConversationsOfAssistantPagingByCreated(scope, assistantId.toString())
     }
 
-    fun getRootConversations(scope: ConfigurationScope): Flow<List<ConversationListRecord>> =
-        conversationDAO.getRootConversations(scope).map { entities -> entities.map(::conversationEntityToListRecord) }
-
-    fun unfiledPagingSource(scope: ConfigurationScope, assistantId: ConfigurationReference): PagingSource<Int, LightConversationEntity> =
-        conversationDAO.getUnfiledConversationsOfAssistantPaging(scope, assistantId.toString())
-
-    fun folderPagingSource(scope: ConfigurationScope, folderId: Uuid): PagingSource<Int, LightConversationEntity> =
-        conversationDAO.getConversationsOfFolderPaging(scope, folderId.toString())
+    fun folderPagingSource(scope: ConfigurationScope, folderId: Uuid,
+        sort: ConversationSortOrder = ConversationSortOrder.UPDATED): PagingSource<Int, LightConversationEntity> = when (sort) {
+        ConversationSortOrder.UPDATED -> conversationDAO.getConversationsOfFolderPaging(scope, folderId.toString())
+        ConversationSortOrder.CREATED -> conversationDAO.getConversationsOfFolderPagingByCreated(scope, folderId.toString())
+    }
 
     suspend fun getConversationById(uuid: Uuid): Conversation? = database.withTransaction {
         val entity = conversationDAO.getConversationById(uuid.toString()) ?: return@withTransaction null
@@ -309,29 +321,6 @@ class ConversationRepository(
         is ConversationWrite.Mutate -> {
             if (!write.mutation.hasChanges() && write.executionFacts == null) false
             else applyMutation(write.mutation, write.executionFacts)
-        }
-        is ConversationWrite.MutateTree -> {
-            artifactStore.withLifecycleLock {
-                val prepared = write.mutations.map { prepareMutation(it, null) }
-                database.withTransaction {
-                    val root = requireNotNull(conversationDAO.getConversationById(write.rootId.toString()))
-                    check(root.parentConversationId == null) { "tree_mutation_requires_root" }
-                    val changedIds = write.mutations.map { it.conversationId }
-                    check(changedIds.distinct().size == changedIds.size && write.rootId in changedIds)
-                    check(changedIds.none { it in write.deletedChildIds })
-                    (changedIds.filterNot { it == write.rootId } + write.deletedChildIds).forEach { id ->
-                        val child = requireNotNull(conversationDAO.getConversationById(id.toString()))
-                        check(child.parentConversationId == root.id) { "tree_mutation_child_mismatch" }
-                    }
-                    prepared.forEach { it() }
-                    write.deletedChildIds.forEach { id ->
-                        favoriteDAO.deleteNodeFavoritesOfConversation(id.toString())
-                        messageFtsManager.deleteConversationInTransaction(id.toString())
-                        conversationDAO.deleteById(id.toString())
-                    }
-                }
-            }
-            true
         }
     }
 

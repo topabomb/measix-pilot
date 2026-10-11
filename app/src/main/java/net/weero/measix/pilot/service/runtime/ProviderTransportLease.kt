@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service.runtime
 
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.provider.ClaudePromptCacheTtl
+import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.data.datastore.Settings
@@ -15,10 +16,12 @@ internal fun interface ProviderTransportLease {
 internal sealed interface FrozenProviderWireShape {
     val id: ConfigurationReference
     val model: Model
+    val customHeaders: List<CustomHeader>
 
     data class OpenAI(
         override val id: ConfigurationReference,
         override val model: Model,
+        override val customHeaders: List<CustomHeader>,
         val enabled: Boolean,
         val name: String,
         val baseUrl: String,
@@ -31,6 +34,7 @@ internal sealed interface FrozenProviderWireShape {
     data class Google(
         override val id: ConfigurationReference,
         override val model: Model,
+        override val customHeaders: List<CustomHeader>,
         val enabled: Boolean,
         val name: String,
         val baseUrl: String,
@@ -43,6 +47,7 @@ internal sealed interface FrozenProviderWireShape {
     data class Claude(
         override val id: ConfigurationReference,
         override val model: Model,
+        override val customHeaders: List<CustomHeader>,
         val enabled: Boolean,
         val name: String,
         val baseUrl: String,
@@ -59,6 +64,7 @@ internal fun freezeProviderWireShape(
     is ProviderSetting.OpenAI -> FrozenProviderWireShape.OpenAI(
         id = setting.id,
         model = model,
+        customHeaders = setting.customHeaders.toList(),
         enabled = setting.enabled,
         name = setting.name,
         baseUrl = setting.baseUrl,
@@ -71,6 +77,7 @@ internal fun freezeProviderWireShape(
     is ProviderSetting.Google -> FrozenProviderWireShape.Google(
         id = setting.id,
         model = model,
+        customHeaders = setting.customHeaders.toList(),
         enabled = setting.enabled,
         name = setting.name,
         baseUrl = setting.baseUrl,
@@ -83,6 +90,7 @@ internal fun freezeProviderWireShape(
     is ProviderSetting.Claude -> FrozenProviderWireShape.Claude(
         id = setting.id,
         model = model,
+        customHeaders = setting.customHeaders.toList(),
         enabled = setting.enabled,
         name = setting.name,
         baseUrl = setting.baseUrl,
@@ -158,6 +166,7 @@ internal fun mergeProviderTransportCredentials(
                 enabled = frozen.enabled,
                 name = frozen.name,
                 models = listOf(frozen.model),
+                customHeaders = frozen.customHeaders,
                 apiKey = live.apiKey,
                 baseUrl = frozen.baseUrl,
                 chatCompletionsPath = frozen.chatCompletionsPath,
@@ -174,6 +183,7 @@ internal fun mergeProviderTransportCredentials(
                 enabled = frozen.enabled,
                 name = frozen.name,
                 models = listOf(frozen.model),
+                customHeaders = frozen.customHeaders,
                 apiKey = live.apiKey,
                 baseUrl = frozen.baseUrl,
                 vertexAI = frozen.vertexAI,
@@ -192,6 +202,7 @@ internal fun mergeProviderTransportCredentials(
                 enabled = frozen.enabled,
                 name = frozen.name,
                 models = listOf(frozen.model),
+                customHeaders = frozen.customHeaders,
                 apiKey = live.apiKey,
                 baseUrl = frozen.baseUrl,
                 promptCaching = frozen.promptCaching,

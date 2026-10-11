@@ -32,7 +32,6 @@ import net.weero.measix.pilot.data.ai.mcp.NetworkMonitor
 import net.weero.measix.pilot.service.McpApplicationService
 import net.weero.measix.pilot.service.McpOAuthCallbackKeepAlive
 import net.weero.measix.pilot.service.McpQueryService
-import net.weero.measix.pilot.data.sync.webdav.WebDavSync
 import me.rerere.search.SearchService
 import net.weero.measix.pilot.data.sync.S3Sync
 import net.weero.measix.pilot.data.sync.BackupArchiveService
@@ -233,14 +232,6 @@ val dataSourceModule = module {
             database = get(),
             artifactStore = get(),
             generatedMediaStore = get(),
-        )
-    }
-
-    single {
-        WebDavSync(
-            context = get(),
-            httpClient = get(),
-            archiveService = get(),
         )
     }
 

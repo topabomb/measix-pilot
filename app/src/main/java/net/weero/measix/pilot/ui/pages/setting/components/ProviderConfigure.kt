@@ -16,6 +16,8 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import net.weero.measix.pilot.ui.pages.assistant.detail.CustomHeaders
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -76,6 +78,13 @@ fun ProviderConfigure(
             is ProviderSetting.Google -> ProviderConfigureGoogle(provider, onEdit)
             is ProviderSetting.Claude -> ProviderConfigureClaude(provider, onEdit)
         }
+        var headersExpanded by remember(provider.id) { mutableStateOf(false) }
+        TextButton(onClick = { headersExpanded = !headersExpanded }) {
+            Text("${stringResource(R.string.assistant_page_custom_headers)} (${provider.customHeaders.size})")
+        }
+        if (headersExpanded) {
+            CustomHeaders(provider.customHeaders) { onEdit(provider.copyProvider(customHeaders = it)) }
+        }
     }
 }
 
@@ -103,19 +112,19 @@ fun ProviderSetting.convertTo(type: KClass<out ProviderSetting>): ProviderSettin
     return when (type) {
         ProviderSetting.OpenAI::class -> ProviderSetting.OpenAI(
             id = this.id, enabled = this.enabled, name = this.name, models = this.models,
-            balanceOption = this.balanceOption, builtIn = this.builtIn,
+            balanceOption = this.balanceOption, builtIn = this.builtIn, customHeaders = this.customHeaders,
             description = this.description, shortDescription = this.shortDescription,
             apiKey = apiKey, baseUrl = convertedBaseUrl
         )
         ProviderSetting.Google::class -> ProviderSetting.Google(
             id = this.id, enabled = this.enabled, name = this.name, models = this.models,
-            balanceOption = this.balanceOption, builtIn = this.builtIn,
+            balanceOption = this.balanceOption, builtIn = this.builtIn, customHeaders = this.customHeaders,
             description = this.description, shortDescription = this.shortDescription,
             apiKey = apiKey, baseUrl = convertedBaseUrl
         )
         ProviderSetting.Claude::class -> ProviderSetting.Claude(
             id = this.id, enabled = this.enabled, name = this.name, models = this.models,
-            balanceOption = this.balanceOption, builtIn = this.builtIn,
+            balanceOption = this.balanceOption, builtIn = this.builtIn, customHeaders = this.customHeaders,
             description = this.description, shortDescription = this.shortDescription,
             apiKey = apiKey, baseUrl = convertedBaseUrl
         )

@@ -97,5 +97,5 @@
   "openapi": "3.0.3",
   "paths": {},
   "x-source": "api/client/client-control.openapi.yaml",
-  "x-source-sha256": "e7e457c52decf4ac92c94c90dd27af0b7593c7358a1231ac05f1785c6a195079"
+  "x-source-sha256": "55fb1ea7404ed71135948a94733b3160366adb991be3abda0c0af481f10e2cc8"
 }

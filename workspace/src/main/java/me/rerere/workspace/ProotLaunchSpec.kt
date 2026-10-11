@@ -47,6 +47,7 @@ data class ProotLaunchSpec(
             linuxDir: File,
             tempDir: File,
             bindMounts: List<WorkspaceBindMount>,
+            guestEnvironment: RootfsEnvironment,
             guestCwd: String = "",
             command: String? = null,
         ): ProotLaunchSpec {
@@ -78,8 +79,8 @@ data class ProotLaunchSpec(
                     arguments += path
                 }
             }
+            arguments += guestEnvironment.envCommand
             arguments += listOf(
-                "/usr/bin/env",
                 "-i",
                 "HOME=/root",
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -87,7 +88,7 @@ data class ProotLaunchSpec(
                 "LANG=C.UTF-8",
                 "LC_ALL=C.UTF-8",
                 "USER=root",
-                "SHELL=/bin/bash",
+                "SHELL=${guestEnvironment.shell}",
                 "PWD=$prootCwd",
             )
             // 非交互执行没有可回退的终端：显式告知子进程，避免 git/man/apt 等挂起或输出转义序列。
@@ -101,14 +102,14 @@ data class ProotLaunchSpec(
             }
             if (command != null) {
                 arguments += listOf(
-                    "/bin/bash",
+                    guestEnvironment.shell,
                     "-c",
                     "eval \"\$1\"",
                     "MeasixPilot",
                     command,
                 )
             } else {
-                arguments += "/bin/bash"
+                arguments += guestEnvironment.shell
             }
             return ProotLaunchSpec(
                 executable = executable,

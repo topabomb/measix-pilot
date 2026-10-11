@@ -73,6 +73,7 @@ data class Assistant(
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBodies: List<CustomBody> = emptyList(),
     val mcpServers: Set<ConfigurationReference> = emptySet(),
+    @Serializable(with = net.weero.measix.pilot.data.ai.tools.local.LocalToolOptionsSerializer::class)
     val localTools: List<LocalToolOption> = DEFAULT_ASSISTANT_LOCAL_TOOLS,
     val enableWebSearch: Boolean = false, // 网络搜索开关(每个助手独立)
     val builtInSearch: Boolean? = null,

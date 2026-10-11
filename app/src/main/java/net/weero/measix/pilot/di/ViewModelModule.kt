@@ -47,6 +47,8 @@ val viewModelModule = module {
     }
     viewModelOf(::ChatDrawerVM)
     viewModelOf(::SettingVM)
+    viewModel { net.weero.measix.pilot.ui.pages.setting.WebDavSettingsVM(get(), get(), get()) }
+    viewModel { parameters -> net.weero.measix.pilot.ui.pages.webdav.WebDavFileVM(parameters.getOrNull(), get(), get(), get()) }
     viewModelOf(::ModelSettingsVM)
     viewModelOf(::EnterpriseVM)
     viewModel { parameters -> net.weero.measix.pilot.ui.pages.remoteworkspace.RemoteWorkspaceVM(parameters.getOrNull(), get(), get()) }

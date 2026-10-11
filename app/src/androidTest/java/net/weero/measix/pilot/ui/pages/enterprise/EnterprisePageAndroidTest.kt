@@ -1107,6 +1107,11 @@ class EnterprisePageAndroidTest {
 
         fun show(withVerticalHinge: Boolean = false, restoration: StateRestorationTester? = null) {
             every { conversationQuery.observeCurrentSelection() } returns state.map { it.selection }
+            every { configurationQueries.observeWebDavConfiguration() } returns state.map {
+                it.selection?.let { selection ->
+                    WebDavConfigurationReadState.Available(selection, emptyList(), null)
+                } ?: WebDavConfigurationReadState.Loading
+            }
             every { service.observe() } returns state
             every { service.runtimeUsageChanges() } returns emptyFlow()
             coEvery { service.recentUpdates(any(), any()) } returns recentUpdates

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -66,15 +67,17 @@ fun JsonTree(
             onDismissRequest = { selectedString = null },
             sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
         ) {
-            Text(
-                text = content,
-                fontFamily = JetbrainsMono,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                style = MaterialTheme.typography.bodySmall
-            )
+            SelectionContainer {
+                Text(
+                    text = content,
+                    fontFamily = JetbrainsMono,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }

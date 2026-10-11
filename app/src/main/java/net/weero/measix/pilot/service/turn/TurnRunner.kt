@@ -89,9 +89,6 @@ class TurnRunner(
     internal suspend fun run(inputs: TurnRunInputs): TurnRunResult = withContext(Dispatchers.IO) {
         val state = TurnRunState(inputs, context)
         val result = try {
-            // Preserve the attempted model even when Provider IO fails before its first chunk.
-            val assistant = state.messages.last()
-            state.replaceMessages(state.messages.withAssistant(assistant.copy(modelId = assistant.modelId ?: state.model.id)))
             inputs.onAssistantObserved(state.messages.last())
             runLoop(state)
         } catch (error: CancellationException) {

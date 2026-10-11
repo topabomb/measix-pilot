@@ -2,6 +2,8 @@ package net.weero.measix.pilot.ui.pages.backup
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -10,9 +12,13 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.datastore.WebDavConfig
-import net.weero.measix.pilot.data.sync.webdav.WebDavBackupItem
-import net.weero.measix.pilot.data.sync.webdav.WebDavSync
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.*
+import net.weero.measix.pilot.service.*
+import net.weero.measix.pilot.data.configuration.WebDavBackupPreferences
+import net.weero.measix.pilot.service.webdav.WebDavBackupItem
+import net.weero.measix.pilot.service.webdav.WebDavBackupService
+import net.weero.measix.pilot.service.webdav.WebDavBackupTarget
 import net.weero.measix.pilot.data.sync.S3BackupItem
 import net.weero.measix.pilot.data.sync.S3Sync
 import net.weero.measix.pilot.utils.UiState
@@ -20,11 +26,13 @@ import android.net.Uri
 import java.io.File
 import net.weero.measix.pilot.service.BackupRestoreApplicationService
 
-class BackupVM(
+class BackupVM internal constructor(
     private val settingsStore: SettingsStore,
-    private val webDavSync: WebDavSync,
+    private val webDav: WebDavBackupService,
     private val s3Sync: S3Sync,
     private val restoreApplicationService: BackupRestoreApplicationService,
+    private val queries: ConfigurationQueryService,
+    private val commands: ConfigurationApplicationService,
 ) : ViewModel() {
     val settings = settingsStore.userSettings.stateIn(
         scope = viewModelScope,
@@ -32,11 +40,46 @@ class BackupVM(
         initialValue = Settings.dummy()
     )
 
-    val webDavBackupItems = MutableStateFlow<UiState<List<WebDavBackupItem>>>(UiState.Idle)
+    internal val webDavBackupItems = MutableStateFlow<UiState<List<WebDavBackupItem>>>(UiState.Idle)
     val s3BackupItems = MutableStateFlow<UiState<List<S3BackupItem>>>(UiState.Idle)
 
+    internal val webDavConfiguration = queries.observeWebDavConfiguration()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, WebDavConfigurationReadState.Loading)
+    internal val webDavIssue = MutableStateFlow<Throwable?>(null)
+    internal val webDavReady = MutableStateFlow(false)
+    private val target = MutableStateFlow<WebDavBackupTarget?>(null)
+    internal val webDavTargetIdentity = target.asStateFlow()
+    private val retryWebDav = MutableStateFlow(0L)
+    private var listJob: Job? = null
+
     init {
-        loadBackupFileItems()
+        viewModelScope.launch {
+            webDavConfiguration.map { it as? WebDavConfigurationReadState.Available }
+                .distinctUntilChangedBy { value -> Triple(value?.selection, value?.backup,
+                    value?.resources?.singleOrNull { it.id.toString() == value.backup.resourceId }?.copy(name = "")) }
+                .combine(retryWebDav) { available, _ -> available }
+                .collectLatest { available ->
+                    val old = target.value
+                    target.value = null
+                    webDavReady.value = false
+                    webDavBackupItems.value = UiState.Idle
+                    webDavIssue.value = null
+                    listJob?.cancel()
+                    if (old != null) kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { webDav.close(old) }
+                    currentCoroutineContext().ensureActive()
+                    if (available?.backup?.resourceId == null) return@collectLatest
+                    var acquired: WebDavBackupTarget? = null
+                    try {
+                        val target = webDav.open(available.selection, available.backup).also { acquired = it }
+                        this@BackupVM.target.value = target
+                        acquired = null
+                        webDavReady.value = true
+                        loadBackupFileItems()
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (error: Exception) { webDavIssue.value = error }
+                    finally { acquired?.let(webDav::closeLater) }
+                }
+        }
         loadS3BackupFileItems()
     }
 
@@ -46,56 +89,55 @@ class BackupVM(
         }
     }
 
+    fun retryWebDavConnection() { retryWebDav.value += 1 }
+
     fun loadBackupFileItems() {
-        viewModelScope.launch {
+        val target = target.value ?: return
+        listJob?.cancel()
+        listJob = viewModelScope.launch {
             try {
-                webDavBackupItems.emit(UiState.Loading)
-                webDavBackupItems.emit(
-                    value = UiState.Success(
-                        data = webDavSync.listBackupFiles(
-                            config = settings.value.webDavConfig
-                        ).sortedByDescending { it.lastModified }
-                    )
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                webDavBackupItems.emit(UiState.Error(error))
+                webDavBackupItems.value = UiState.Loading
+                val items = webDav.list(target)
+                if (this@BackupVM.target.value === target) webDavBackupItems.value = UiState.Success(items)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                if (this@BackupVM.target.value === target) webDavBackupItems.value = UiState.Error(error)
             }
         }
     }
 
-    suspend fun testWebDav() {
-        webDavSync.testConnection(settings.value.webDavConfig)
+    internal suspend fun saveWebDavPreferences(view: WebDavConfigurationReadState.Available, proposed: WebDavBackupPreferences) {
+        commands.changeWebDavBackup(view.selection, view.backup, proposed)
     }
 
+    private fun requireWebDavTarget() = checkNotNull(target.value) { "webdav_backup_resource_unavailable" }
+
+    suspend fun testWebDav() = webDav.test(requireWebDavTarget())
+
     suspend fun backup() {
-        webDavSync.backup(settings.value.webDavConfig)
+        webDav.backup(requireWebDavTarget())
         recordBackupTime()
     }
 
-    suspend fun restore(item: WebDavBackupItem) {
-        restoreApplicationService.restoreWebDav(config = settings.value.webDavConfig, item = item)
+    internal suspend fun restore(item: WebDavBackupItem) {
+        check(item.target === target.value) { "webdav_backup_target_changed" }
+        restoreApplicationService.restoreWebDav(item)
     }
 
-    suspend fun deleteWebDavBackupFile(item: WebDavBackupItem) {
-        webDavSync.deleteBackupFile(settings.value.webDavConfig, item)
+    internal suspend fun deleteWebDavBackupFile(item: WebDavBackupItem) {
+        check(item.target === target.value) { "webdav_backup_target_changed" }
+        webDav.delete(item)
     }
 
     suspend fun exportToFile(): File {
-        val file = webDavSync.prepareBackupFile(
-            settings.value.webDavConfig.copy(items = WebDavConfig.BackupItem.entries)
-        )
+        val file = restoreApplicationService.exportLocal()
         recordBackupTime()
         return file
     }
 
-    suspend fun restoreFromLocalUri(uri: Uri) {
-        restoreApplicationService.restoreLocal(
-            uri,
-            settings.value.webDavConfig.copy(items = WebDavConfig.BackupItem.entries),
-        )
-    }
+    suspend fun restoreFromLocalUri(uri: Uri) = restoreApplicationService.restoreLocal(uri)
+
+    override fun onCleared() { target.value?.let(webDav::closeLater) }
 
     // S3 Backup methods
     fun loadS3BackupFileItems() {

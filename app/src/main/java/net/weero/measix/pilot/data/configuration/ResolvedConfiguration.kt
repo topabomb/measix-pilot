@@ -90,6 +90,9 @@ internal data class ResolvedConfiguration(
     val inheritedSubAssistantIds: Map<ConfigurationReference, Set<ConfigurationReference>> = emptyMap(),
     val assistantModelPreferences: Map<ConfigurationReference, AssistantModelPreference>,
     val enterpriseSnapshotSchemaVersion: Long? = null,
+    val personalWebDavConnections: List<WebDavConnection> = emptyList(),
+    val currentPersonalWebDavConnectionId: kotlin.uuid.Uuid? = null,
+    val webDavBackup: WebDavBackupPreferences = WebDavBackupPreferences(),
 ) {
     /** The v5 binding meaning must not loosen the published v4 or an unidentified snapshot. */
     fun permitsAdditionalManagedMcp(assistantId: ConfigurationReference): Boolean =
@@ -358,6 +361,10 @@ internal object ConfigurationResolver {
             }
         }
         return ResolvedConfiguration(scope, identity, enterprise, catalog, models, assistants, effectiveSelections, selected,
-            inheritedSubAssistants, assistantModelPreferences, available?.snapshotSchemaVersion.takeIf { enterprise != null })
+            inheritedSubAssistants, assistantModelPreferences,
+            enterpriseSnapshotSchemaVersion = available?.snapshotSchemaVersion.takeIf { enterprise != null },
+            personalWebDavConnections = if (scope == ConfigurationScope.Personal) user.webDavConnections else emptyList(),
+            currentPersonalWebDavConnectionId = if (scope == ConfigurationScope.Personal) user.currentWebDavConnectionId else null,
+            webDavBackup = document.preferences.scopes.singleOrNull { it.scope == scope }?.webDavBackup ?: WebDavBackupPreferences())
     }
 }

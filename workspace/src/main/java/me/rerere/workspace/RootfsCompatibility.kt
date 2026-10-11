@@ -9,6 +9,14 @@ import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
+import java.nio.file.LinkOption
+
+/** Paths are guest identities selected from the installed tree, not host executable paths. */
+data class RootfsEnvironment(
+    val envCommand: List<String>,
+    val shell: String,
+    val distribution: String?,
+)
 
 /** Native PRoot and its guest executables must use the same instruction set; PRoot does not emulate a CPU. */
 class RootfsCompatibility(
@@ -28,12 +36,13 @@ class RootfsCompatibility(
 
     val defaultRootfsUrl: String get() = architecture.defaultRootfsUrl
 
-    fun requireCompatible(linuxDir: File) {
+    fun requireCompatible(linuxDir: File): RootfsEnvironment {
         checkInterrupted()
         require(linuxDir.isDirectory) { "Rootfs is not installed" }
         val expected = architecture
+        val environment = inspectEnvironment(linuxDir)
         val guests = mutableListOf<Pair<String, Elf>>()
-        for (path in listOf("/usr/bin/env", "/bin/bash")) {
+        for (path in listOf(environment.envCommand.first(), environment.shell).distinct()) {
             val executable = readElf(resolveGuestPath(linuxDir, path))
             require(executable.architecture == expected) {
                 "Rootfs architecture mismatch: $path is ${executable.architecture}, PRoot is $expected"
@@ -69,6 +78,46 @@ class RootfsCompatibility(
                 }
             }
         }
+        return environment
+    }
+
+    internal fun inspectEnvironment(linuxDir: File): RootfsEnvironment {
+        fun firstPresent(paths: List<String>): String? = paths.firstOrNull { path ->
+            // An existing but malformed preferred executable must fail validation, not silently fall back.
+            Files.exists(resolveGuestPath(linuxDir, path).toPath(), LinkOption.NOFOLLOW_LINKS)
+        }
+        val env = firstPresent(listOf("/usr/bin/env", "/bin/env"))?.let(::listOf)
+            ?: firstPresent(listOf("/bin/busybox", "/usr/bin/busybox"))?.let { listOf(it, "env") }
+            ?: throw IllegalArgumentException("Rootfs env executable is missing")
+        val shell = firstPresent(listOf("/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh"))
+            ?: throw IllegalArgumentException("Rootfs shell executable is missing")
+        val release = resolveGuestPath(linuxDir, "/etc/os-release")
+        val distribution = if (release.isFile) {
+            val bytes = release.inputStream().use { input ->
+                val buffer = ByteArray(16 * 1024 + 1)
+                var count = 0
+                while (count < buffer.size) {
+                    checkInterrupted()
+                    val read = input.read(buffer, count, buffer.size - count)
+                    if (read < 0) break
+                    count += read
+                }
+                buffer.copyOf(count)
+            }
+            require(bytes.size <= 16 * 1024) { "Rootfs os-release exceeds 16 KiB" }
+            checkInterrupted()
+            val text = Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString()
+            val fields = text.lineSequence().mapNotNull { line ->
+                val separator = line.indexOf('=')
+                if (separator <= 0) return@mapNotNull null
+                val key = line.substring(0, separator).trim()
+                val value = line.substring(separator + 1).trim().removeSurrounding("\"").removeSurrounding("'")
+                key to value
+            }.toMap()
+            (fields["PRETTY_NAME"] ?: fields["NAME"] ?: fields["ID"])
+                ?.take(256)?.replace(Regex("[\\p{Cntrl}<>]"), " ")
+        } else null
+        return RootfsEnvironment(env, shell, distribution)
     }
 
     fun isCompatible(linuxDir: File): Boolean = try {

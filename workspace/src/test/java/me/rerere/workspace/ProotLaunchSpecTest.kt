@@ -47,6 +47,7 @@ class ProotLaunchSpecTest {
             linuxDir = linuxDir,
             tempDir = tempDir,
             bindMounts = bindMounts,
+            guestEnvironment = RootfsEnvironment(listOf("/usr/bin/env"), "/bin/bash", "Ubuntu"),
             guestCwd = "src",
             command = "ls",
         )
@@ -56,6 +57,7 @@ class ProotLaunchSpecTest {
             linuxDir = linuxDir,
             tempDir = tempDir,
             bindMounts = bindMounts,
+            guestEnvironment = RootfsEnvironment(listOf("/usr/bin/env"), "/bin/bash", "Ubuntu"),
         )
 
         assertEquals(shell.executable, terminal.executable)
@@ -117,6 +119,7 @@ class ProotLaunchSpecTest {
             linuxDir = tmp.newFolder("shell-linux"),
             tempDir = tmp.newFolder("shell-tmp"),
             bindMounts = emptyList(),
+            guestEnvironment = RootfsEnvironment(listOf("/usr/bin/env"), "/bin/bash", "Ubuntu"),
             command = "git status",
         )
         val terminal = ProotLaunchSpec.from(
@@ -125,6 +128,7 @@ class ProotLaunchSpecTest {
             linuxDir = tmp.newFolder("terminal-linux"),
             tempDir = tmp.newFolder("terminal-tmp"),
             bindMounts = emptyList(),
+            guestEnvironment = RootfsEnvironment(listOf("/usr/bin/env"), "/bin/bash", "Ubuntu"),
         )
 
         // 非交互执行没有可回退的终端，必须显式告知子进程
@@ -142,6 +146,27 @@ class ProotLaunchSpecTest {
             val index = shell.arguments.indexOf(flag)
             assertTrue("$flag must follow env -i", index > envIndex)
             assertTrue("$flag must precede the command", index < commandIndex)
+        }
+    }
+
+    @Test
+    fun `busybox env and sh are shared by command and interactive launches`() {
+        val native = tmp.newFolder()
+        val files = tmp.newFolder()
+        val linux = tmp.newFolder()
+        val temp = tmp.newFolder()
+        val environment = RootfsEnvironment(listOf("/bin/busybox", "env"), "/bin/sh", "Alpine Linux")
+        for (command in listOf(null, "printf '%s' \"hello world\"")) {
+            val spec = ProotLaunchSpec.from(native, files, linux, temp, emptyList(), environment, command = command)
+            val index = spec.arguments.indexOf("/bin/busybox")
+            assertEquals(listOf("/bin/busybox", "env", "-i"), spec.arguments.subList(index, index + 3))
+            assertTrue("SHELL=/bin/sh" in spec.arguments)
+            assertFalse(spec.arguments.any { "/bin/bash" in it })
+            if (command == null) {
+                assertEquals("/bin/sh", spec.arguments.last())
+            } else {
+                assertEquals(listOf("/bin/sh", "-c", "eval \"\$1\"", "MeasixPilot", command), spec.arguments.takeLast(5))
+            }
         }
     }
 

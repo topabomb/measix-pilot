@@ -64,6 +64,28 @@ class ProviderSettingsApplicationServiceTest {
     }
 
     @Test
+    fun `each probe owns an ephemeral OpenCode identity without an OpenRouter body session`() = runTest {
+        val (service, setting, provider) = fixture()
+        val captured = mutableListOf<me.rerere.ai.provider.TextGenerationParams>()
+        coEvery { provider.generateText(setting, any(), any()) } answers {
+            captured += thirdArg<me.rerere.ai.provider.TextGenerationParams>()
+            chunk(UIMessagePart.Text("ok"))
+        }
+        coEvery { provider.streamText(setting, any(), any()) } answers {
+            captured += thirdArg<me.rerere.ai.provider.TextGenerationParams>()
+            flowOf(chunk(UIMessagePart.Text("one")), chunk(UIMessagePart.Text("two")))
+        }
+        val model = Model(modelId = "probe")
+        service.testNonStreaming(setting, model)
+        service.testNonStreaming(setting, model)
+        service.testStreaming(setting, model) {}
+        service.testToolCall(setting, model)
+        assertEquals(4, captured.size)
+        assertEquals(4, captured.map { kotlin.uuid.Uuid.parse(requireNotNull(it.openCodeSessionId)) }.distinct().size)
+        assertTrue(captured.all { it.providerSessionId == null })
+    }
+
+    @Test
     fun `provider cancellation propagates unchanged`() = runTest {
         val (service, setting, provider) = fixture()
         val cancellation = CancellationException("dismissed")

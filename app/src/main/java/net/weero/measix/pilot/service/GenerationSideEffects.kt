@@ -19,12 +19,22 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.findUserTurnStart
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.model.MessageNode
+import net.weero.measix.pilot.data.model.ContextMessageLocator
+import net.weero.measix.pilot.data.model.checkpointContainerIds
+import net.weero.measix.pilot.data.model.selectHistorySummary
+import net.weero.measix.pilot.data.model.HistorySummaryCheckpoint
+import net.weero.measix.pilot.data.model.HistorySummaryCoveredMessage
+import net.weero.measix.pilot.data.model.historySummaryFingerprint
+import net.weero.measix.pilot.data.model.ConversationContextSource
+import net.weero.measix.pilot.data.model.messageOriginEntry
+import net.weero.measix.pilot.data.model.ConversationModelContextEntry
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -82,14 +92,14 @@ class GenerationSideEffects internal constructor(
         commit: suspend (GeneratedHistorySummary) -> Unit,
     ): Deferred<Result<Unit>> = launchOwned(runtime, access) { owner, snapshot ->
         runCatchingPreservingCancellation {
-            val nodes = compressConversation(owner, snapshot, additionalPrompt, targetTokens, keepRecentMessages)
+            val summary = compressConversation(owner, snapshot, additionalPrompt, targetTokens, keepRecentMessages)
             owner.runtime.releaseAuxiliaryModels(listOf(owner.worker))
             withOwner(owner, tree = true) {
                 check(runtime.durable.header.assistantId == snapshot.header.assistantId &&
                     runtime.durable.nodes == snapshot.nodes && runtime.durable.modelContextEntries == snapshot.modelContextEntries) {
                     "conversation_changed_during_compression"
                 }
-                commit(nodes)
+                commit(summary)
             }
         }
     }
@@ -193,10 +203,11 @@ class GenerationSideEffects internal constructor(
         captured: CapturedModelConfiguration,
         role: ModelSelectionRole,
         prompt: String,
+        conversationId: Uuid,
     ): String? {
         val result = captured.model.requests.execute { target ->
             target.generateText(providerManager, listOf(ModelRequestMessage.user(prompt)),
-                backgroundTextGenerationParams(captured.model.model), role)
+                backgroundTextGenerationParams(captured.model.model, conversationId = conversationId), role)
         }
         return result.choices.getOrNull(0)?.message?.toText()
     }
@@ -248,6 +259,7 @@ class GenerationSideEffects internal constructor(
             val generatedTitle = runBackgroundGeneration(
                 captured = captured,
                 role = ModelSelectionRole.TITLE,
+                conversationId = snapshot.conversationId,
                 prompt = settings.titlePrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
                     "content" to snapshot.currentMessages()
@@ -310,6 +322,7 @@ class GenerationSideEffects internal constructor(
             val generated = runBackgroundGeneration(
                 captured = captured,
                 role = ModelSelectionRole.SUGGESTION,
+                conversationId = snapshot.conversationId,
                 prompt = settings.suggestionPrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
                     "content" to snapshot.currentMessages()
@@ -354,26 +367,29 @@ class GenerationSideEffects internal constructor(
             snapshot.header.assistantId, ModelSelectionRole.COMPRESS)
         val settings = captured.userSettings
         val maxMessagesPerChunk = 256
-        val allMessages = snapshot.currentMessages()
-
-        // Split messages into those to compress and those to keep
-        val messagesToCompress: List<UIMessage>
-        val messagesToKeep: List<UIMessage>
-
-        if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
-            val keepStartIndex = allMessages.findUserTurnStart(allMessages.size - keepRecentMessages)
-            messagesToCompress = allMessages.take(keepStartIndex)
-            messagesToKeep = allMessages.drop(keepStartIndex)
-            if (messagesToCompress.isEmpty()) {
-                throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
-            }
-        } else if (keepRecentMessages > 0) {
-            // Not enough messages to compress while keeping recent ones
+        val locators = snapshot.nodes.associate { it.currentMessage.id to ContextMessageLocator(it.id, it.currentMessage.id) }
+        val containers = checkpointContainerIds(snapshot.modelContextEntries)
+        val allMessages = snapshot.currentMessages().filter { locators.getValue(it.id).nodeId !in containers }
+        val previous = selectHistorySummary(snapshot.currentMessages(), locators, snapshot.modelContextEntries)
+        val end = if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
+            allMessages.findUserTurnStart(allMessages.size - keepRecentMessages)
+        } else if (keepRecentMessages > 0) 0 else allMessages.size
+        if (end <= (previous?.checkpoint?.covered?.size ?: 0)) {
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
-        } else {
-            messagesToCompress = allMessages
-            messagesToKeep = emptyList()
         }
+        val covered = allMessages.take(end)
+        val messagesToCompress = listOfNotNull(previous?.message) + covered.drop(previous?.checkpoint?.covered?.size ?: 0)
+        val semanticLocators = allMessages.map { locators.getValue(it.id) }
+        val checkpoint = HistorySummaryCheckpoint(
+            covered = covered.map { message -> HistorySummaryCoveredMessage(
+                locators.getValue(message.id), historySummaryFingerprint(message, snapshot.modelContextEntries, semanticLocators)) },
+            previousEntryId = previous?.entry?.id,
+            previousSummaryFingerprint = previous?.message?.let {
+                historySummaryFingerprint(it, snapshot.modelContextEntries, semanticLocators)
+            },
+        )
+        val insertIndex = allMessages.getOrNull(end)?.let { next -> snapshot.nodes.indexOfFirst { it.currentMessage.id == next.id } }
+            ?: snapshot.nodes.size
 
         fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
             if (messages.size <= maxMessagesPerChunk) return listOf(messages)
@@ -385,7 +401,16 @@ class GenerationSideEffects internal constructor(
         }
 
         suspend fun compressMessages(messages: List<UIMessage>): String {
-            val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
+            val contentToCompress = messages.joinToString("\n\n") { message ->
+                if (message.id == previous?.message?.id) message.toText() else buildString {
+                    append(message.summaryAsText(maxLength = 2000))
+                    message.getTools().forEach { tool ->
+                        append("\nTool ").append(tool.toolName).append(" (").append(tool.resultStatus).append("): ")
+                        append(tool.input.take(2000)).append("\n")
+                        append(tool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }.take(4000))
+                    }
+                }
+            }
             val prompt = settings.compressPrompt.applyPlaceholders(
                 "content" to contentToCompress,
                 "target_tokens" to targetTokens.toString(),
@@ -395,12 +420,15 @@ class GenerationSideEffects internal constructor(
                 "locale" to Locale.getDefault().displayName
             )
 
-            return runBackgroundGeneration(
+            val result = runBackgroundGeneration(
                 captured = captured,
                 role = ModelSelectionRole.COMPRESS,
+                conversationId = snapshot.conversationId,
                 prompt = prompt,
             )?.trim()
                 ?: throw IllegalStateException("No model available for compression")
+            check(result.isNotEmpty()) { "empty_history_summary_chunk" }
+            return result
         }
 
         val compressedSummaries = coroutineScope {
@@ -409,24 +437,21 @@ class GenerationSideEffects internal constructor(
                 .awaitAll()
         }
 
-        // Replace older history with summary messages while preserving complete recent turns.
-        val summaryNodes = compressedSummaries.map { UIMessage.user(it).toMessageNode() }
-        val source = net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary(
+        val summary = compressedSummaries.joinToString("\n\n").trim()
+        check(summary.isNotEmpty()) { "empty_history_summary" }
+        val node = UIMessage.user(summary).toMessageNode()
+        val source = ConversationContextSource.HistorySummary(
             model = captured.model.model.id, prompt = settings.compressPrompt,
-            additionalPrompt = additionalPrompt, targetTokens = targetTokens)
-        return GeneratedHistorySummary(
-            nodes = summaryNodes + messagesToKeep.map { message ->
-                snapshot.nodes.single { it.currentMessage.id == message.id }
-            },
-            origins = summaryNodes.map { net.weero.measix.pilot.data.model.messageOriginEntry(it, source) },
-        )
+            additionalPrompt = additionalPrompt, targetTokens = targetTokens, checkpoint = checkpoint)
+        return GeneratedHistorySummary(node, messageOriginEntry(node, source), insertIndex)
 
     }
 }
 
 internal data class GeneratedHistorySummary(
-    val nodes: List<MessageNode>,
-    val origins: List<net.weero.measix.pilot.data.model.ConversationModelContextEntry>,
+    val node: MessageNode,
+    val origin: ConversationModelContextEntry,
+    val insertIndex: Int,
 )
 
 /** A run observes new stream steps and committed user interactions from the same turn owner. */
@@ -495,9 +520,11 @@ internal fun shouldLaunchCompletionSideEffects(result: TurnRunResult): Boolean {
 internal fun backgroundTextGenerationParams(
     model: me.rerere.ai.provider.Model,
     reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
+    conversationId: Uuid,
 ): TextGenerationParams = TextGenerationParams(
     model = model,
     reasoningLevel = reasoningLevel,
     customHeaders = model.customHeaders,
     customBody = model.customBodies,
+    openCodeSessionId = conversationId.toString(),
 )

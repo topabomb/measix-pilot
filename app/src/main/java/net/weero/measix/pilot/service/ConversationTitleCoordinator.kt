@@ -9,6 +9,7 @@ import kotlinx.coroutines.sync.withLock
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import java.math.BigInteger
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.min
 import kotlin.uuid.Uuid
@@ -209,9 +210,11 @@ class ConversationTitleCoordinator internal constructor(
         val state = states.getOrPut(sourceId) { State() }
         return state.commitMutex.withLock {
             val occupied = occupiedTitles().toHashSet()
-            var sequence = 1
-            while ("$sourceTitle($sequence)" in occupied) sequence++
-            create("$sourceTitle($sequence)")
+            val suffix = Regex("\\(([0-9]+)\\)$").find(sourceTitle)
+            val base = suffix?.let { sourceTitle.substring(0, it.range.first) } ?: sourceTitle
+            var sequence = suffix?.groupValues?.get(1)?.toBigInteger()?.plus(BigInteger.ONE) ?: BigInteger.ONE
+            while ("$base($sequence)" in occupied) sequence += BigInteger.ONE
+            create("$base($sequence)")
         }
     }
 

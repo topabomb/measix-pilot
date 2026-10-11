@@ -14,6 +14,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.encodeToString
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.dao.ModelContextConflictException
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
@@ -23,6 +27,8 @@ import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.AssistantMemory
 import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.data.repository.ConversationModelContextIntegrityException
+import net.weero.measix.pilot.utils.JsonInstant
 import net.weero.measix.pilot.service.ConversationDisclosureSnapshotService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -292,39 +298,55 @@ class Migration_9_10Test {
     @Test
     fun repositoryLoadFailsClosedOnCrossConversationAnchorAndWrongOwnerRole() = runBlocking {
         withMigratedToCurrentSchemaDatabase { db ->
-            seedNodes(db)
-            db.conversationDao().insert(
-                ConversationEntity(
-                    id = OTHER_CONVERSATION_ID,
-                    assistantId = "assistant-other",
-                    title = "other",
-                    createAt = 10L,
-                    updateAt = 20L,
-                    chatSuggestions = "[]",
-                    isPinned = false,
-                ),
+            val conversationId = Uuid.random()
+            val otherConversationId = Uuid.random()
+            listOf(conversationId, otherConversationId).forEach { id ->
+                db.conversationDao().insert(ConversationEntity(
+                    id = id.toString(), assistantId = Uuid.random().toString(), title = "history",
+                    createAt = 10L, updateAt = 20L, chatSuggestions = "[]", isPinned = false,
+                ))
+            }
+            val user = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("question")))
+            val owner = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("answer")))
+            val elsewhere = UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("other")))
+            fun typedNode(conversation: Uuid, index: Int, message: UIMessage) = MessageNodeEntity(
+                id = Uuid.random().toString(), conversationId = conversation.toString(), nodeIndex = index,
+                messages = JsonInstant.encodeToString(listOf(message)), selectIndex = 0,
             )
-            db.messageNodeDao().insertAll(
-                listOf(node("node-elsewhere", 0, "user-elsewhere", OTHER_CONVERSATION_ID, role = "user")),
+            val anchorNode = typedNode(conversationId, 0, user)
+            val ownerNode = typedNode(conversationId, 1, owner)
+            val otherNode = typedNode(otherConversationId, 0, elsewhere)
+            db.messageNodeDao().insertAll(listOf(anchorNode, ownerNode, otherNode))
+            val valid = historicalContextRow(
+                ownerNodeId = ownerNode.id, ownerMessageId = owner.id.toString(),
+                anchorNodeId = anchorNode.id, anchorMessageId = user.id.toString(),
+                content = canonicalContent("note A"),
             )
-            val crossAnchor = entry(ownerNodeId = "node-assistant", ownerMessageId = OWNER_ASSISTANT)
-                .copy(anchorNodeId = "node-elsewhere", anchorMessageId = "user-elsewhere")
+            db.conversationModelContextDao().insertOnce(listOf(valid))
+            val repository = repository(db)
+            assertEquals(1, requireNotNull(repository.getConversationSnapshotById(conversationId)).modelContextEntries.size)
+            db.conversationModelContextDao().deleteByPrimaryKeys(listOf(valid))
+            val crossAnchor = valid.copy(anchorNodeId = otherNode.id, anchorMessageId = elsewhere.id.toString())
             db.conversationModelContextDao().insertOnce(listOf(crossAnchor))
 
             val anchorFailure = runCatching {
-                repository(db).getConversationSnapshotById(Uuid.parse(CONVERSATION_ID))
+                repository.getConversationSnapshotById(conversationId)
             }.exceptionOrNull()
-            assertNotNull("cross-conversation anchor must fail the load", anchorFailure)
+            assertTrue("actual integrity failure: $anchorFailure", anchorFailure is ConversationModelContextIntegrityException)
+            assertTrue(requireNotNull(anchorFailure?.message).contains("anchor node ${otherNode.id} does not belong to this conversation"))
 
             db.conversationModelContextDao().deleteByPrimaryKeys(listOf(crossAnchor))
-            db.messageNodeDao().deleteByIds(listOf("node-assistant"))
-            db.messageNodeDao().insertAll(listOf(node("node-assistant", 1, OWNER_ASSISTANT, role = "user")))
-            db.conversationModelContextDao().insertOnce(listOf(entry()))
+            db.messageNodeDao().deleteByIds(listOf(ownerNode.id))
+            db.messageNodeDao().insertAll(listOf(ownerNode.copy(
+                messages = JsonInstant.encodeToString(listOf(owner.copy(role = MessageRole.USER))),
+            )))
+            db.conversationModelContextDao().insertOnce(listOf(valid))
 
             val roleFailure = runCatching {
-                repository(db).getConversationSnapshotById(Uuid.parse(CONVERSATION_ID))
+                repository.getConversationSnapshotById(conversationId)
             }.exceptionOrNull()
-            assertNotNull("owner node holding a non-assistant message must fail the load", roleFailure)
+            assertTrue("actual integrity failure: $roleFailure", roleFailure is ConversationModelContextIntegrityException)
+            assertTrue(requireNotNull(roleFailure?.message).contains("owner variant must be ASSISTANT, got USER"))
         }
     }
 
@@ -347,7 +369,7 @@ class Migration_9_10Test {
         helper.createDatabase(name, 9).close()
         helper.runMigrationsAndValidate(name, 10, true, Migration_9_10).close()
         val db = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(Migration_9_10, Migration_10_11, Migration_11_12, Migration_12_13, Migration_13_14, Migration_14_15)
+            .addMigrations(Migration_9_10, Migration_10_11, Migration_11_12, Migration_12_13, Migration_13_14, Migration_14_15, Migration_15_16)
             .allowMainThreadQueries()
             .build()
         try {

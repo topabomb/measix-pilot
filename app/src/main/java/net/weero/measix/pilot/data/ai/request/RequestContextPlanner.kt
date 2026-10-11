@@ -102,7 +102,23 @@ internal class RequestContextPlanner {
         }
         val boundaryOnly = projected.lastOrNull()?.takeIf { it.id == requestOwner?.messageId && !it.isValidToUpload() }
         val history = if (boundaryOnly == null) projected else projected.dropLast(1)
-        val window = limitContext(history, messageLimit) + listOfNotNull(boundaryOnly)
+        val containers = checkpointContainerIds(modelContextEntries)
+        val checkpointLocators = durableLocators.mapValues { (_, locator) -> ContextMessageLocator(locator.nodeId, locator.messageId) }
+        val sealed = contextAdmissions.any { it.owner == requestOwner && it.stepId == requestStepId }
+        val admittedSummaries = if (sealed) resolveUsesAt(contextAdmissions, requireNotNull(requestOwner), requireNotNull(requestStepId),
+            branch.single { it.id == requestOwner.messageId }.parts.filterIsInstance<UIMessagePart.Step>()).uses
+            .filter { it.placement == ContextPlacement.MessageOrigin }.mapTo(hashSetOf()) { it.entryId } else null
+        val summary = selectHistorySummary(branch, checkpointLocators, modelContextEntries, admittedSummaries)
+        val ordinaryHistory = history.filter { durableLocators[it.id]?.nodeId !in containers }
+        val tail = if (summary == null) ordinaryHistory else {
+            val lastCovered = summary.checkpoint.covered.last().message.messageId
+            val boundary = ordinaryHistory.indexOfFirst { it.id == lastCovered }
+            if (boundary >= 0) ordinaryHistory.drop(boundary + 1) else ordinaryHistory.filter { message ->
+                val order = branch.indexOfFirst { it.id == message.id }
+                order > branch.indexOfFirst { it.id == lastCovered }
+            }
+        }
+        val window = listOfNotNull(summary?.message) + limitContext(tail, messageLimit) + listOfNotNull(boundaryOnly)
         val branchIndex = branch.withIndex().associate { it.value.id to it.index }
         val applicability = ConversationModelContextApplicability.index(branch)
         val byId = modelContextEntries.associateBy { it.id }

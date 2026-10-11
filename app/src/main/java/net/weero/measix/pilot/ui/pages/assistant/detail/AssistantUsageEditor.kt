@@ -142,6 +142,7 @@ internal fun AssistantUsageEditor(
                         onUpdateTags = { selected, catalog -> change(AssistantPreferenceChange.Tags(selected, catalog)) },
                         onImportAvatar = { onImportImage(it, true) }, onImportBackground = { onImportImage(it, false) },
                         definitionEditable = false, usageOnly = true, imageResolver = imageResolver,
+                        reasoningModelId = configuration.model?.modelId,
                         modelControl = {
                             val selectionUi = assistantModelSelectionUi(configuration, ::commit)
                             val selectionPresentation = modelSelectionReferencePresentation(

@@ -21,6 +21,8 @@ class RootfsInstaller(
 
     val defaultRootfsUrl: String get() = compatibility.defaultRootfsUrl
 
+    fun environment(root: String): RootfsEnvironment = compatibility.requireCompatible(manager.linuxDir(root))
+
     fun isCompatible(root: String): Boolean = try {
         compatibility.isCompatible(manager.linuxDir(root))
     } catch (_: IllegalArgumentException) {
@@ -131,10 +133,7 @@ class RootfsInstaller(
                 )
                 pendingName = null
                 pendingLinkName = null
-                if (header.name.isBlank()) {
-                    input.skipFully(header.size.paddedTarSize())
-                    continue
-                }
+                require(header.name.isNotBlank()) { "Rootfs entry path is blank" }
                 if (header.type == TarEntryType.LONG_NAME) {
                     pendingName = input.readExactly(header.size).toString(Charsets.UTF_8).trimEnd('\u0000', '\n')
                     input.skipFully(header.size.paddingSize())
@@ -152,7 +151,13 @@ class RootfsInstaller(
                     input.skipFully(header.size.paddingSize())
                     continue
                 }
+                // Alpine archives include a root directory entry. It may not replace the staging root.
                 val target = targetDir.safeResolve(header.name)
+                if (target == targetDir.canonicalFile) {
+                    require(header.type == TarEntryType.DIRECTORY) { "Rootfs root entry must be a directory" }
+                    input.skipFully(header.size.paddedTarSize())
+                    continue
+                }
                 target.parentFile?.mkdirs()
                 when (header.type) {
                     TarEntryType.DIRECTORY -> target.mkdirs()
@@ -241,7 +246,7 @@ class RootfsInstaller(
             .filter { it.isNotBlank() }
             .joinToString("/")
         return TarHeader(
-            name = normalizeTarPath(fullName),
+            name = fullName,
             mode = header.octal(100, 8).toInt(),
             size = header.octal(124, 12),
             modTime = header.octal(136, 12),
@@ -352,10 +357,9 @@ class RootfsInstaller(
             .trim()
             .trimStart('/')
             .removePrefix("./")
-        require(normalized.isNotBlank()) { "Rootfs entry path is blank" }
         require(!normalized.contains('\u0000')) { "Rootfs entry path contains invalid character" }
         require(normalized.split('/').none { it == ".." }) { "Rootfs entry escapes target directory: $path" }
-        return normalized
+        return normalized.ifEmpty { "." }
     }
 
     private fun ByteArray.string(offset: Int, length: Int): String {

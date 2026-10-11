@@ -1077,6 +1077,7 @@ class SubAssistantRunCoordinator internal constructor(
             runtime = runtime,
             turnId = childTurnId,
             turnFinalizer = turnFinalizer,
+            model = launchPlan.model.model,
         )
         val turnCommitter = started.turnCommitter
         // StartTurn 之后 materialize 只做纯绑定；抛错即编程错误，以专用 reason 收口已启动的 Child Turn。

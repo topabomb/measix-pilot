@@ -53,6 +53,7 @@ data class EditMessageVariant(
     val nodeId: Uuid,
     val variant: UIMessage,
     val truncateAfterNode: Boolean = false,
+    val sourceMessageId: Uuid? = null,
 ) : ConversationCommand
 
 /** 删除整条消息（按消息 id 定位节点，删除整个节点） */
@@ -64,11 +65,18 @@ data class SelectNodeVariant(val nodeId: Uuid, val selectIndex: Int) : Conversat
 /** 截断到节点索引（含）——regenerate 前的树收缩 */
 data class TruncateToNodeIndex(val nodeIndexInclusive: Int) : ConversationCommand
 
-/** 整树替换（压缩 / 恢复 / fork 载入 / 新会话初始化） */
+/** 整树替换（恢复 / fork 载入 / 新会话初始化）；摘要使用独立的保全插入命令。 */
 internal data class ReplaceMessageTree(
     val nodes: List<MessageNode>,
-    val clearSuggestions: Boolean = false,
-    val messageOrigins: List<net.weero.measix.pilot.data.model.ConversationModelContextEntry> = emptyList(),
+) : ConversationCommand
+
+/** Inserts application-authored summary evidence without retiring any transcript or execution fact. */
+internal data class InsertHistorySummaryCheckpoint(
+    val expectedNodes: List<MessageNode>,
+    val expectedContextEntries: List<ConversationModelContextEntry>,
+    val node: MessageNode,
+    val origin: ConversationModelContextEntry,
+    val insertIndex: Int,
 ) : ConversationCommand
 
 /** Adds exact missing attachment handles without accepting a replacement tree. */

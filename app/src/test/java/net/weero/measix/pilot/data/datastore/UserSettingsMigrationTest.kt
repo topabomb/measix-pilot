@@ -354,6 +354,7 @@ class UserSettingsMigrationTest {
         val document = JsonInstant.decodeFromString<UserSettingsDocument>(fresh[SettingsStore.USER_SETTINGS]!!)
         assertEquals(DEFAULT_ASSISTANT_ID, document.personalSettings().assistantId)
         assertEquals(DEFAULT_AUTO_MODEL_ID, document.personalSettings().chatModelId)
+        assertEquals(DEFAULT_MODE_INJECTIONS, document.configuration.modeInjections)
         assertEquals(listOf(ConfigurationScope.Personal), document.preferences.scopes.map { it.scope })
         assertThrows(SerializationException::class.java) {
             JsonInstant.decodeFromString<UserSettingsDocument>("{}")
@@ -367,5 +368,18 @@ class UserSettingsMigrationTest {
         }
         assertTrue(rejected)
         assertEquals("{\"schemaVersion\":999}", future[SettingsStore.USER_SETTINGS])
+    }
+
+    @Test
+    fun `missing legacy modes use defaults while explicit and canonical empty stay empty`() = runTest {
+        val migration = UserSettingsMigration()
+        val missing = migration.migrate(mutablePreferencesOf(SettingsStore.LAUNCH_COUNT to 7))
+        val explicit = migration.migrate(mutablePreferencesOf(SettingsStore.MODE_INJECTIONS to "[]"))
+        val missingDocument = JsonInstant.decodeFromString<UserSettingsDocument>(missing[SettingsStore.USER_SETTINGS]!!)
+        val emptyDocument = JsonInstant.decodeFromString<UserSettingsDocument>(explicit[SettingsStore.USER_SETTINGS]!!)
+        assertEquals(DEFAULT_MODE_INJECTIONS, missingDocument.configuration.modeInjections)
+        assertTrue(emptyDocument.configuration.modeInjections.isEmpty())
+        assertFalse(migration.shouldMigrate(explicit))
+        assertTrue(emptyDocument.personalSettings().materializeForRead().modeInjections.isEmpty())
     }
 }

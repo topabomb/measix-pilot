@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
+import net.weero.measix.pilot.data.datastore.ConversationSortOrder
 import androidx.paging.PagingData
 import androidx.paging.PagingConfig
 import androidx.paging.PagingSource
@@ -53,6 +54,7 @@ data class ConversationSummary(
     val createAt: Instant,
     val updateAt: Instant,
     internal val selection: RealmSelection?,
+    val sortTime: Instant = updateAt,
 ) {
     val commandTarget: ConversationCommandTarget
         get() = ConversationCommandTarget(id, requireNotNull(selection) { "conversation_summary_is_read_only" }) {}
@@ -98,7 +100,7 @@ enum class ConversationActivity {
     TITLE_GENERATION,
 }
 
-private fun ConversationListRecord.toSummary(selection: RealmSelection?) = ConversationSummary(
+private fun ConversationListRecord.toSummary(selection: RealmSelection?, sort: ConversationSortOrder = ConversationSortOrder.UPDATED) = ConversationSummary(
     id = id,
     assistantId = assistantId,
     title = title,
@@ -107,6 +109,7 @@ private fun ConversationListRecord.toSummary(selection: RealmSelection?) = Conve
     createAt = createAt,
     updateAt = updateAt,
     selection = selection,
+    sortTime = if (sort == ConversationSortOrder.CREATED) createAt else updateAt,
 )
 
 /** UI read port: persisted/resident 选择被封装在 service 边界内。 */
@@ -414,21 +417,26 @@ class ConversationQueryService internal constructor(
         mergeConversationActivities(turnPresentations, titleGenerationIds)
     }
 
-    fun unfiledPaging(target: ConversationFolderAccess): Flow<PagingData<ConversationSummary>> =
+    fun observeSortOrder(): Flow<ConversationSortOrder> = flow {
+        recoveryGate.awaitReady()
+        emitAll(settings.observeConversationSortOrder())
+    }
+
+    fun unfiledPaging(target: ConversationFolderAccess, sort: ConversationSortOrder = ConversationSortOrder.UPDATED): Flow<PagingData<ConversationSummary>> =
         observeCurrentSelection().flatMapLatest { access ->
-            if (access != target.selection) flowOf(PagingData.empty()) else paging(target.selection) {
-                repository.unfiledPagingSource(target.selection.access.scope, target.assistantId)
+            if (access != target.selection) flowOf(PagingData.empty()) else paging(target.selection, sort) {
+                repository.unfiledPagingSource(target.selection.access.scope, target.assistantId, sort)
             }
         }
 
-    fun folderPaging(target: ConversationFolderAccess, folderId: Uuid): Flow<PagingData<ConversationSummary>> =
+    fun folderPaging(target: ConversationFolderAccess, folderId: Uuid, sort: ConversationSortOrder = ConversationSortOrder.UPDATED): Flow<PagingData<ConversationSummary>> =
         observeCurrentSelection().flatMapLatest { access ->
             if (access != target.selection) flowOf(PagingData.empty()) else flow {
                 val belongs = sessions.withSelectedRealmSelection(target.selection) {
                     folderRepository.getFolder(folderId)?.let { it.scope == target.selection.access.scope && it.assistantId == target.assistantId } == true
                 }
-                if (!belongs) emit(PagingData.empty()) else emitAll(paging(target.selection) {
-                    repository.folderPagingSource(target.selection.access.scope, folderId)
+                if (!belongs) emit(PagingData.empty()) else emitAll(paging(target.selection, sort) {
+                    repository.folderPagingSource(target.selection.access.scope, folderId, sort)
                 })
             }.catch { error ->
                 if (error is CancellationException) throw error
@@ -439,6 +447,7 @@ class ConversationQueryService internal constructor(
 
     private fun paging(
         access: RealmSelection,
+        sort: ConversationSortOrder,
         source: () -> PagingSource<Int, LightConversationEntity>,
     ): Flow<PagingData<ConversationSummary>> = selectedRealmPaging(
         sessions, access, PagingConfig(pageSize = 20, initialLoadSize = 40, enablePlaceholders = false), source,
@@ -452,18 +461,19 @@ class ConversationQueryService internal constructor(
             createAt = Instant.ofEpochMilli(row.createAt),
             updateAt = Instant.ofEpochMilli(row.updateAt),
             selection = access,
+            sortTime = Instant.ofEpochMilli(if (sort == ConversationSortOrder.CREATED) row.createAt else row.updateAt),
         )
     }
 
-    fun conversationsOfAssistant(assistantId: ConfigurationReference): Flow<Result<List<ConversationSummary>>> =
+    fun conversationsOfAssistant(assistantId: ConfigurationReference, sort: ConversationSortOrder = ConversationSortOrder.UPDATED): Flow<Result<List<ConversationSummary>>> =
         selectedRows(emptyList()) { access ->
-            repository.getConversationsOfAssistant(access.access.scope, assistantId).map { list -> list.map { it.toSummary(access) } }
+            repository.getConversationsOfAssistant(access.access.scope, assistantId, sort).map { list -> list.map { it.toSummary(access, sort) } }
         }
 
-    fun conversationsInRealm(selection: RealmSelection): Flow<Result<List<ConversationSummary>>> =
+    fun conversationsInRealm(selection: RealmSelection, sort: ConversationSortOrder = ConversationSortOrder.UPDATED): Flow<Result<List<ConversationSummary>>> =
         selectedRows(emptyList()) { current ->
             if (current != selection) flowOf(emptyList()) else
-                repository.getRootConversations(selection.access.scope).map { list -> list.map { it.toSummary(selection) } }
+                repository.getRootConversations(selection.access.scope, sort).map { list -> list.map { it.toSummary(selection, sort) } }
         }
 
     fun foldersOfAssistant(target: ConversationFolderAccess): Flow<ConversationFolderDirectory?> = flow {

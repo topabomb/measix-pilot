@@ -37,7 +37,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.datetime.toJavaLocalDateTime
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
@@ -72,6 +71,7 @@ fun ColumnScope.ChatMessageActionButtons(
     onUpdate: (MessageNode) -> Unit,
     onRegenerate: () -> Unit,
     onOpenActionSheet: () -> Unit,
+    canRegenerate: Boolean = true,
 ) {
     val context = LocalContext.current
     val settings = LocalSettings.current
@@ -102,7 +102,7 @@ fun ColumnScope.ChatMessageActionButtons(
             tint = actionIconColor
         )
 
-        Icon(
+        if (canRegenerate) Icon(
             imageVector = HugeIcons.Refresh03,
             contentDescription = stringResource(R.string.regenerate),
             modifier = Modifier
@@ -206,7 +206,6 @@ fun ColumnScope.ChatMessageActionButtons(
 @Composable
 fun ChatMessageActionsSheet(
     message: UIMessage,
-    model: Model?,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
     onShare: () -> Unit,
@@ -432,8 +431,8 @@ fun ChatMessageActionsSheet(
             // Message Info
             ProvideTextStyle(MaterialTheme.typography.labelSmall) {
                 Text(message.createdAt.toJavaLocalDateTime().toLocalString())
-                if (model != null) {
-                    Text(model.displayName)
+                if (message.role == MessageRole.ASSISTANT) {
+                    Text(message.modelInfo?.displayLabel ?: stringResource(R.string.setting_files_page_generated_unknown_model))
                 }
             }
         }

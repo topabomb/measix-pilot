@@ -244,6 +244,20 @@ internal fun AssistantLocalToolContent(
         CardGroup {
             item(
                 headlineContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_chart_title))
+                },
+                supportingContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_chart_desc))
+                },
+                trailingContent = {
+                    Switch(
+                        checked = assistant.localTools.contains(LocalToolOption.ChartDisplay),
+                        onCheckedChange = { toggleLocalTool(LocalToolOption.ChartDisplay, it) }
+                    )
+                }
+            )
+            item(
+                headlineContent = {
                     Text(stringResource(R.string.assistant_page_local_tools_javascript_engine_title))
                 },
                 supportingContent = {

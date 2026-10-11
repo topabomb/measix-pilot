@@ -143,10 +143,19 @@ fun ChatDrawerContent(
     val folderDirectory = drawerVm.folderDirectory.collectAsStateWithLifecycle().value
     val folders = folderDirectory?.folders.orEmpty()
     val selectedFolderId by drawerVm.selectedFolderId.collectAsStateWithLifecycle()
+    val sortOrder by drawerVm.sortOrder.collectAsStateWithLifecycle()
+    val sortFailure by drawerVm.sortFailure.collectAsStateWithLifecycle()
     val conversationListState = rememberLazyListState(
         initialFirstVisibleItemIndex = drawerVm.scrollIndex,
         initialFirstVisibleItemScrollOffset = drawerVm.scrollOffset,
     )
+    var previousSort by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(sortOrder) }
+    LaunchedEffect(sortOrder) {
+        if (sortOrder == null) return@LaunchedEffect
+        if (previousSort != null && previousSort != sortOrder) conversationListState.scrollToItem(0)
+        previousSort = sortOrder
+    }
+
 
     LaunchedEffect(conversationListState) {
         snapshotFlow {
@@ -343,7 +352,7 @@ fun ChatDrawerContent(
                 navigateFromDrawer = navigateFromDrawer,
             )
 
-            folderDirectory?.diagnostic?.let { detail ->
+            (sortFailure ?: folderDirectory?.diagnostic)?.let { detail ->
                 androidx.compose.foundation.text.selection.SelectionContainer(
                     Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())
                 ) {

@@ -306,12 +306,12 @@
   <string name="chat_page_compress_additional_prompt">Дополнительные инструкции (по желанию)</string>
   <string name="chat_page_compress_additional_prompt_hint">Укажите, что сохранить или на чём сосредоточиться</string>
   <string name="chat_page_compress_context">Сжать историю</string>
-  <string name="chat_page_compress_context_desc">Заменить ранние полные циклы диалога сводкой, сохранив последние сообщения. Локальные демонстрационные модели лишь вырезают часть текста, не обобщая его смысл. Используйте их только в тестовых беседах.</string>
+  <string name="chat_page_compress_context_desc">В последующих запросах будет использоваться сводка завершённых ранних ходов с сохранением последних сообщений. Исходные сообщения также сохраняются. Локальные демонстрационные модели лишь извлекают фрагменты текста; используйте их только в тестовых беседах.</string>
   <string name="chat_page_compress_context_title">Сжать историю чата</string>
   <string name="chat_page_compress_keep_recent">Минимум сохраняемых недавних сообщений</string>
   <string name="chat_page_compress_not_enough_messages">Недостаточно сообщений для сжатия. Уменьшите количество сохраняемых сообщений или добавьте больше сообщений.</string>
   <string name="chat_page_compress_target_tokens">Целевой размер резюме (токены)</string>
-  <string name="chat_page_compress_warning">При сжатии старые сообщения заменяются резюме, созданным ИИ. Сначала проверьте важные детали: отменить это действие нельзя.</string>
+  <string name="chat_page_compress_warning">Проверьте точность сводки, созданной ИИ. Сводку можно изменить или удалить; исходные сообщения сохраняются.</string>
   <string name="chat_page_compressing">Сжатие...</string>
   <string name="chat_page_conversation_system_prompt">Системный запрос для беседы</string>
   <string name="chat_page_conversation_system_prompt_clear">Очистить</string>
@@ -418,7 +418,7 @@
   <string name="history_page_conversation_deleted">Беседа удалена</string>
   <string name="history_page_delete">Удалить</string>
   <string name="history_page_delete_all">Удалить все</string>
-  <string name="history_page_delete_all_confirmation">Вы уверены, что хотите удалить все диалоги? Это действие нельзя отменить.</string>
+  <string name="history_page_delete_all_confirmation">Удалить все беседы в текущем пространстве? Это действие нельзя отменить.</string>
   <string name="history_page_delete_all_conversations">Удалить все чаты</string>
   <string name="history_page_new_conversation">Новый диалог</string>
   <string name="history_page_pin">Закрепить</string>
@@ -2135,4 +2135,22 @@
   <string name="mcp_readiness_on_demand">Выбрано: %1$d · подключение при использовании</string>
   <string name="about_page_platform_contract">Контракт платформы: %1$d</string>
   <string name="about_page_core_baseline">Базовая версия Core: %1$s</string>
+  <string name="chat_page_export_include_reasoning">Включить рассуждения</string>
+  <string name="setting_tts_page_provider_volcengine">Синтез речи Volcengine</string>
+  <string name="setting_tts_page_resource_id">ID ресурса</string>
+  <string name="setting_tts_page_volcengine_resource_description">Укажите ID подключённого речевого ресурса, например seed-tts-2.0.</string>
+  <string name="setting_tts_page_volcengine_rate_description">Скорость синтеза от -50 до 100. 0 — обычная скорость.</string>
+  <string name="conversation_sort_title">Порядок бесед</string>
+  <string name="conversation_sort_created">По времени создания</string>
+  <string name="conversation_sort_updated">По времени обновления</string>
+  <string name="history_page_current_space">История в этом пространстве</string>
+  <string name="assistant_page_local_tools_chart_title">Диаграммы</string>
+  <string name="assistant_page_local_tools_chart_desc">Показывать линейные, столбчатые и точечные диаграммы с таблицей данных прямо на устройстве.</string>
+  <string name="chart_mode_chart">Диаграмма</string>
+  <string name="chart_mode_table">Таблица</string>
+  <string name="chart_series_name">Ряд %1$d</string>
+  <string name="chart_previous_page">Назад</string>
+  <string name="chart_next_page">Далее</string>
+  <string name="reasoning_opus55_hint">Эта модель всегда использует рассуждение. Выберите автоматический режим или уровень усилий; отключение не поддерживается.</string>
+  <string name="reasoning_sonnet55_hint">Отключение убирает рассуждение перед первым ответом. Между вызовами инструментов модель по-прежнему может рассуждать.</string>
 </resources>

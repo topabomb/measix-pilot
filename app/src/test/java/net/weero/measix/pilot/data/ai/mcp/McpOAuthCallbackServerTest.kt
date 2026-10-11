@@ -233,6 +233,40 @@ class McpOAuthCallbackServerTest {
     }
 
     @Test
+    fun `localhost binds every resolved loopback and closure waits for an accepted slow request`() {
+        val before = Thread.getAllStackTraces().keys.mapTo(hashSetOf()) { it.id }
+        val server = McpOAuthCallbackServer()
+        server.start("expected-state", McpOAuthCallbackHost.LOCALHOST)
+        val redirect = URL(server.redirectUri)
+        assertEquals("localhost", redirect.host)
+        try {
+            for (address in InetAddress.getAllByName("localhost").distinct()) {
+                Socket(address, redirect.port).use { socket ->
+                    socket.soTimeout = 3_000
+                    socket.getOutputStream().write("GET /wrong HTTP/1.1\r\n\r\n".toByteArray())
+                    assertTrue(socket.getInputStream().bufferedReader().readLine().contains("404"))
+                }
+            }
+            Socket(InetAddress.getByName("localhost"), redirect.port).use { socket ->
+                socket.soTimeout = 3_000
+                socket.getOutputStream().write("GET /callback HTTP/1.1\r\nX-Incomplete: ".toByteArray())
+                val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3)
+                var reading = false
+                while (!reading && System.nanoTime() < deadline) {
+                    reading = Thread.getAllStackTraces().any { (thread, stack) ->
+                        thread.id !in before && stack.any { it.methodName == "processCallback" }
+                    }
+                    if (!reading) Thread.sleep(5)
+                }
+                assertTrue("fixture must reach accepted socket read", reading)
+                server.close()
+                assertEquals(-1, socket.getInputStream().read())
+                assertTrue(Thread.getAllStackTraces().keys.none { it.id !in before && it.name == "mcp-oauth-callback" })
+            }
+        } finally { server.close() }
+    }
+
+    @Test
     fun `cancellation releases the accept thread and close is idempotent`() {
         val server = startedServer()
         try {

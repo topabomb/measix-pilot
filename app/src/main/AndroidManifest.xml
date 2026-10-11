@@ -93,6 +93,11 @@
         <data android:mimeType="text/plain" />
       </intent-filter>
 
+      <intent-filter>
+        <action android:name="net.weero.measix.pilot.action.IMAGE_GENERATION" />
+        <category android:name="android.intent.category.DEFAULT" />
+      </intent-filter>
+
       <meta-data
         android:name="android.app.shortcuts"
         android:resource="@xml/shortcuts" />

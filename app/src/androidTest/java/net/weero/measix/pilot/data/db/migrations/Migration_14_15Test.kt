@@ -85,7 +85,7 @@ class Migration_14_15Test {
         val room = createAppDatabase(context, name)
         try {
             val db = room.openHelper.writableDatabase
-            assertEquals(15, db.version)
+            assertEquals(net.weero.measix.pilot.data.db.APP_DATABASE_VERSION, db.version)
             assertPreserved(db, message)
         } finally {
             room.close()

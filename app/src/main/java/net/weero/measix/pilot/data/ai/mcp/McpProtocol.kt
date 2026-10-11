@@ -4,6 +4,8 @@ import io.ktor.client.HttpClient
 import io.ktor.util.StringValues
 import io.modelcontextprotocol.kotlin.sdk.client.Client
 import io.modelcontextprotocol.kotlin.sdk.client.ClientOptions
+import io.modelcontextprotocol.kotlin.sdk.client.ProtocolEra
+import io.modelcontextprotocol.kotlin.sdk.ExperimentalMcpApi
 import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
 import io.modelcontextprotocol.kotlin.sdk.types.ClientCapabilities
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
@@ -49,10 +51,14 @@ internal class McpProtocolClientFactory(
         }
     }
 
+    @OptIn(ExperimentalMcpApi::class)
     fun createClient(definition: McpConnectionDefinition): Client =
         (definition as? McpConnectionDefinition.User)?.let { clientOverride?.invoke(it.config) } ?: Client(
             clientInfo = Implementation(name = definition.namespace, version = "1.0"),
-            options = ClientOptions(capabilities = ClientCapabilities()),
+            options = ClientOptions(capabilities = ClientCapabilities()).apply {
+                // Our transports implement the initialized session protocol, not request-scoped discovery.
+                protocolEra = ProtocolEra.Legacy
+            },
         )
 
     private fun userTransport(config: McpServerConfig, httpClient: HttpClient, resolvedHeaders: List<Pair<String, String>>): AbstractTransport {

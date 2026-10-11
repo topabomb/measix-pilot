@@ -11,6 +11,7 @@ import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.OpenAIResponseSourceProfile
 import me.rerere.ai.ui.OpenAIResponseWireFormat
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /**
  * OpenAI-compatible endpoint identity derived from the actual request host.
@@ -54,6 +55,20 @@ internal fun resolveOpenAIEndpointVendor(host: String): OpenAIEndpointVendor {
         else -> OpenAIEndpointVendor.COMPATIBLE
     }
 }
+
+/** Image APIs preserve the configured path prefix; exact host selects only verified differences. */
+internal fun imageEndpoint(setting: ProviderSetting.OpenAI, edit: Boolean): String {
+    val base = setting.baseUrl.toHttpUrl()
+    require(base.query == null && base.fragment == null && base.username.isEmpty() && base.password.isEmpty()) {
+        "invalid_image_endpoint"
+    }
+    val suffix = if (resolveOpenAIEndpointVendor(base.host) == OpenAIEndpointVendor.OPENROUTER) "/images"
+        else if (edit) "/images/edits" else "/images/generations"
+    return base.newBuilder().encodedPath(base.encodedPath.trimEnd('/') + suffix).build().toString()
+}
+
+internal fun imageRequestSize(setting: ProviderSetting.OpenAI, size: String): String? =
+    size.trim().takeIf { it.isNotEmpty() && !it.equals("auto", ignoreCase = true) && setting.baseUrl.toHttpUrl().host != "api.x.ai" }
 
 internal fun isOfficialOpenAIHost(host: String): Boolean =
     resolveOpenAIEndpointVendor(host) == OpenAIEndpointVendor.OPENAI

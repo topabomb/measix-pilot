@@ -149,3 +149,96 @@
  #include <signal.h>
  #include <unistd.h>
  #include <sys/syscall.h>  /* __NR_memfd_create,  */
+--- a/src/tracee/seccomp.c
++++ b/src/tracee/seccomp.c
+@@ -155,6 +155,20 @@
+ 	}
+ 
+ 	switch (sysnum) {
++	case PR_fork:
++		/* musl uses fork(2) on x86_64, while Android permits the
++		 * equivalent clone(2) used by bionic. Restart through the
++		 * existing SIGSYS path so child tracking and register restore
++		 * remain owned by the normal syscall/tracee lifecycle. */
++		set_sysnum(tracee, PR_clone);
++		poke_reg(tracee, SYSARG_1, SIGCHLD);
++		poke_reg(tracee, SYSARG_2, 0);
++		poke_reg(tracee, SYSARG_3, 0);
++		poke_reg(tracee, SYSARG_4, 0);
++		poke_reg(tracee, SYSARG_5, 0);
++		restart_syscall_after_seccomp(tracee);
++		break;
++
+ 	case PR_open:
+ 		set_sysnum(tracee, PR_openat);
+ 		poke_reg(tracee, SYSARG_4, peek_reg(tracee, CURRENT, SYSARG_3));
+--- a/src/tracee/tracee.h
++++ b/src/tracee/tracee.h
+@@ -217,6 +217,7 @@
+ 	bool _regs_were_changed;
+ 	bool restore_original_regs;
+ 	bool restore_original_regs_after_seccomp_event;
++	bool restore_fork_child_regs;
+ 
+ 	/* State for the special handling of SIGSTOP.  */
+ 	enum {
+--- a/src/tracee/tracee.c
++++ b/src/tracee/tracee.c
+@@ -405,6 +405,10 @@
+                 // contains the usual clone flags.
+                 clone_flags = peek_word(parent, peek_reg(parent, CURRENT, SYSARG_1));
+ 
++	bool restore_fork_child_regs = status >= 0
++		&& parent->restore_original_regs_after_seccomp_event
++		&& get_sysnum(parent, CURRENT) == PR_clone && clone_flags == SIGCHLD;
++
+ 	/* Get the pid of the parent's new child.  */
+ 	status = ptrace(PTRACE_GETEVENTMSG, parent->pid, NULL, &pid);
+ 	if (status < 0 || pid == 0) {
+@@ -433,6 +437,13 @@
+ 	child->verbose = parent->verbose;
+ 	child->seccomp = parent->seccomp;
+ 	child->sysexit_pending = parent->sysexit_pending;
++	/* A SIGSYS fork rewrite changes arguments in both return paths.
++	 * Restore the child's arguments before its first resume, without
++	 * inheriting the parent's return value or syscall-stage state. */
++	if (restore_fork_child_regs) {
++		child->_regs[ORIGINAL_SECCOMP_REWRITE] = parent->_regs[ORIGINAL_SECCOMP_REWRITE];
++		child->restore_fork_child_regs = true;
++	}
+ 	child->execfn_addr = parent->execfn_addr;
+ 	child->auxv_fd = parent->auxv_fd;
+ 	child->no_new_privs = parent->no_new_privs;
+--- a/src/tracee/event.c
++++ b/src/tracee/event.c
+@@ -922,6 +922,30 @@
+ 	if (tracee->as_ptracer.wait_pid != 0 || signal == -1)
+ 		return false;
+ 
++	if (tracee->restore_fork_child_regs) {
++		assert(!tracee->restore_original_regs);
++		tracee->restore_fork_child_regs = false;
++		/* clone has consumed its arguments. Preserve the child's return
++		 * value and syscall stage; only restore argument registers. */
++		status = fetch_regs(tracee);
++		if (status >= 0) {
++			word_t result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
++			poke_reg(tracee, SYSARG_1, peek_reg(tracee, ORIGINAL_SECCOMP_REWRITE, SYSARG_1));
++			poke_reg(tracee, SYSARG_2, peek_reg(tracee, ORIGINAL_SECCOMP_REWRITE, SYSARG_2));
++			poke_reg(tracee, SYSARG_3, peek_reg(tracee, ORIGINAL_SECCOMP_REWRITE, SYSARG_3));
++			poke_reg(tracee, SYSARG_4, peek_reg(tracee, ORIGINAL_SECCOMP_REWRITE, SYSARG_4));
++			poke_reg(tracee, SYSARG_5, peek_reg(tracee, ORIGINAL_SECCOMP_REWRITE, SYSARG_5));
++			poke_reg(tracee, SYSARG_6, peek_reg(tracee, ORIGINAL_SECCOMP_REWRITE, SYSARG_6));
++			poke_reg(tracee, SYSARG_RESULT, result);
++			status = push_specific_regs(tracee, false);
++		}
++		if (status < 0) {
++			note(tracee, ERROR, SYSTEM, "restore fork child registers");
++			kill(tracee->pid, SIGKILL);
++			return false;
++		}
++	}
++
+ 	/* Restart the tracee and stop it at the next instruction, or
+ 	 * at the next entry or exit of a system call. */
+ 	assert(tracee->restart_how != 0);

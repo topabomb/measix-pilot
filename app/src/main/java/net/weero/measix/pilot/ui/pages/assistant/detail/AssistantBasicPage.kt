@@ -77,6 +77,7 @@ fun AssistantBasicPage(id: String) {
     val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val providers by vm.providers.collectAsStateWithLifecycle()
     val hasValidChatModel by vm.hasValidChatModel.collectAsStateWithLifecycle()
+    val chatModel by vm.chatModel.collectAsStateWithLifecycle()
     val tags by vm.tags.collectAsStateWithLifecycle()
     val workspaces by vm.workspaces.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -106,6 +107,7 @@ fun AssistantBasicPage(id: String) {
             assistant = assistant,
             providers = providers,
             hasValidChatModel = hasValidChatModel,
+            reasoningModelId = chatModel?.modelId,
             tags = tags,
             workspaces = workspaces,
             onUpdate = { vm.update(assistant, it) },
@@ -131,6 +133,7 @@ internal fun AssistantBasicContent(
     definitionEditable: Boolean = true,
     usageOnly: Boolean = false,
     modelControl: (@Composable () -> Unit)? = null,
+    reasoningModelId: String? = null,
     imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)? = null,
 ) {
     val effectiveContextMessageLimit = assistant.effectiveContextMessageLimit()
@@ -627,6 +630,7 @@ internal fun AssistantBasicContent(
                 },
             ) {
                 ReasoningButton(
+                    modelId = reasoningModelId,
                     reasoningLevel = assistant.reasoningLevel,
                     onUpdateReasoningLevel = { level ->
                         onUpdate(assistant.copy(reasoningLevel = level))

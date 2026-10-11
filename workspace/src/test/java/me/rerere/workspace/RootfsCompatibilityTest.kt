@@ -146,6 +146,51 @@ class RootfsCompatibilityTest {
     }
 
     @Test
+    fun `Alpine busybox and sh use actual ELF and musl loader`() {
+        val native = tmp.newFolder()
+        val root = tmp.newFolder()
+        writeTestElf(File(native, ProotLaunchSpec.PROOT_EXEC), 62)
+        writeTestElf(File(root, "bin/busybox"), 62, "/lib/ld-musl-x86_64.so.1")
+        writeTestElf(File(root, "lib/ld-musl-x86_64.so.1"), 62)
+        writeTestElf(File(root, "bin/sh"), 62, "/lib/ld-musl-x86_64.so.1")
+        File(root, "etc").mkdirs()
+        File(root, "etc/os-release").writeText("ID=alpine\nPRETTY_NAME=\"Alpine Linux\"\n")
+        val compatibility = RootfsCompatibility(native) { 4096L }
+        assertEquals(
+            RootfsEnvironment(listOf("/bin/busybox", "env"), "/bin/sh", "Alpine Linux"),
+            compatibility.requireCompatible(root),
+        )
+        writeTestElf(File(root, "bin/env"), 62)
+        assertEquals(listOf("/bin/env"), compatibility.requireCompatible(root).envCommand)
+        File(root, "bin/bash").writeText("#!/bin/sh\nexec /bin/sh")
+        assertFalse(compatibility.isCompatible(root))
+        File(root, "bin/bash").delete()
+        writeTestElf(File(root, "lib/ld-musl-x86_64.so.1"), 183)
+        assertFalse(compatibility.isCompatible(root))
+    }
+
+    @Test
+    fun `busybox symlink entry points stay within guest root`() {
+        val native = tmp.newFolder()
+        val root = tmp.newFolder()
+        writeTestElf(File(native, ProotLaunchSpec.PROOT_EXEC), 62)
+        writeTestElf(File(root, "bin/busybox"), 62)
+        try {
+            Files.createSymbolicLink(File(root, "bin/sh").toPath(), File("busybox").toPath())
+        } catch (error: Exception) {
+            assumeNoException("Symbolic links require host support", error)
+        }
+        File(root, "usr/bin").mkdirs()
+        Files.createSymbolicLink(File(root, "usr/bin/env").toPath(), File("/bin/busybox").toPath())
+        val compatibility = RootfsCompatibility(native) { 4096L }
+        assertEquals("/bin/sh", compatibility.requireCompatible(root).shell)
+        assertEquals(listOf("/usr/bin/env"), compatibility.requireCompatible(root).envCommand)
+        Files.delete(File(root, "bin/sh").toPath())
+        Files.createSymbolicLink(File(root, "bin/sh").toPath(), File("../../outside").toPath())
+        assertFalse(compatibility.isCompatible(root))
+    }
+
+    @Test
     fun `boolean inspection preserves thread cancellation`() {
         val compatibility = RootfsCompatibility(tmp.newFolder()) { 4096L }
         val root = tmp.newFolder()

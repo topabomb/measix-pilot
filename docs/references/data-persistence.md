@@ -11,7 +11,7 @@ Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏根记
 
 | 数据 | 查询与结构边界 |
 | --- | --- |
-| 会话、文件夹与收藏 | 会话列表排除 Child，按助手、文件夹、置顶和更新时间筛选；助手全列表与未归档列表有独立复合索引，避免中间的 `folder_id` 打断排序。Child 关系另保留外键索引；全文搜索使用原 `message_fts` 投影 |
+| 会话、文件夹与收藏 | 会话列表排除 Child，按助手、文件夹、置顶筛选；SQL 在分页前按显示偏好选择创建或更新时间，时间相同再按 ID 降序。四类列表查询各有两种时间字段的复合索引，避免中间的 `folder_id` 打断排序。Child 关系另保留外键索引；全文搜索使用原 `message_fts` 投影 |
 | 消息与执行记录 | `message_node` 按会话和 node_index 排序；`turn_execution` 支持会话查询和非终态恢复；`tool_execution` 以 `(turn_id, local_call_id)` 唯一约束调用，保留 Child 关系查询 |
 | 上下文与开场 | entry 归 owner node/variant，admission 按 owner/Step 唯一，use 保存本次贡献顺序；opening 一会话一份，删除消息不删除 opening，整会话删除级联 |
 | 运行记忆 | `(scope, assistant_id)` 定位主体及 namespace，行按 `id ASC` 读取 |
@@ -22,12 +22,20 @@ Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏根记
 `conversation_context_use` 的 entry 外键为 NO ACTION，删除正文前须先调整关联；`Omitted` 关闭继承贡献，不产生正文。
 `ConversationContextIntegrity` 的因果与分支规则见下文。
 
+手动摘要在原 context payload v2 内增加可空 `HistorySummaryCheckpoint` v1，不另建状态表。
+覆盖 locator、语义指纹及前一依赖随摘要来源一起由会话事务提交；缺字段的旧摘要不推造覆盖证据。
+已有依赖必须是位于此前节点的检查点，非法类型、顺序或循环拒绝装载／恢复；删除历史导致缺失依赖仅使摘要失效。
+`UIMessage.modelInfo` 为可空的生成模型显示快照，START 时保存，旧数据保持未知；它不是可编辑模型定义。
+两类新增历史事实都经原 JSON codec、Room 消息／上下文和个人备份链保存，不改企业数据所有权。
+
 `ConversationRepository.getContextToolHistory` 经 `ToolExecutionDAO.getConversationOutcomes` 一次 LEFT JOIN
 读取已记录的 Assistant owner 和工具终态。没有 Tool 行的已记录 Turn 仍保留，用于区分审批前拒绝与只复制 transcript、
 没有本地执行记录的 Fork 历史；不逐条查询或复制 execution 行。
 
 `ConversationQueryService` 管选中域订阅，`SelectedRealmPagingSource` 对每次惰性加载重新验证原 Session；
 切域或订阅结束使旧源失效。FTS 在排序和限额前经所属根会话过滤 scope，不能在 UI 拿到跨域结果后再过滤。
+显示排序 `ConversationSortOrder` 默认为更新时间；业务使用的最近会话仍按更新时间读取。查询投影的 `sortTime` 与同次 SQL 排序一致，供日期分组和显示使用，不能用新的偏好重新解释尚未替换的旧页。
+历史页读取本空间全部根会话，侧栏保留助手及文件夹范围；Settings 恢复后缺失助手定义的历史仍可打开。历史可读不授予继续生成资格，不自动补建助手或改写会话归属，用户可通过既有操作显式切换到可用助手。
 索引服务查询而非授权；前置通配符搜索、JSON 聚合和低频恢复也不因补齐普通索引就免除扫描。
 
 最近会话引用仍由 `SettingsStore` 按 scope 写入。`forgetConversation(scope, expectedId)` 在原提交锁内比较并清理，

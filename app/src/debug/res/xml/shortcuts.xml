@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+  <shortcut
+    android:shortcutId="camera"
+    android:enabled="true"
+    android:icon="@drawable/ic_lucide_camera"
+    android:shortcutShortLabel="@string/shortcut_take_picture"
+    android:shortcutLongLabel="@string/shortcut_take_picture">
+    <intent
+      android:action="android.intent.action.VIEW"
+      android:targetPackage="net.weero.measix.pilot.debug"
+      android:targetClass="net.weero.measix.pilot.ui.activity.ShortcutHandlerActivity"
+      android:data="measix://shortcut" />
+    <categories android:name="android.shortcut.conversation" />
+  </shortcut>
+  <shortcut
+    android:shortcutId="image_generation"
+    android:enabled="true"
+    android:icon="@drawable/ic_image_generation"
+    android:shortcutShortLabel="@string/imggen_page_title"
+    android:shortcutLongLabel="@string/imggen_page_title">
+    <intent
+      android:action="net.weero.measix.pilot.action.IMAGE_GENERATION"
+      android:targetPackage="net.weero.measix.pilot.debug"
+      android:targetClass="net.weero.measix.pilot.RouteActivity" />
+  </shortcut>
+</shortcuts>

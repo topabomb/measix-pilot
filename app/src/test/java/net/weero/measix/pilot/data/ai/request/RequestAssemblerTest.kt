@@ -7,6 +7,16 @@ import kotlinx.serialization.json.buildJsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ClaudeResponseMetadata
+import me.rerere.ai.ui.ClaudeReplayState
+import me.rerere.ai.ui.MessageTerminalStatus
+import me.rerere.ai.ui.StepModelResult
+import me.rerere.ai.ui.StepOutcome
+import me.rerere.ai.ui.StepUsage
+import me.rerere.ai.ui.metadataAs
+import me.rerere.ai.ui.replaySafeProjection
+import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.core.UsageCompleteness
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,6 +28,26 @@ import kotlin.uuid.Uuid
  * 核心不变量：durable 的 [UIMessagePart.Step] 绝不进入 Provider，其余 parts 顺序与身份逐字保留。
  */
 class RequestAssemblerTest {
+    @Test fun `terminal replay retains only exclusions from completed committed steps`() {
+        fun metadata(digest: String) = ClaudeResponseMetadata(ClaudeReplayState(retiredDigests = setOf(digest))).toMetadata()
+        fun result(digest: String) = StepModelResult("end_turn", StepUsage(), 1, null, null,
+            UsageCompleteness.COMPLETE, metadata(digest))
+        for (terminal in MessageTerminalStatus.entries) {
+            val message = UIMessage(role = MessageRole.ASSISTANT, terminalStatus = terminal,
+                providerMetadata = metadata("incomplete"), parts = listOf(
+                    step(0).copy(outcome = StepOutcome.Continue, modelResult = result("committed")),
+                    UIMessagePart.Text("completed"),
+                    step(1).copy(outcome = StepOutcome.Cancelled, modelResult = result("incomplete")),
+                    UIMessagePart.Reasoning("unfinished"),
+                    UIMessagePart.Text("partial"),
+                ))
+            val projected = requireNotNull(message.replaySafeProjection())
+            val provider = assembler.assemble(listOf(projected)).providerMessages.single()
+            assertEquals(setOf("committed"), provider.metadataAs<ClaudeResponseMetadata>()?.claudeReplayState?.retiredDigests)
+            assertTrue(provider.parts.none { it is UIMessagePart.Step || it is UIMessagePart.Reasoning })
+            assertEquals(metadata("incomplete"), message.providerMetadata)
+        }
+    }
     @Test fun `client diagnostics stay in durable history and never enter provider input including nested output`() {
         val nested = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "nested", "inner", "{}",
             output = listOf(UIMessagePart.Text("nested result")), clientDiagnostic = me.rerere.ai.ui.ToolClientDiagnostic("inner private diagnostic"))

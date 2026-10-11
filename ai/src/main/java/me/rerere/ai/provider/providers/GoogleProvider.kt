@@ -141,7 +141,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 privateKeyPem = StringEscapeUtils.unescapeJson(providerSetting.privateKey.trim()),
             )
             request.newBuilder()
-                .addHeader("Authorization", "Bearer $accessToken")
+                .header("Authorization", "Bearer $accessToken")
                 .build()
         } else {
             val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
@@ -151,7 +151,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     .build()
             } else {
                 request.newBuilder()
-                    .addHeader("x-goog-api-key", key)
+                    .header("x-goog-api-key", key)
                     .build()
             }
         }
@@ -164,6 +164,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 providerSetting = providerSetting,
                 request = Request.Builder()
                     .url(url)
+                    .headers(providerSetting.customHeaders.toHeaders())
                     .get()
                     .build()
             )
@@ -219,12 +220,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             credentials = params.credentials,
             request = Request.Builder()
                 .url(url)
-                .headers(params.customHeaders.toHeaders())
+                .headers((providerSetting.customHeaders + params.customHeaders).toHeaders())
                 .post(
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
                 .configureReferHeaders(providerSetting.baseUrl)
-            .configureSessionHeader(params.providerSessionId)
+            .configureSessionHeader(params.openCodeSessionId ?: params.providerSessionId)
                 .build()
         )
 
@@ -297,12 +298,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             credentials = params.credentials,
             request = Request.Builder()
                 .url(url)
-                .headers(params.customHeaders.toHeaders())
+                .headers((providerSetting.customHeaders + params.customHeaders).toHeaders())
                 .post(
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
                 .configureReferHeaders(providerSetting.baseUrl)
-            .configureSessionHeader(params.providerSessionId)
+            .configureSessionHeader(params.openCodeSessionId ?: params.providerSessionId)
                 .build()
         )
 

@@ -7,7 +7,7 @@
 - Termux recipe reference: commit `08b49b3ce00b1e14a3a0365200f30e50f8dfafe1`,
   [PRoot](https://github.com/termux/termux-packages/blob/08b49b3ce00b1e14a3a0365200f30e50f8dfafe1/packages/proot/build.sh)
   and [libtalloc](https://github.com/termux/termux-packages/blob/08b49b3ce00b1e14a3a0365200f30e50f8dfafe1/packages/libtalloc/build.sh).
-- Local termination patch: `workspace/tools/patches/proot-termination.patch`, also hash-locked.
+- Local termination and syscall compatibility patch: `workspace/tools/patches/proot-termination.patch`, also hash-locked.
 
 The earlier imports came from upstream app commit `f4508dfac2255cf83e75859a8fe37dd7da6778a3`.
 The shipped executables and loader companions are now local source builds; they are not claimed
@@ -32,7 +32,13 @@ seccomp override or replacement process supervisor is used.
 
 ## Rebuild and verification
 
-`workspace/tools/build-proot.py` requires Python 3.12+, make, patch, and the Linux x86_64 Android
+The patch also handles Android's SIGSYS rejection of musl's raw `fork` by restarting the equivalent
+`clone(SIGCHLD, 0, 0, 0, 0)` through PRoot's existing seccomp path. The parent uses the existing
+register restoration; the new child restores only its original argument registers before its first
+resume, preserving its return value and syscall state. A failed restoration terminates that child
+and leaves reaping to the same tracee lifecycle. Normal clone/thread creation is unchanged.
+
+`workspace/tools/build-proot.py` requires Python 3.12+, make, patch, gawk, and the Linux x86_64 Android
 NDK r29 (`29.0.14206865`). The NDK revision, API 24, source/dependency hashes, patch hash and final
 artifact hashes are recorded in `workspace/proot-lock.json`. Native ELF segments support 16 KiB
 host pages; guest Rootfs compatibility remains a separate admission check.
@@ -53,7 +59,7 @@ mode rejects output differing from the manifest and never installs artifacts int
 manifest; it is not a verification pass. `--keep-work-dir` retains exact patched sources, dependency
 objects and configuration for inspection and relinking.
 
-Builds use deterministic archives, a fixed source date and normalized source paths. On 2026-09-12,
+Builds use deterministic archives, a fixed source date and normalized source paths. On 2026-10-10,
 both ABI exec/loader pairs were reproduced byte-for-byte in independent source/build directories
 using the finalized compiler and linker flags. All four hashes match the shipped files and manifest.
 Both rebuilt loader companions also match their earlier imported bytes. Host builds and ELF checks
@@ -66,11 +72,17 @@ bind mounts, PWD and explicit environment. `PROOT_LOADER` selects the separately
 `--kill-on-exit` terminates remaining tracees when the initial guest exits; terminating the tracer
 with SIGKILL bypasses its cleanup and is not the workspace shutdown protocol.
 
-The x86_64 pair passed actual Android API 36 / 4 KiB Rootfs and PTY acceptance: shell/file operations, distinct
+The current x86_64 pair passed Android API 30 / 4 KiB Alpine 3.22.6 and Ubuntu 24.04.3 acceptance: shell/file operations, distinct
 stdin/stdout/stderr, long output, bounded timeout and cancellation, cancellation during startup,
 background process disappearance, and two independently closed PTYs. Tests on x86_64 AVDs do not
 prove arm64 physical-device interoperability. The 16 KiB host rejection of an incompatible 4 KiB
-guest archive is separate from successful execution of compatible guests.
+guest archive passed on API 37.1 and is separate from successful execution of compatible guests.
+
+`tools/proot-fork-registers-x86_64.S` is a libc-independent Linux probe. Build it with the command
+in its header and supply its URL as `prootForkProbeUrl` alongside `prootRootfsUrl` to
+`WorkspaceProotAndroidTest`. The acceptance test runs it 32 times: both fork return paths retain
+all six argument registers, the child can make a subsequent syscall, and the parent observes its
+child's successful exit through waitpid. This complements the ordinary shell/PTY cancellation cases.
 
 ## Distribution materials
 

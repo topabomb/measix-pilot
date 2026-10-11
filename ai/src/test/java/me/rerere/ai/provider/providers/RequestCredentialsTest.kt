@@ -47,6 +47,59 @@ class RequestCredentialsTest {
         CLAUDE("x-api-key"), GOOGLE("x-goog-api-key"),
     }
 
+    @Test fun `model catalogs balance and embedding consume provider headers`() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            requests += chain.request()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(503).message("Fixture end").body("fixture".toResponseBody()).build()
+        }.build()
+        try {
+            for (wire in listOf(Wire.CHAT, Wire.CLAUDE, Wire.GOOGLE)) {
+                val (provider, original) = consumer(wire, client, null)
+                try { provider.listModels(original.copyProvider(customHeaders = listOf(CustomHeader("X-Catalog", wire.name)))) }
+                catch (_: Exception) { }
+                assertEquals(wire.name, requests.last().header("X-Catalog"))
+            }
+            val provider = OpenAIProvider(client)
+            val setting = ProviderSetting.OpenAI(apiKey = "fixture", customHeaders = listOf(CustomHeader("X-Shared", "provider")))
+            try { provider.getBalance(setting) } catch (_: Exception) { }
+            assertEquals("provider", requests.last().header("X-Shared"))
+            try { provider.generateEmbedding(setting, me.rerere.ai.provider.EmbeddingGenerationParams(Model(modelId = "embed"),
+                listOf("text"), customHeaders = listOf(CustomHeader("x-shared", "model")))) }
+            catch (_: Exception) { }
+            assertEquals(listOf("model"), requests.last().headers.values("X-Shared"))
+            assertEquals(5, requests.size)
+        } finally { client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll() }
+    }
+
+    @Test fun `provider and request headers merge once with model precedence across text wires`() = runBlocking {
+        for (wire in Wire.entries) for (stream in listOf(false, true)) {
+            val requests = mutableListOf<Request>()
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                requests += chain.request()
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                    .code(503).message("Fixture end").body("fixture".toResponseBody()).build()
+            }.build()
+            try {
+                val (provider, original) = consumer(wire, client, null)
+                val setting = original.copyProvider(customHeaders = listOf(
+                    CustomHeader("X-Provider", "present"), CustomHeader("X-Override", "provider"),
+                ))
+                val params = TextGenerationParams(Model(modelId = "test"),
+                    customHeaders = listOf(CustomHeader("x-override", "first"), CustomHeader("X-OVERRIDE", "model")))
+                try {
+                    if (stream) provider.streamText(setting, emptyList(), params).collect()
+                    else provider.generateText(setting, emptyList(), params)
+                } catch (_: Exception) { /* Fixture rejects after capturing the real builder. */ }
+                val request = requests.single()
+                assertEquals(listOf("present"), request.headers.values("x-provider"))
+                assertEquals(listOf("model"), request.headers.values("x-override"))
+                assertEquals(1, request.headers.values(wire.header).size)
+            } finally { client.dispatcher.executorService.shutdown(); client.connectionPool.evictAll() }
+        }
+    }
+
     @Test fun `all real text builders preserve fixed credentials without user cache in either mode`() = runBlocking {
         for (wire in Wire.entries) for (stream in listOf(false, true)) {
             val cache = temporary.newFolder()

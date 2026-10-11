@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.message
+package net.weero.measix.pilot.ui.components.message
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -38,7 +38,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Idea01
@@ -193,7 +192,6 @@ private fun ReasoningContent(
 @Composable
 fun ChainOfThoughtScope.ChatMessageReasoningStep(
     reasoning: UIMessagePart.Reasoning,
-    model: Model?,
     assistant: Assistant?,
     fadeHeight: Float = 64f,
     collapsedAdaptiveWidth: Boolean = false,

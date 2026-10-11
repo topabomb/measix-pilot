@@ -16,7 +16,7 @@ Durable Conversation、Conversation Presentation 和 Model Request Plan 是三�
 | 条数阶梯窗口 `contextMessageLimit` | 控制发送历史长度，减少相邻请求的前缀漂移 | 否 | 关（`0`） |
 | Tool Result 滚动压缩 | 缩短已消费的 inline tool 正文 | 只替换该 Tool 的 output 为 marker / archive | 开（预算触发） |
 | 状态同步 `conversation_disclosure_snapshot` | 对比本请求可知事实与合法当前事实，只补充尚未知的分区 | 请求前通过 `AdmitRequestContext` 提交内容及接纳记录 | 每个新请求边界对账；重试复用 |
-| 用户触发语义摘要 | 长期缩小可见历史 | 是，不可撤销 | 仅用户确认 |
+| 用户触发语义摘要 | 以检查点缩小后续请求 | 插入摘要，原历史保留 | 用户显式触发 |
 
 会话级自动摘要（conversation-level compaction）未实现，不得与滚动压缩混为一谈。
 
@@ -162,14 +162,28 @@ Step/请求状态说明发送结果。进程恢复使用原中断 Turn 终态协
 ## 手动摘要
 
 `ConversationApplicationService.compress()` 经 `GenerationSideEffects.compressConversation()` 生成摘要，
-再以 durable tree command 替换历史。它由用户显式触发、持久化且不可撤销，不挂到自动发送链路。
+再以 `InsertHistorySummaryCheckpoint` 在覆盖前缀之后插入单个摘要节点，不挂到自动发送链路。
+原节点、执行记录、子会话、收藏和附件引用保持不变；原辅助任务归属和快照比较共同拒绝迟到提交。
 保留最近消息的切点回退到完整 USER 轮次，因此配置数量是最低保留量；可压缩前缀为空则报错。
-保留节点沿用原 node/variant 身份和分支；新摘要与 HistorySummary 来源同事务提交，普通 UI 显示摘要原文，
+新摘要与 HistorySummary 来源同事务提交，普通 UI 显示摘要原文，
 新摘要模型输入使用 `conversation_history_summary` 数据封装（type/content，无 format）并跳过用户模板。
 
 待摘要消息超过 256 条时递归分块，中点优先回退到 USER；没有可用的前置 USER 切点时按原中点分开。
-每条消息通过 `summaryAsText(maxLength = 2000)` 提供正文摘要，Step 标记不参与；这不是附件全文或
-工具 output 的无损备份。`targetTokens` 只进入摘要提示，不是本地硬校验。
+每块必须返回非空正文，结果依原顺序合成一个节点；任一块失败均不提交。普通消息提供最多 2000 字符正文，
+另附工具名称、状态及有界输入／输出；这不是附件或工具全文备份。重复摘要使用前一有效摘要全文加新增覆盖消息，
+不会按普通消息截断前一摘要。`targetTokens` 只进入摘要提示，不是本地硬校验。
+
+`HistorySummaryCheckpoint` 保存版本、有序原始 node/variant 定位、语义指纹和前一摘要依赖。
+`RequestContextPlanner` 按当前分支选择最新有效检查点，摘要始终保留，条数窗口仅裁未覆盖尾部。
+所有检查点容器均排除于普通用户消息候选；失效摘要不会作为用户正文发送。已接纳请求只允许原有
+`MessageOrigin` use 中的摘要，后来创建的检查点不能改写过去请求。旧无 checkpoint 的摘要保持原有解释。
+
+摘要编辑只接受非空纯文本，建立新 variant 并继承应用来源及覆盖证据；删除摘要删除整个节点。
+摘要不提供重新生成动作；`ConversationTurnService` 在截断历史或其他写入前拒绝该请求，
+返回 `summary_cannot_be_sent_as_user_input`，不能把应用摘要当作用户消息重新发送。
+覆盖正文、工具内容或来源变化会使证据失效。纯身份 fork 只重映射明确 locator 与依赖，保留原指纹，
+子助手已知关联 ID 的变化不算正文变化；附件路径、结果或不透明协议字段的变化仍参与判断。
+缺失覆盖项或前一依赖只令摘要失效，非法结构由完整性校验报告；原始历史因此仍可用于后续请求。
 
 ## 组装顺序
 

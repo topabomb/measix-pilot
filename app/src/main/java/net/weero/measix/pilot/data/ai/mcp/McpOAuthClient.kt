@@ -1,15 +1,15 @@
 package net.weero.measix.pilot.data.ai.mcp
 
 import android.util.Log
+import me.rerere.common.http.readResponse
+import me.rerere.common.http.withSingleAttemptBody
+import net.weero.measix.pilot.utils.redactDiagnosticSecrets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -17,15 +17,64 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import java.io.IOException
 import java.security.MessageDigest
 import java.security.SecureRandom
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlin.io.encoding.Base64
 
 private const val TAG = "McpOAuthClient"
+
+private val oauthSecretAssignment = Regex(
+    """(?i)(["']?(?:client_secret|code_verifier|code)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^"'\s,;&]+)""",
+)
+
+private fun redactOAuthDiagnostic(text: String, secrets: List<String> = emptyList()): String {
+    val safe = secrets.fold(text) { value, secret ->
+        value.replace(secret, "<redacted>")
+            .replace(java.net.URLEncoder.encode(secret, "UTF-8"), "<redacted>")
+    }
+    return oauthSecretAssignment.replace(redactDiagnosticSecrets(safe)) { it.groupValues[1] + "<redacted>" }
+}
+
+/** Error bodies and parser excerpts are untrusted; never attach the unsanitized original cause. */
+private fun Throwable.oauthDiagnosticCopy(secrets: List<String>): Throwable {
+    val copies = java.util.IdentityHashMap<Throwable, Throwable>()
+    fun copy(error: Throwable): Throwable {
+        copies[error]?.let { return it }
+        val message = redactOAuthDiagnostic(error.message.orEmpty(), secrets)
+        val diagnostic = if (error is McpOAuthResponseException) {
+            McpOAuthResponseException(error.statusCode, error.errorCode?.let { redactOAuthDiagnostic(it, secrets) }, message)
+        } else if (error is java.io.IOException) {
+            OAuthDiagnosticIOException("${error.javaClass.name}: $message")
+        } else {
+            OAuthDiagnosticException("${error.javaClass.name}: $message")
+        }
+        copies[error] = diagnostic
+        diagnostic.stackTrace = error.stackTrace
+        error.cause?.takeUnless { it === error }?.let { diagnostic.initCause(copy(it)) }
+        error.suppressed.filterNot { it === error }.forEach { diagnostic.addSuppressed(copy(it)) }
+        return diagnostic
+    }
+    return copy(this)
+}
+
+private class OAuthDiagnosticException(message: String) : Exception(message) {
+    override fun toString(): String = requireNotNull(message)
+}
+
+private class OAuthDiagnosticIOException(message: String) : java.io.IOException(message) {
+    override fun toString(): String = requireNotNull(message)
+}
+
+private suspend fun <T> oauthOperation(vararg secrets: String?, block: suspend () -> T): T =
+    withContext(Dispatchers.IO) {
+        try {
+            block()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            throw error.oauthDiagnosticCopy(secrets.filterNotNull().filter(String::isNotEmpty))
+        }
+    }
 
 internal class McpOAuthResponseException(
     val statusCode: Int,
@@ -49,9 +98,11 @@ internal class McpOAuthResponseException(
 class McpOAuthClient(
     private val httpClient: OkHttpClient,
 ) {
+    private val singleAttemptClient = httpClient.newBuilder()
+        .retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
+        .authenticator(okhttp3.Authenticator.NONE).proxyAuthenticator(okhttp3.Authenticator.NONE).build()
     private val json = Json {
         ignoreUnknownKeys = true
-        isLenient = true
         encodeDefaults = true
         explicitNulls = false
     }
@@ -117,56 +168,33 @@ class McpOAuthClient(
      * 发现受保护资源元数据 (RFC 9728)。优先根据服务器 401 响应中的
      * `WWW-Authenticate: resource_metadata="..."` 定位，退回到 well-known 路径。
      */
-    suspend fun discoverProtectedResource(serverUrl: String): ProtectedResourceMetadata =
-        withContext(Dispatchers.IO) {
+    suspend fun discoverProtectedResource(serverUrl: String): ProtectedResourceMetadata? =
+        oauthOperation {
             val candidates = buildList {
                 probeResourceMetadataUrl(serverUrl)?.let { add(it) }
                 addAll(wellKnownPrmUrls(serverUrl))
             }.distinct()
             for (url in candidates) {
                 requireSecureOAuthEndpoint(url, "protected resource metadata endpoint")
-                val meta = try {
-                    getJson<ProtectedResourceMetadata>(url)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Throwable) {
-                    null
-                }
-                if (meta != null && meta.authorizationServers.isNotEmpty()) {
-                    validateProtectedResourceMetadata(
-                        expectedResource = canonicalResource(serverUrl),
-                        metadata = meta,
-                    )
-                    Log.i(TAG, "discoverProtectedResource: found via $url -> ${meta.authorizationServers}")
-                    return@withContext meta
-                }
+                val meta = getMetadata<ProtectedResourceMetadata>(url) ?: continue
+                validateProtectedResourceMetadata(canonicalResource(serverUrl), meta)
+                Log.i(TAG, redactOAuthDiagnostic("discoverProtectedResource: found via $url"))
+                return@oauthOperation meta
             }
-            error("无法发现受保护资源元数据 (protected resource metadata)")
+            null // Only explicit 404/410 across every candidate means metadata is absent.
         }
 
-    /**
-     * 发现授权服务器元数据 (RFC 8414 / OIDC discovery)。依次尝试
-     * oauth-authorization-server 与 openid-configuration 的多种 well-known 组合。
-     */
     suspend fun discoverAuthorizationServer(issuer: String): AuthorizationServerMetadata =
-        withContext(Dispatchers.IO) {
+        oauthOperation {
             requireSecureOAuthEndpoint(issuer, "authorization server issuer")
             for (url in wellKnownAsUrls(issuer)) {
                 requireSecureOAuthEndpoint(url, "authorization server metadata endpoint")
-                val meta = try {
-                    getJson<AuthorizationServerMetadata>(url)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Throwable) {
-                    null
-                }
-                if (meta?.authorizationEndpoint != null && meta.tokenEndpoint != null) {
-                    validateAuthorizationServerMetadata(expectedIssuer = issuer, metadata = meta)
-                    Log.i(TAG, "discoverAuthorizationServer: found via $url")
-                    return@withContext meta
-                }
+                val meta = getMetadata<AuthorizationServerMetadata>(url) ?: continue
+                validateAuthorizationServerMetadata(issuer, meta)
+                Log.i(TAG, redactOAuthDiagnostic("discoverAuthorizationServer: found via $url"))
+                return@oauthOperation meta
             }
-            error("无法发现授权服务器元数据 (authorization server metadata): $issuer")
+            error("oauth_authorization_metadata_missing: $issuer")
         }
 
     /** 动态客户端注册 (RFC 7591)，返回 client_id (公共客户端通常无 secret)。 */
@@ -175,7 +203,7 @@ class McpOAuthClient(
         clientName: String,
         redirectUri: String,
         scope: String?,
-    ): ClientRegistrationResponse = withContext(Dispatchers.IO) {
+    ): ClientRegistrationResponse = oauthOperation {
         requireSecureOAuthEndpoint(registrationEndpoint, "client registration endpoint")
         val body = json.encodeToString(
             ClientRegistrationRequest.serializer(),
@@ -245,7 +273,7 @@ class McpOAuthClient(
         codeVerifier: String,
         redirectUri: String,
         resource: String?,
-    ): TokenResponse = withContext(Dispatchers.IO) {
+    ): TokenResponse = oauthOperation(clientSecret, code, codeVerifier) {
         val form = FormBody.Builder()
             .add("grant_type", "authorization_code")
             .add("code", code)
@@ -268,7 +296,7 @@ class McpOAuthClient(
         refreshToken: String,
         resource: String?,
         scope: String?,
-    ): TokenResponse = withContext(Dispatchers.IO) {
+    ): TokenResponse = oauthOperation(clientSecret, refreshToken) {
         val form = FormBody.Builder()
             .add("grant_type", "refresh_token")
             .add("refresh_token", refreshToken)
@@ -289,19 +317,19 @@ class McpOAuthClient(
             .header("Accept", "application/json")
             .post(form)
             .build()
-        executeRaw(request).use { response ->
+        return singleAttemptClient.newCall(request.withSingleAttemptBody()).readResponse { response ->
             val body = response.body.string()
             if (response.isSuccessful) {
                 // HTTP 2xx: 先尝试解析为成功响应（有些 AS 用 200 返回错误体）
                 val token = runCatching { json.decodeFromString(TokenResponse.serializer(), body) }.getOrNull()
-                if (token?.accessToken != null) return token
+                if (token?.accessToken != null) return@readResponse token
                 val err = runCatching { json.decodeFromString(OAuthErrorResponse.serializer(), body) }.getOrNull()
                 if (err != null) {
                     throw McpOAuthResponseException(response.code, err.error,
                         "OAuth token error: ${err.error}${err.errorDescription?.let { " - $it" } ?: ""}")
                 }
                 throw McpOAuthResponseException(response.code, message =
-                    "OAuth token response missing access_token: ${body.take(300)}")
+                    "OAuth token response missing access_token: ${redactDiagnosticSecrets(body)}")
             } else {
                 // HTTP 4xx/5xx: 解析标准 OAuth 错误响应 (RFC 6749 §5.2)
                 val err = runCatching { json.decodeFromString(OAuthErrorResponse.serializer(), body) }.getOrNull()
@@ -310,7 +338,7 @@ class McpOAuthClient(
                         "OAuth token error (${response.code}): ${err.error}${err.errorDescription?.let { " - $it" } ?: ""}")
                 }
                 throw McpOAuthResponseException(response.code, message =
-                    "HTTP ${response.code} for $tokenEndpoint: ${body.take(300)}")
+                    "HTTP ${response.code} for $tokenEndpoint: ${redactDiagnosticSecrets(body)}")
             }
         }
     }
@@ -326,16 +354,15 @@ class McpOAuthClient(
             .header("Accept", "application/json, text/event-stream")
             .get()
             .build()
-        return try {
-            executeRaw(request).use { response ->
-                if (response.code != 401) return null
-                val header = response.header("WWW-Authenticate") ?: return null
-                parseResourceMetadata(header)
+        return httpClient.newCall(request).readResponse { response ->
+            if (response.code == 401) {
+                response.header("WWW-Authenticate")?.let(::parseResourceMetadata)
+            } else if (response.isSuccessful || response.code in listOf(404, 405)) {
+                null
+            } else {
+                throw McpOAuthResponseException(response.code, message =
+                    "HTTP ${response.code} probing ${request.url}: ${redactDiagnosticSecrets(response.body.string())}")
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Throwable) {
-            null
         }
     }
 
@@ -376,40 +403,23 @@ class McpOAuthClient(
         return if (url.port == defaultPort) "" else ":${url.port}"
     }
 
-    private suspend inline fun <reified T> getJson(url: String): T {
-        val request = Request.Builder()
-            .url(url)
-            .header("Accept", "application/json")
-            .get()
-            .build()
-        val text = execute(request)
-        return json.decodeFromString(text)
-    }
-
-    private suspend fun execute(request: Request): String {
-        executeRaw(request).use { response ->
+    private suspend inline fun <reified T> getMetadata(url: String): T? {
+        val request = Request.Builder().url(url).header("Accept", "application/json").get().build()
+        return httpClient.newCall(request).readResponse { response ->
+            if (response.code == 404 || response.code == 410) return@readResponse null
             val body = response.body.string()
-            if (!response.isSuccessful) {
-                throw McpOAuthResponseException(response.code, message =
-                    "HTTP ${response.code} for ${request.url}: ${body.take(300)}")
-            }
-            return body
+            if (!response.isSuccessful) throw McpOAuthResponseException(response.code, message =
+                "HTTP ${response.code} for $url: ${redactDiagnosticSecrets(body)}")
+            json.decodeFromString<T>(body)
         }
     }
 
-    private suspend fun executeRaw(request: Request): Response =
-        suspendCancellableCoroutine { cont ->
-            val call = httpClient.newCall(request)
-            cont.invokeOnCancellation { runCatching { call.cancel() } }
-            call.enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    if (cont.isActive) cont.resumeWithException(e)
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    if (cont.isActive) cont.resume(response)
-                }
-            })
+    private suspend fun execute(request: Request): String =
+        singleAttemptClient.newCall(request.withSingleAttemptBody()).readResponse { response ->
+            val body = response.body.string()
+            if (!response.isSuccessful) throw McpOAuthResponseException(response.code, message =
+                "HTTP ${response.code} for ${request.url}: ${redactDiagnosticSecrets(body)}")
+            body
         }
 
     companion object {
@@ -418,20 +428,26 @@ class McpOAuthClient(
         private fun base64Url(bytes: ByteArray): String =
             Base64.UrlSafe.encode(bytes).trimEnd('=')
 
-        /**
-         * 规范化 canonical resource URI (RFC 8707 + MCP 规范)：小写 scheme/host、去掉 fragment。
-         */
+        /** Root slash equivalence does not change non-root paths, queries or percent escapes. */
         fun canonicalResource(serverUrl: String): String {
-            val url = serverUrl.toHttpUrlOrNull() ?: return serverUrl
-            return url.newBuilder().fragment(null).build().toString()
+            val url = validatedResourceUri(serverUrl)
+            val encoded = url.toString()
+            return if (url.encodedPath == "/" && url.encodedQuery == null) encoded.removeSuffix("/") else encoded
         }
 
+        /** Missing persisted audience belongs to the released pre-normalization token protocol. */
+        internal fun legacyAuthorizedResource(serverUrl: String): String = validatedResourceUri(serverUrl).toString()
+
+        internal fun resourceOrigin(serverUrl: String): String =
+            requireSecureOAuthEndpoint(serverUrl, "MCP resource").newBuilder()
+                .encodedPath("/").query(null).build().toString().removeSuffix("/")
+
         internal fun requireSecureOAuthEndpoint(value: String, label: String): HttpUrl {
-            val url = value.toHttpUrlOrNull() ?: error("Invalid $label: $value")
-            require(url.scheme == "https") { "$label must use HTTPS: $value" }
-            require(url.fragment == null) { "$label must not contain a fragment: $value" }
+            val url = value.toHttpUrlOrNull() ?: error(redactOAuthDiagnostic("Invalid $label: $value"))
+            require(url.scheme == "https") { redactOAuthDiagnostic("$label must use HTTPS: $value") }
+            require(url.fragment == null) { redactOAuthDiagnostic("$label must not contain a fragment: $value") }
             require(url.username.isEmpty() && url.password.isEmpty()) {
-                "$label must not contain user information: $value"
+                redactOAuthDiagnostic("$label must not contain user information: $value")
             }
             return url
         }
@@ -481,10 +497,10 @@ class McpOAuthClient(
         }
 
         private fun validatedResourceUri(value: String): HttpUrl {
-            val url = value.toHttpUrlOrNull() ?: error("Invalid MCP resource URI: $value")
-            require(url.fragment == null) { "MCP resource URI must not contain a fragment: $value" }
+            val url = value.toHttpUrlOrNull() ?: error(redactOAuthDiagnostic("Invalid MCP resource URI: $value"))
+            require(url.fragment == null) { redactOAuthDiagnostic("MCP resource URI must not contain a fragment: $value") }
             require(url.username.isEmpty() && url.password.isEmpty()) {
-                "MCP resource URI must not contain user information: $value"
+                redactOAuthDiagnostic("MCP resource URI must not contain user information: $value")
             }
             return url
         }

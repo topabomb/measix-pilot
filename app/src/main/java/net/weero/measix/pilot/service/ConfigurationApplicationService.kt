@@ -102,6 +102,16 @@ internal class ConfigurationApplicationService(
                 else current.favoriteModels.filterNot { it == reference })
         }
 
+    suspend fun setModelGroupCollapsed(selection: RealmSelection?, groupId: String, collapsed: Boolean) {
+        recoveryGate.awaitReady()
+        if (selection == null) {
+            settings.setModelGroupCollapsed(RealmAccess.Personal.scope, groupId, collapsed, requireOwner = {})
+        } else enterpriseSessions.withSelectedRealmSelection(selection) {
+            settings.setModelGroupCollapsed(selection.access.scope, groupId, collapsed,
+                requireOwner = { enterpriseSessions.requirePublishedSelection(selection) })
+        }
+    }
+
     /** Null addresses the personal favorites used while editing shared user definitions. */
     private suspend fun updateSelectedPreferences(selection: RealmSelection?, transform: (ResourceSelections) -> ResourceSelections) {
         recoveryGate.awaitReady()

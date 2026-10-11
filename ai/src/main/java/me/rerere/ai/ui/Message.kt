@@ -19,6 +19,16 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 // 公共消息抽象, 具体的Provider实现会转换为API接口需要的DTO
+/** Identity captured for this generation; current configuration must not rewrite historical labels. */
+@Serializable
+data class MessageModelInfo(
+    val id: ConfigurationReference,
+    val modelId: String,
+    val displayName: String,
+) {
+    val displayLabel: String get() = displayName.ifBlank { modelId }
+}
+
 @Serializable
 data class UIMessage(
     val id: Uuid = Uuid.random(),
@@ -29,6 +39,7 @@ data class UIMessage(
         .toLocalDateTime(TimeZone.currentSystemDefault()),
     val finishedAt: LocalDateTime? = null,
     val modelId: ConfigurationReference? = null,
+    val modelInfo: MessageModelInfo? = null,
     val usage: TokenUsage? = null,
     val translation: String? = null,
     /** Provider protocol state used for lossless stateless replay; never rendered as user content. */
@@ -247,7 +258,8 @@ fun partsAreValidToUpload(parts: List<UIMessagePart>): Boolean = parts.any { par
         is UIMessagePart.Video -> part.url.isNotBlank()
         is UIMessagePart.Audio -> part.url.isNotBlank()
         is UIMessagePart.Document -> part.url.isNotBlank()
-        is UIMessagePart.Reasoning -> part.reasoning.isNotBlank()
+        is UIMessagePart.Reasoning -> part.reasoning.isNotBlank() ||
+            part.metadataAs<ClaudeReasoningMetadata>()?.let { it.signature != null || it.redactedData != null } == true
         else -> true
     }
 }
@@ -353,7 +365,7 @@ fun UIMessage.replaySafeProjection(): UIMessage? {
     val completePartCount = projectedComplete.size
     val projected = copy(
         parts = projectedParts,
-        providerMetadata = null,
+        providerMetadata = completedClaudeReplayMetadata(projectedComplete),
         terminalStatus = null,
         terminalReason = null,
         terminalDetail = null,
@@ -586,6 +598,11 @@ sealed interface ProviderToolCallSlot {
 }
 
 @Serializable
+data class ProviderContentBlockSlot(val responseId: String, val index: Int) {
+    init { require(responseId.isNotBlank() && index >= 0) }
+}
+
+@Serializable
 data class UIMessageChoice(
     val index: Int,
     val delta: UIMessage?,
@@ -594,4 +611,6 @@ data class UIMessageChoice(
     /** One slot for each Tool part, in that choice's Tool order. Complete messages have array identity. */
     val toolCallSlots: List<ProviderToolCallSlot> = message?.getTools()?.indices
         ?.map { ProviderToolCallSlot.Index(it) }.orEmpty(),
+    /** Optional exact block identity for every part; deltas reuse their original slot. Never persisted. */
+    val contentBlockSlots: List<ProviderContentBlockSlot> = emptyList(),
 )

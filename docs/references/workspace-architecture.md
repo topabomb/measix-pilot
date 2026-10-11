@@ -97,7 +97,7 @@ Rootfs 内的主要映射：
 `workspace/proot-lock.json` 是唯一机器可读 manifest，固定 PRoot/Termux Packages 来源、版本、源码 archive 校验、
 构建参数以及各 ABI artifact 的路径、SHA-256 和 ELF 契约。`workspace/PROOT.md` 记录来源与许可证；PRoot 源码、
 patch/build scripts、第三方许可证、静态链接依赖的可重链接材料和适用安装信息共同构成独立 Release 合规门禁，
-provenance URL 不能代替该义务。`workspace/tools/build-proot.py` 从固定源码、依赖和本地终止补丁构建双 ABI；
+provenance URL 不能代替该义务。`workspace/tools/build-proot.py` 从固定源码、依赖和本地终止／系统调用兼容补丁构建双 ABI；
 默认校验最终 hash，候选构建只输出仓库外待审核产物。可复现状态以 manifest 的实际独立重建结果为准，不能代替设备验收。
 
 Android Process 的终止请求由 PRoot 自身处理：启动前阻塞 TERM/QUIT，guest 恢复原 signal mask，tracer 在登记首个子进程、
@@ -120,7 +120,7 @@ Shell 保持 ProcessBuilder 和分离管道；WorkspacePtySession 使用现有 P
 
 x86_64 设备必须使用 x86_64 PRoot 和 Rootfs，arm64 设备必须使用 arm64 产物。架构不匹配导致的 `SIGILL` 不能通过关闭 seccomp 修复。
 
-`RootfsCompatibility` 读取实际打包 PRoot 的 ELF machine，默认镜像按该事实选择 Ubuntu arm64 或 amd64。不能用模拟器品牌或 `SUPPORTED_ABIS` 中包含某架构推断：原生桥可令列表同时含 x86_64 与 arm64。Installer 在 staging 校验 env/bash 的 64 位 ELF、动态解释器和相同架构，并完成 patch 后才替换原目录；guest 绝对符号链接只在 guest 根解析。启动完整性检查对既存不兼容根标记 BROKEN，Shell 与 PTY 入口再复验。无 QEMU 跨架构执行或默认禁用 seccomp 的旁路。
+`RootfsCompatibility` 读取实际打包 PRoot 的 ELF machine，默认镜像按该事实选择 Ubuntu arm64 或 amd64。不能用模拟器品牌或 `SUPPORTED_ABIS` 中包含某架构推断：原生桥可令列表同时含 x86_64 与 arm64。Installer 在 staging 校验选定 env/shell 的 64 位 ELF、动态解释器和相同架构，并完成 patch 后才替换原目录；guest 绝对符号链接只在 guest 根解析。启动完整性检查对既存不兼容根标记 BROKEN，Shell 与 PTY 入口再复验。无 QEMU 跨架构执行或默认禁用 seccomp 的旁路。
 
 guest 启动入口与解释器的 LOAD segment 必须满足 `Os.sysconf(_SC_PAGESIZE)` 返回的实际页大小：alignment 为 2 的幂且不小于该值，虚拟地址与文件偏移对页大小同余。读失败不回退猜测 4 KB。这是保守准入，不是完整动态依赖解析或运行成功保证。Ubuntu 24.04.3 amd64 的 4 KB 对齐不适用于 x86_64 16 KB AVD；使用 4 KB AVD 验证 Linux 执行，并在 16 KB AVD 验证拒绝和原目录保全。对应 arm64 镜像使用 64 KB 对齐，保留原启动路径；真实 arm64 执行仍需设备验证。
 
@@ -339,3 +339,7 @@ FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实�
 
 PRoot 的 hash/ELF 静态契约不等同于设备验收。各支持 ABI 仍需在匹配 Rootfs 的真实 Android 环境验证 cwd、
 文件操作、挂载、DNS/netlink、SysV shared memory、超时/取消、长输出和双 PTY；覆盖完成前必须明确标记为设备待验证。
+
+`RootfsEnvironment` 从 guest 内实际可执行文件选择 env（必要时使用 BusyBox env）及 Bash/sh，命令执行与 PTY 共用同一启动参数；已有但不兼容的优先入口不能靠回退绕过校验。`/etc/os-release` 只作有界文本解析，不执行 shell，选定 shell 和发行版信息在 START 时进入 Workspace 提示。Ubuntu 仍是默认镜像，Alpine 可经原导入链使用。
+
+Tar 解包在完成 PAX/GNU 名称解析后由 `safeResolve` 一次规范化并检查根边界。指向 staging 根的条目仅接受目录类型；普通文件、链接及路径穿越不能覆盖 staging 根或逃逸原目录，失败保持原安装不变。

@@ -127,11 +127,11 @@ class ChatCompletionsAPI(
 
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
-            .headers(params.customHeaders.toHeaders())
+            .headers((providerSetting.customHeaders + params.customHeaders).toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .authenticate(params.credentials, "Authorization", "Bearer ", providerSetting.apiKey, providerSetting.id.toString(), keyRoulette)
             .configureReferHeaders(providerSetting.baseUrl)
-            .configureSessionHeader(params.providerSessionId)
+            .configureSessionHeader(params.openCodeSessionId ?: params.providerSessionId)
             .build()
 
         Log.d(TAG, "generateText: model=${params.model.modelId}")
@@ -188,12 +188,12 @@ class ChatCompletionsAPI(
 
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
-            .headers(params.customHeaders.toHeaders())
+            .headers((providerSetting.customHeaders + params.customHeaders).toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .authenticate(params.credentials, "Authorization", "Bearer ", providerSetting.apiKey, providerSetting.id.toString(), keyRoulette)
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
-            .configureSessionHeader(params.providerSessionId)
+            .configureSessionHeader(params.openCodeSessionId ?: params.providerSessionId)
             .build()
 
         Log.d(TAG, "streamText: model=${params.model.modelId}")

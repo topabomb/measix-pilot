@@ -76,6 +76,19 @@ internal class ConfigurationQueryService(
     fun observePersonalModelFavorites() = settings.observeConfiguration(enterpriseSessions.state, ConfigurationScope.Personal)
         .map { it.selections.favoriteModels }
 
+    fun observeCollapsedModelGroups(selection: RealmSelection?): Flow<Result<Set<String>>> = flow {
+        recoveryGate.awaitReady()
+        if (selection == null) emitAll(settings.observeCollapsedModelGroups(ConfigurationScope.Personal))
+        else emitAll(enterpriseSessions.observeSelectedRealmSelection().flatMapLatest { current ->
+            if (current == selection) settings.observeCollapsedModelGroups(selection.access.scope)
+            else flowOf(emptySet())
+        })
+    }.map { Result.success(it) }.catch { error ->
+        if (error is CancellationException) throw error
+        Log.e("ConfigurationQuery", "Model group preferences could not be read", error)
+        emit(Result.failure(error))
+    }
+
     fun observeModelCatalog(): Flow<ModelCatalogReadState> = observeSelected(
         { failure -> ModelCatalogReadState.Unavailable(when (failure) {
             ConfigurationReadFailure.SelectionUnavailable -> "configuration_view_unavailable"

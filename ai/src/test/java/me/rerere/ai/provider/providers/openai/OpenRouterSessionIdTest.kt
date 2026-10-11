@@ -49,6 +49,7 @@ class OpenRouterSessionIdTest {
         val params = TextGenerationParams(
             model = model,
             providerSessionId = sessionId,
+            openCodeSessionId = "auxiliary-must-not-enter-openrouter-body",
         )
         return chatApi.buildChatCompletionRequest(
             messages = listOf(UIMessage.user("hi")).toModelRequests(),
@@ -64,6 +65,7 @@ class OpenRouterSessionIdTest {
         val params = TextGenerationParams(
             model = model,
             providerSessionId = sessionId,
+            openCodeSessionId = "auxiliary-must-not-enter-openrouter-body",
         )
         return responseApi.buildRequestBody(
             provider,

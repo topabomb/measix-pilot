@@ -55,7 +55,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -83,7 +82,6 @@ import me.rerere.ai.ui.isEmptyUIMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.ai.tools.ToolOutputToolNames
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.findModelById
 import net.weero.measix.pilot.ui.components.message.MessagePartBlock
 import net.weero.measix.pilot.ui.components.message.ThinkingStep
 import net.weero.measix.pilot.ui.components.message.groupMessageParts
@@ -142,7 +140,7 @@ fun ChatExportSheet(
     val attachmentPreview = remember(attachmentPreviews) {
         { ref: String -> attachmentPreviews[ref] }
     }
-    var imageExportOptions by remember { mutableStateOf(ImageExportOptions()) }
+    var exportOptions by remember { mutableStateOf(ChatExportOptions()) }
     var exporting by remember { mutableStateOf(false) }
     var exportFailure by remember(source, visible) { mutableStateOf<ChatError?>(null) }
     val exportFailedFormat = stringResource(R.string.chat_page_export_failed)
@@ -160,6 +158,16 @@ fun ChatExportSheet(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(text = stringResource(id = R.string.chat_page_export_format))
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.chat_page_export_include_reasoning)) },
+                    trailingContent = {
+                        Switch(
+                            checked = exportOptions.includeReasoning,
+                            enabled = !exporting,
+                            onCheckedChange = { exportOptions = exportOptions.copy(includeReasoning = it) },
+                        )
+                    },
+                )
 
                 val markdownSuccessMessage =
                     stringResource(id = R.string.chat_page_export_success, "Markdown")
@@ -169,7 +177,7 @@ fun ChatExportSheet(
                         exporting = true
                         scope.launch {
                             try {
-                                exportToMarkdown(context, conversationTitle, selectedMessages, attachmentPreview, mediaExportService, verifyAccess)
+                                exportToMarkdown(context, conversationTitle, selectedMessages, attachmentPreview, mediaExportService, verifyAccess, exportOptions)
                                 toaster.show(markdownSuccessMessage, type = ToastType.Success)
                                 onDismissRequest()
                             } catch (cancelled: CancellationException) {
@@ -222,9 +230,10 @@ fun ChatExportSheet(
                         ListItem(
                             trailingContent = {
                                 Switch(
-                                    checked = imageExportOptions.expandReasoning,
+                                    checked = exportOptions.expandReasoning,
+                                    enabled = exportOptions.includeReasoning && !exporting,
                                     onCheckedChange = {
-                                        imageExportOptions = imageExportOptions.copy(expandReasoning = it)
+                                        exportOptions = exportOptions.copy(expandReasoning = it)
                                     }
                                 )
                             }
@@ -256,7 +265,7 @@ fun ChatExportSheet(
                                                 contentSource = contentSource,
                                                 verifyAccess = verifyAccess,
                                                 modelIconFallback = modelIconFallback,
-                                                options = imageExportOptions
+                                                options = exportOptions
                                             )
                                             toaster.show(imageSuccessMessage, type = ToastType.Success)
                                             onDismissRequest()
@@ -295,127 +304,148 @@ private suspend fun exportToMarkdown(
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
     mediaExportService: MediaExportService,
     verifyAccess: suspend () -> Unit,
+    options: ChatExportOptions,
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.md"
 
-    val sb = buildAnnotatedString {
-        append("# $conversationTitle\n\n")
-        append("*Exported on ${LocalDateTime.now().toLocalString()}*\n\n")
+    val text = renderMarkdownExport(conversationTitle, messages, attachmentPreview, options)
+    mediaExportService.shareText(context, text, filename, verifyAccess)
+}
 
-        messages.forEach { message ->
-            val role = if (message.role == MessageRole.USER) "**User**" else "**Assistant**"
-            append("$role:\n\n")
-            message.parts.forEach { part ->
-                when (part) {
-                    is UIMessagePart.Text -> {
-                        append(part.text)
+internal fun renderMarkdownExport(
+    conversationTitle: String,
+    messages: List<UIMessage>,
+    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
+    options: ChatExportOptions = ChatExportOptions(),
+): String = buildString {
+    append("# $conversationTitle\n\n")
+    append("*Exported on ${LocalDateTime.now().toLocalString()}*\n\n")
+
+    messages.forEach { message ->
+        val role = if (message.role == MessageRole.USER) "**User**" else "**Assistant**"
+        append("$role:\n\n")
+        exportParts(message.parts, options).forEach { part ->
+            when (part) {
+                is UIMessagePart.Text -> {
+                    append(part.text)
+                    appendLine()
+                }
+
+                is UIMessagePart.Image -> {
+                    resolveAttachmentMediaUrl(part.url, part, attachmentPreview)?.let { url ->
+                        append("![Image]($url)")
                         appendLine()
                     }
+                }
 
-                    is UIMessagePart.Image -> {
-                        resolveAttachmentMediaUrl(part.url, part, attachmentPreview)?.let { url ->
-                            append("![Image]($url)")
-                            appendLine()
+                is UIMessagePart.Reasoning -> {
+                    part.reasoning.lines()
+                        .filter { it.isNotBlank() }
+                        .map { "> $it" }
+                        .forEach {
+                            appendLine(it)
                         }
+                    appendLine()
+                    appendLine()
+                }
+
+                is UIMessagePart.Tool -> {
+                    append("**Tool**: `${part.toolName}`")
+                    appendLine()
+                    if (part.providerCallId.isNotBlank()) {
+                        append("- Call ID: `${part.providerCallId}`")
+                        appendLine()
                     }
 
-                    is UIMessagePart.Reasoning -> {
-                        part.reasoning.lines()
-                            .filter { it.isNotBlank() }
-                            .map { "> $it" }
-                            .forEach {
-                                append(it)
-                            }
-                        appendLine()
-                        appendLine()
-                    }
+                    append("Input:")
+                    appendLine()
+                    append("```json")
+                    appendLine()
+                    append(JsonInstantPretty.encodeToString(part.inputAsJson()))
+                    appendLine()
+                    append("```")
+                    appendLine()
 
-                    is UIMessagePart.Tool -> {
-                        append("**Tool**: `${part.toolName}`")
+                    if (part.output.isNotEmpty()) {
+                        append("Output:")
                         appendLine()
-                        if (part.providerCallId.isNotBlank()) {
-                            append("- Call ID: `${part.providerCallId}`")
-                            appendLine()
-                        }
+                        part.output.forEach { outputPart ->
+                            when (outputPart) {
+                                is UIMessagePart.Text -> {
+                                    append("```text")
+                                    appendLine()
+                                    append(outputPart.text)
+                                    appendLine()
+                                    append("```")
+                                    appendLine()
+                                }
 
-                        append("Input:")
-                        appendLine()
-                        append("```json")
-                        appendLine()
-                        append(JsonInstantPretty.encodeToString(part.inputAsJson()))
-                        appendLine()
-                        append("```")
-                        appendLine()
-
-                        if (part.output.isNotEmpty()) {
-                            append("Output:")
-                            appendLine()
-                            part.output.forEach { outputPart ->
-                                when (outputPart) {
-                                    is UIMessagePart.Text -> {
-                                        append("```text")
-                                        appendLine()
-                                        append(outputPart.text)
-                                        appendLine()
-                                        append("```")
-                                        appendLine()
-                                    }
-
-                                    is UIMessagePart.Reasoning -> {
-                                        outputPart.reasoning.lines()
-                                            .filter { it.isNotBlank() }
-                                            .forEach {
-                                                append("> $it")
-                                                appendLine()
-                                            }
-                                    }
-
-                                    is UIMessagePart.Image -> {
-                                        resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)?.let { url ->
-                                            append("![Tool Image]($url)")
+                                is UIMessagePart.Reasoning -> {
+                                    outputPart.reasoning.lines()
+                                        .filter { it.isNotBlank() }
+                                        .forEach {
+                                            append("> $it")
                                             appendLine()
                                         }
-                                    }
-
-                                    is UIMessagePart.Document -> {
-                                        append("[Document: ${outputPart.fileName}]")
-                                        resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
-                                            ?.let { append("($it)") }
-                                        appendLine()
-                                    }
-
-                                    is UIMessagePart.Video -> {
-                                        append("[Video]")
-                                        resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
-                                            ?.let { append("($it)") }
-                                        appendLine()
-                                    }
-
-                                    is UIMessagePart.Audio -> {
-                                        append("[Audio]")
-                                        resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
-                                            ?.let { append("($it)") }
-                                        appendLine()
-                                    }
-
-                                    else -> {}
                                 }
+
+                                is UIMessagePart.Image -> {
+                                    resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)?.let { url ->
+                                        append("![Tool Image]($url)")
+                                        appendLine()
+                                    }
+                                }
+
+                                is UIMessagePart.Document -> {
+                                    append("[Document: ${outputPart.fileName}]")
+                                    resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
+                                        ?.let { append("($it)") }
+                                    appendLine()
+                                }
+
+                                is UIMessagePart.Video -> {
+                                    append("[Video]")
+                                    resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
+                                        ?.let { append("($it)") }
+                                    appendLine()
+                                }
+
+                                is UIMessagePart.Audio -> {
+                                    append("[Audio]")
+                                    resolveAttachmentMediaUrl(outputPart.url, outputPart, attachmentPreview)
+                                        ?.let { append("($it)") }
+                                    appendLine()
+                                }
+
+                                else -> {}
                             }
                         }
-                        appendLine()
                     }
-
-                    else -> {}
+                    appendLine()
                 }
+
+                is UIMessagePart.Document -> {
+                    append("[Document: ${part.fileName}]")
+                    resolveAttachmentMediaUrl(part.url, part, attachmentPreview)?.let { append("($it)") }
+                    appendLine()
+                }
+                is UIMessagePart.Audio -> {
+                    append("[Audio]")
+                    resolveAttachmentMediaUrl(part.url, part, attachmentPreview)?.let { append("($it)") }
+                    appendLine()
+                }
+                is UIMessagePart.Video -> {
+                    append("[Video]")
+                    resolveAttachmentMediaUrl(part.url, part, attachmentPreview)?.let { append("($it)") }
+                    appendLine()
+                }
+                else -> {}
             }
-            appendLine()
-            append("---")
-            appendLine()
         }
+        appendLine()
+        append("---")
+        appendLine()
     }
-
-    mediaExportService.shareText(context, sb.toString(), filename, verifyAccess)
-
 }
 
 internal suspend fun exportToImage(
@@ -430,7 +460,7 @@ internal suspend fun exportToImage(
     contentSource: net.weero.measix.pilot.service.RenderedContentSource?,
     verifyAccess: suspend () -> Unit,
     modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
-    options: ImageExportOptions = ImageExportOptions()
+    options: ChatExportOptions = ChatExportOptions()
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.png"
     val composer = BitmapComposer()
@@ -466,7 +496,16 @@ internal suspend fun exportToImage(
     }
 }
 
-data class ImageExportOptions(val expandReasoning: Boolean = false)
+data class ChatExportOptions(val includeReasoning: Boolean = true, val expandReasoning: Boolean = false)
+
+internal fun exportParts(parts: List<UIMessagePart>, options: ChatExportOptions): List<UIMessagePart> =
+    if (options.includeReasoning) parts else parts.mapNotNull { part ->
+        when (part) {
+            is UIMessagePart.Reasoning -> null
+            is UIMessagePart.Tool -> part.copy(output = exportParts(part.output, options))
+            else -> part
+        }
+    }
 
 @Composable
 private fun ExportedChatImage(
@@ -474,7 +513,7 @@ private fun ExportedChatImage(
     messages: List<UIMessage>,
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
     modelIconFallback: ModelIconFallback,
-    options: ImageExportOptions = ImageExportOptions()
+    options: ChatExportOptions = ChatExportOptions()
 ) {
     val navBackStack = remember { mutableStateListOf<NavKey>() }
     val navigator = Navigator(navBackStack)
@@ -521,13 +560,13 @@ private fun ExportedChatImage(
                     }
 
                     // Messages
-                    messages.forEach { message ->
+                    messages.forEachIndexed { index, message ->
                         ExportedChatMessage(
-                            message = message,
+                            message = message.copy(parts = exportParts(message.parts, options)),
                             attachmentPreview = attachmentPreview,
                             modelIconFallback = modelIconFallback,
                             options = options,
-                            prevMessage = messages.getOrNull(messages.indexOf(message) - 1)
+                            prevMessage = messages.getOrNull(index - 1)
                         )
                     }
 
@@ -552,12 +591,12 @@ private fun ExportedChatMessage(
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
     modelIconFallback: ModelIconFallback,
     prevMessage: UIMessage? = null,
-    options: ImageExportOptions = ImageExportOptions()
+    options: ChatExportOptions = ChatExportOptions()
 ) {
     if (message.parts.isEmptyUIMessage()) return
     val context = LocalContext.current
     val settings = LocalSettings.current
-    val model = message.modelId?.let { settings.findModelById(it) }
+    val model = message.modelInfo
     // Always show model icon for assistant messages in exported images
     val showModelIcon = message.role == MessageRole.ASSISTANT && prevMessage?.role == MessageRole.USER
     val iconLabel = when {
@@ -702,7 +741,7 @@ private fun ExportedChatMessage(
             )
 
             Text(
-                text = iconLabel,
+                text = model?.displayLabel ?: stringResource(R.string.setting_files_page_generated_unknown_model),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(top = 8.dp)
             )
@@ -764,6 +803,14 @@ private fun ChainOfThoughtScope.ExportedReasoningStep(
 private fun ChainOfThoughtScope.ExportedToolStep(
     tool: UIMessagePart.Tool
 ) {
+    val chart = remember(tool) {
+        net.weero.measix.pilot.ui.components.message.tools.completedChart(tool,
+            net.weero.measix.pilot.service.runtime.resolveToolLivePhase(tool, null))
+    }
+    if (chart != null) {
+        net.weero.measix.pilot.ui.components.charts.ChartCard(chart)
+        return
+    }
     val memoryAction = runCatching {
         tool.inputAsJson().jsonObject["action"]?.jsonPrimitiveOrNull?.contentOrNull
     }.getOrNull()

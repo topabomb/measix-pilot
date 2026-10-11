@@ -13,12 +13,13 @@ import okhttp3.Response
 import okhttp3.ResponseBody
 import okhttp3.internal.http.RealResponseBody
 
+/** Later entries replace earlier names case-insensitively, including within one editor. */
 fun List<CustomHeader>.toHeaders(): Headers {
     return Headers.Builder().apply {
         this@toHeaders
             .filter { it.name.isNotBlank() }
             .forEach {
-                add(it.name, it.value)
+                set(it.name, it.value)
             }
     }.build()
 }

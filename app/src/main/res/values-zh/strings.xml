@@ -308,12 +308,12 @@
   <string name="chat_page_compress_additional_prompt">附加说明（可选）</string>
   <string name="chat_page_compress_additional_prompt_hint">指定要保留或关注的内容</string>
   <string name="chat_page_compress_context">压缩历史</string>
-  <string name="chat_page_compress_context_desc">用摘要替换较早的完整对话轮次，并保留最近消息。本地示例模型仅截取部分输入，不进行语义归纳，请仅用测试聊天验证。</string>
+  <string name="chat_page_compress_context_desc">后续请求使用较早完整轮次的摘要，并保留最近消息。原始消息仍会保存。本地示例模型只截取文本，请仅用于测试会话。</string>
   <string name="chat_page_compress_context_title">压缩对话历史</string>
   <string name="chat_page_compress_keep_recent">至少保留最近消息</string>
   <string name="chat_page_compress_not_enough_messages">消息数量不足，无法压缩。请减少保留的消息数量或添加更多消息。</string>
   <string name="chat_page_compress_target_tokens">摘要目标长度（token）</string>
-  <string name="chat_page_compress_warning">压缩会用 AI 生成的摘要替换较早消息。请先确认重要细节；此操作无法撤销。</string>
+  <string name="chat_page_compress_warning">请检查 AI 生成的摘要是否准确。摘要可以编辑或删除，原始消息仍会保留。</string>
   <string name="chat_page_compressing">正在压缩...</string>
   <string name="chat_page_conversation_system_prompt">对话系统提示</string>
   <string name="chat_page_conversation_system_prompt_clear">清除</string>
@@ -420,7 +420,7 @@
   <string name="history_page_conversation_deleted">对话已删除</string>
   <string name="history_page_delete">删除</string>
   <string name="history_page_delete_all">删除全部</string>
-  <string name="history_page_delete_all_confirmation">确定要删除所有对话吗？此操作无法撤销。</string>
+  <string name="history_page_delete_all_confirmation">删除当前空间的全部会话？此操作无法撤销。</string>
   <string name="history_page_delete_all_conversations">删除全部对话</string>
   <string name="history_page_new_conversation">新对话</string>
   <string name="history_page_pin">置顶</string>
@@ -2135,4 +2135,22 @@
   <string name="mcp_readiness_on_demand">已选择 %1$d 项 · 使用时连接</string>
   <string name="about_page_platform_contract">平台合同：%1$d</string>
   <string name="about_page_core_baseline">基准 Core：%1$s</string>
+  <string name="chat_page_export_include_reasoning">包含思考过程</string>
+  <string name="setting_tts_page_provider_volcengine">火山引擎语音</string>
+  <string name="setting_tts_page_resource_id">资源 ID</string>
+  <string name="setting_tts_page_volcengine_resource_description">填写已开通的语音服务资源 ID，例如 seed-tts-2.0。</string>
+  <string name="setting_tts_page_volcengine_rate_description">合成语速范围为 -50 到 100，0 为正常语速。</string>
+  <string name="conversation_sort_title">会话排序</string>
+  <string name="conversation_sort_created">按创建时间</string>
+  <string name="conversation_sort_updated">按更新时间</string>
+  <string name="history_page_current_space">本空间全部历史</string>
+  <string name="assistant_page_local_tools_chart_title">图表</string>
+  <string name="assistant_page_local_tools_chart_desc">在设备上展示折线图、柱状图、散点图及数据表格。</string>
+  <string name="chart_mode_chart">图表</string>
+  <string name="chart_mode_table">表格</string>
+  <string name="chart_series_name">系列 %1$d</string>
+  <string name="chart_previous_page">上一页</string>
+  <string name="chart_next_page">下一页</string>
+  <string name="reasoning_opus55_hint">此模型始终启用思考。请选择自动或思考强度，不支持关闭。</string>
+  <string name="reasoning_sonnet55_hint">关闭仅停用首次回答前的思考，模型在工具调用之间仍可能思考。</string>
 </resources>

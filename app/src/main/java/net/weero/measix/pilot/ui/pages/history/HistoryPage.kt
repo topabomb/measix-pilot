@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -83,6 +84,14 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     }
 
     val conversations = vm.conversations.collectAsStateWithLifecycle().value
+    val sortOrder by vm.sortOrder.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
+    var previousSort by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(sortOrder) }
+    LaunchedEffect(sortOrder) {
+        if (sortOrder == null) return@LaunchedEffect
+        if (previousSort != null && previousSort != sortOrder) listState.scrollToItem(0)
+        previousSort = sortOrder
+    }
     val assistantCatalog = vm.assistantCatalog.collectAsStateWithLifecycle().value
     val readFailure = vm.readFailure.collectAsStateWithLifecycle().value
 
@@ -90,7 +99,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
         topBar = {
             TopAppBar(
                 title = {
-                    Text(stringResource(R.string.history_page_title))
+                    Text(stringResource(R.string.history_page_current_space))
                 },
                 navigationIcon = {
                     BackButton()
@@ -122,6 +131,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
         }
     ) { contentPadding ->
         LazyColumn(
+            state = listState,
             contentPadding = contentPadding + PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -264,7 +274,7 @@ private fun ConversationItem(
     ) {
         ListItem(
             supportingContent = {
-                Text(conversation.createAt.toLocalDateTime())
+                Text(conversation.sortTime.toLocalDateTime())
             },
             trailingContent = {
                 IconButton(

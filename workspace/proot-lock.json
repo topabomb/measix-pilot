@@ -8,7 +8,7 @@
     "upstreamBinaryMatch": "locally-patched-source-build",
     "patch": {
       "repoPath": "workspace/tools/patches/proot-termination.patch",
-      "sha256": "7833f4e942831b067410de66bd1bcc5e960c6ddc3c86e122f0b6f3e3479f1822"
+      "sha256": "99ecba9ef47e8ddbf6071a7e888361dbeef16cc5bd92fb4b33fccbb3c1f8295a"
     }
   },
   "termuxPackage": {
@@ -46,7 +46,7 @@
     {
       "abi": "arm64-v8a",
       "repoPath": "workspace/src/main/jniLibs/arm64-v8a/libproot_exec.so",
-      "sha256": "ba5c2877027ca47d48831399a80fef22391be93594cd91452dbbde0ce93d77d5",
+      "sha256": "4a14877087029a68333da9d14439dcb8c03fc2f1340774ec0007b208c9755087",
       "elfMachine": "AArch64",
       "interpreter": "/system/bin/linker64",
       "androidApi": 24,
@@ -58,7 +58,7 @@
     {
       "abi": "x86_64",
       "repoPath": "workspace/src/main/jniLibs/x86_64/libproot_exec.so",
-      "sha256": "96dd0de356a072f5b88a4edeef063a4e183b61fb713114258607aecc09ed54ea",
+      "sha256": "6bc1186ccc5784f8bf751e86f7727302ec0f8be2a5444ab181081fe020f2b4a6",
       "elfMachine": "x86-64",
       "interpreter": "/system/bin/linker64",
       "androidApi": 24,

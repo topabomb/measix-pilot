@@ -14,8 +14,8 @@ import me.rerere.ai.ui.partsToText
  * It carries just the wire-relevant facts and drops every durable-only field (id, timestamps,
  * usage, terminal outcome): [role], model-visible [parts] with durable boundaries
  * ([UIMessagePart.Step]) and Tool client diagnostics already removed at assembly time, the lossless replay [providerMetadata],
- * and the request-only [providerReplayProjection]. No adapter re-derives transcript semantics or
- * drops parts itself.
+ * and the request-only [providerReplayProjection]. Adapters retain transcript semantics; opaque
+ * continuation blocks may be excluded from the wire when their original protocol evidence no longer matches.
  */
 data class ModelRequestMessage(
     val role: MessageRole,

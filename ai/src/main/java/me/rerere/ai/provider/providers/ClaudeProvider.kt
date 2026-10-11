@@ -7,6 +7,7 @@ import me.rerere.ai.provider.ProviderResponseException
 import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.ui.ProviderToolCallSlot
+import me.rerere.ai.ui.ProviderContentBlockSlot
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +57,10 @@ import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.ClaudeReasoningMetadata
+import me.rerere.ai.ui.ClaudeResponseMetadata
+import me.rerere.ai.ui.ClaudeReplayState
+import me.rerere.ai.ui.ClaudeContentBlockMetadata
+import me.rerere.ai.ui.ClaudeResponseBlock
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
@@ -100,7 +105,10 @@ internal fun buildClaudeThinkingFields(
     maxTokens: Int,
 ): JsonObject = buildJsonObject {
     if (level == ReasoningLevel.OFF) {
-        put("thinking", buildJsonObject { put("type", "disabled") })
+        require(!ModelRegistry.CLAUDE_OPUS_5_5.match(modelId)) { "unsupported_reasoning_mode: Claude Opus 5.5 requires adaptive thinking" }
+        put("thinking", buildJsonObject {
+            put("type", if (ModelRegistry.CLAUDE_SONNET_5_5.match(modelId)) "between_tools" else "disabled")
+        })
         return@buildJsonObject
     }
 
@@ -168,8 +176,9 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         withContext(Dispatchers.IO) {
             val request = Request.Builder()
                 .url("${providerSetting.baseUrl}/models")
-                .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
-                .addHeader("anthropic-version", ANTHROPIC_VERSION)
+                .headers(providerSetting.customHeaders.toHeaders())
+                .header("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
+                .header("anthropic-version", ANTHROPIC_VERSION)
                 .get()
                 .build()
 
@@ -206,22 +215,23 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): MessageChunk = withContext(Dispatchers.IO) {
-        val requestBody = buildMessageRequest(providerSetting, messages, params)
+        val prepared = buildMessageRequest(providerSetting, messages, params)
+        val requestBody = prepared.body
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/messages")
-            .headers(params.customHeaders.toHeaders())
+            .headers((providerSetting.customHeaders + params.customHeaders).toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .authenticate(params.credentials, "x-api-key", userKeys = providerSetting.apiKey, providerId = providerSetting.id.toString(), roulette = keyRoulette)
-            .addHeader("anthropic-version", ANTHROPIC_VERSION)
+            .header("anthropic-version", ANTHROPIC_VERSION)
             .configureReferHeaders(providerSetting.baseUrl)
-            .configureSessionHeader(params.providerSessionId)
+            .configureSessionHeader(params.openCodeSessionId ?: params.providerSessionId)
             .build()
 
-        val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
+        val (bodyStr, responseEndpoint) = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
             if (!response.isSuccessful) {
                 throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
             }
-            response.body?.string() ?: ""
+            (response.body?.string() ?: "") to claudeUrlIdentity(response.request.url)
         }
         val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
 
@@ -230,8 +240,26 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         val model = bodyJson["model"]?.jsonPrimitive?.contentOrNull ?: ""
         val content = bodyJson["content"]?.jsonArray ?: JsonArray(emptyList())
         val stopReason = bodyJson["stop_reason"]?.jsonPrimitive?.contentOrNull
+        val completionError = claudeStopReasonError(stopReason)
         val usage = parseTokenUsage(bodyJson)
 
+        val responseId = Uuid.random().toString()
+        val parsed = parseMessage(content)
+        val responsePositions = content.indices.filter { content[it].jsonObject["type"]?.jsonPrimitive?.content in
+            setOf("text", "thinking", "redacted_thinking", "tool_use") }
+        require(parsed.parts.size == responsePositions.size) { "Malformed Claude response block" }
+        var reasoningIndex = 0
+        val reasoningPositions = content.indices.filter { content[it].jsonObject["type"]?.jsonPrimitive?.content in setOf("thinking", "redacted_thinking") }
+        val completed = parsed.copy(providerMetadata = if (completionError == null) {
+            ClaudeResponseMetadata(ClaudeReplayState(retiredDigests = prepared.retiredDigests)).toMetadata()
+        } else null, parts = parsed.parts.mapIndexed { index, original ->
+            val part = original.withClaudeBlock(responseId, responsePositions[index])
+            if (part !is UIMessagePart.Reasoning || completionError != null) part else {
+                val evidence = claudeReplayEvidence(requestBody, responseEndpoint, content.map { it.jsonObject }, reasoningPositions[reasoningIndex++])
+                    .copy(model = model)
+                part.copy(metadata = JsonObject(part.metadata.orEmpty() + ClaudeReasoningMetadata(claudeReplay = evidence).toMetadata()))
+            }
+        })
         val chunk = MessageChunk(
             id = id,
             model = model,
@@ -239,13 +267,14 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 UIMessageChoice(
                     index = 0,
                     delta = null,
-                    message = parseMessage(content),
-                    finishReason = stopReason
+                    message = completed,
+                    finishReason = stopReason,
+                    contentBlockSlots = responsePositions.map { ProviderContentBlockSlot(responseId, it) },
                 )
             ),
             usage = usage
         )
-        claudeStopReasonError(stopReason)?.let { throw ProviderResponseException(chunk, it) }
+        completionError?.let { throw ProviderResponseException(chunk, it) }
         chunk
     }
 
@@ -254,20 +283,25 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         messages: List<ModelRequestMessage>,
         params: TextGenerationParams
     ): Flow<MessageChunk> = callbackFlow {
-        val requestBody = buildMessageRequest(providerSetting, messages, params, stream = true)
+        val prepared = buildMessageRequest(providerSetting, messages, params, stream = true)
+        val requestBody = prepared.body
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/messages")
-            .headers(params.customHeaders.toHeaders())
+            .headers((providerSetting.customHeaders + params.customHeaders).toHeaders())
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
             .authenticate(params.credentials, "x-api-key", userKeys = providerSetting.apiKey, providerId = providerSetting.id.toString(), roulette = keyRoulette)
-            .addHeader("anthropic-version", ANTHROPIC_VERSION)
+            .header("anthropic-version", ANTHROPIC_VERSION)
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
-            .configureSessionHeader(params.providerSessionId)
+            .configureSessionHeader(params.openCodeSessionId ?: params.providerSessionId)
             .build()
 
-        val streamState = ClaudeStreamState()
+        val streamState = ClaudeStreamState(requestBody, claudeEndpointIdentity(providerSetting.baseUrl, params.credentials), prepared.retiredDigests)
         val listener = object : EventSourceListener() {
+            override fun onOpen(eventSource: EventSource, response: Response) {
+                streamState.responseEndpoint = claudeUrlIdentity(response.request.url)
+            }
+
             override fun onEvent(
                 eventSource: EventSource,
                 id: String?,
@@ -332,9 +366,9 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
         stream: Boolean = false
-    ): JsonObject {
+    ): ClaudePreparedRequest {
         val maxTokens = params.maxTokens ?: 64_000
-        val thinkingFields = if (params.model.abilities.contains(ModelAbility.REASONING)) {
+        val thinkingFields = if (params.model.abilities.contains(ModelAbility.REASONING) || ModelRegistry.CLAUDE_5_5.match(params.model.modelId)) {
             buildClaudeThinkingFields(params.model.modelId, params.reasoningLevel, maxTokens)
         } else {
             JsonObject(emptyMap())
@@ -350,7 +384,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             put(
                 "messages",
                 buildMessages(
-                    stripClaudeThinkingFromOtherModels(messages, params.model.id),
+                    if (ModelRegistry.CLAUDE_5_5.match(params.model.modelId)) messages
+                    else stripClaudeThinkingFromOtherModels(messages, params.model.id),
                     providerSetting.promptCaching,
                     providerSetting.promptCacheTtl,
                     params.mediaCapabilities,
@@ -363,7 +398,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 put("cache_control", cacheControlEphemeral(providerSetting.promptCacheTtl))
             }
 
-            if (params.temperature != null && !thinkingEnabled) put(
+            if (params.temperature != null && (!thinkingEnabled || ModelRegistry.CLAUDE_5_5.match(params.model.modelId))) put(
                 "temperature",
                 params.temperature
             )
@@ -408,7 +443,11 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }.mergeCustomBody(
             params.customBody,
             CLAUDE_MESSAGES_OWNERSHIP,
-        )
+        ).let(::validateClaudeRequestParameters).let { body ->
+            val retired = messages.flatMap { it.metadataAs<ClaudeResponseMetadata>()?.claudeReplayState
+                ?.takeIf { state -> state.version == 1 }?.retiredDigests.orEmpty() }.toSet()
+            filterClaudeThinking(body, claudeEndpointIdentity(providerSetting.baseUrl, params.credentials), retired)
+        }
     }
 
     private fun cacheControlEphemeral(promptCacheTtl: ClaudePromptCacheTtl) = buildJsonObject {
@@ -481,7 +520,32 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
     ) {
-        val groups = groupPartsByToolBoundary(message.parts)
+        val segments = mutableListOf<MutableList<UIMessagePart>>()
+        message.parts.forEach { part ->
+            val group = part.metadataAs<ClaudeContentBlockMetadata>()?.claudeBlock?.responseId
+            val previous = segments.lastOrNull()?.lastOrNull()?.metadataAs<ClaudeContentBlockMetadata>()?.claudeBlock?.responseId
+            if (segments.isEmpty() || group != previous) segments += mutableListOf<UIMessagePart>()
+            segments.last() += part
+        }
+        segments.forEach { parts ->
+            if (parts.first().metadataAs<ClaudeContentBlockMetadata>() != null) {
+                val tools = parts.filterIsInstance<UIMessagePart.Tool>().filter { it.hasReplayResult }
+                val content = parts.mapNotNull { part ->
+                    if (part is UIMessagePart.Tool) part.takeIf { it.hasReplayResult }?.toToolUseBlock()
+                    else part.toContentBlock(mediaCapabilities.assistantImages)
+                }
+                if (content.isNotEmpty()) add(buildJsonObject {
+                    put("role", "assistant"); put("content", JsonArray(content))
+                })
+                if (tools.isNotEmpty()) add(buildJsonObject {
+                    put("role", "user"); put("content", JsonArray(tools.map { it.toToolResultBlock(mediaCapabilities) }))
+                })
+            } else addLegacyAssistantParts(parts, mediaCapabilities)
+        }
+    }
+
+    private fun JsonArrayBuilder.addLegacyAssistantParts(parts: List<UIMessagePart>, mediaCapabilities: RequestMediaCapabilities) {
+        val groups = groupPartsByToolBoundary(parts)
         val contentBuffer = mutableListOf<JsonObject>()
 
         for (group in groups) {
@@ -564,11 +628,13 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 buildJsonObject {
                     put("type", "redacted_thinking")
                     put("data", redactedData)
+                    reasoningMetadata.claudeReplay?.let { put(CLAUDE_REPLAY_ANNOTATION, json.encodeToJsonElement(it)) }
                 }
             } ?: buildJsonObject {
                 put("type", "thinking")
                 put("thinking", reasoning)
                 reasoningMetadata?.signature?.let { put("signature", it) }
+                reasoningMetadata?.claudeReplay?.let { put(CLAUDE_REPLAY_ANNOTATION, json.encodeToJsonElement(it)) }
             }
         }
 
@@ -596,10 +662,18 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         val type = data["type"]?.jsonPrimitive?.contentOrNull
         val reason = data["delta"]?.jsonObject?.get("stop_reason")?.jsonPrimitive?.contentOrNull
         state.observe(type, reason)
-        val delta = parseMessage(buildJsonArray {
+        state.record(data)
+        val successful = type == "message_stop" && state.completionError() == null
+        val proofs = if (successful) state.proofUpdates() else emptyList()
+        val parsed = if (proofs.isNotEmpty()) UIMessage(role = MessageRole.ASSISTANT, parts = proofs.map { it.second }) else parseMessage(buildJsonArray {
             data["content_block"]?.jsonObject?.let { add(it) }
             data["delta"]?.jsonObject?.let { add(it) }
         })
+        val indexed = parsed.copy(parts = parsed.parts.mapIndexed { index, part ->
+            val position = if (proofs.isNotEmpty()) proofs[index].first else requireNotNull(data["index"]?.jsonPrimitive?.intOrNull)
+            part.withClaudeBlock(state.responseId, position)
+        })
+        val delta = if (successful) indexed.copy(providerMetadata = state.responseMetadata()) else indexed
         return MessageChunk(
             id = "", model = "", usage = parseTokenUsage(data),
             choices = listOf(UIMessageChoice(
@@ -609,6 +683,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                         "Claude Tool delta is missing content index"
                     })
                 },
+                contentBlockSlots = if (proofs.isNotEmpty()) proofs.map { ProviderContentBlockSlot(state.responseId, it.first) }
+                    else delta.parts.map { ProviderContentBlockSlot(state.responseId, requireNotNull(data["index"]?.jsonPrimitive?.intOrNull)) },
             )),
         )
     }
@@ -623,7 +699,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             when (type) {
                 "text", "text_delta" -> {
                     val text = block["text"]?.jsonPrimitive?.contentOrNull ?: ""
-                    if (text.isNotEmpty()) {
+                    if (text.isNotEmpty() || type == "text") {
                         parts.add(UIMessagePart.Text(text))
                     }
                 }
@@ -631,7 +707,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 "thinking", "thinking_delta", "signature_delta" -> {
                     val thinking = block["thinking"]?.jsonPrimitive?.contentOrNull ?: ""
                     val signature = block["signature"]?.jsonPrimitive?.contentOrNull
-                    if (thinking.isNotEmpty() || signature != null) {
+                    if (thinking.isNotEmpty() || signature != null || type == "thinking") {
                         parts.add(
                             UIMessagePart.Reasoning(
                                 reasoning = thinking,
@@ -764,13 +840,83 @@ internal val CLAUDE_MESSAGES_OWNERSHIP = RequestBodyOwnership(
     ),
 )
 
-internal class ClaudeStreamState {
+private fun UIMessagePart.withClaudeBlock(responseId: String, index: Int): UIMessagePart {
+    val metadata = JsonObject(metadata.orEmpty() + ClaudeContentBlockMetadata(ClaudeResponseBlock(responseId, index)).toMetadata())
+    return when (this) {
+        is UIMessagePart.Text -> copy(metadata = metadata)
+        is UIMessagePart.Reasoning -> copy(metadata = metadata)
+        is UIMessagePart.Tool -> copy(metadata = metadata)
+        else -> error("Unsupported Claude response block")
+    }
+}
+
+internal class ClaudeStreamState(
+    private val request: JsonObject? = null,
+    private val endpoint: String? = null,
+    private val retiredDigests: Set<String> = emptySet(),
+) {
+    var responseEndpoint: String? = endpoint
+    private var responseModel: String? = null
+    val responseId = Uuid.random().toString()
+    private val blocks = sortedMapOf<Int, JsonObject>()
+    private val inputs = mutableMapOf<Int, StringBuilder>()
     @Volatile private var stopped = false
     @Volatile private var stopReason: String? = null
 
     fun observe(type: String?, reason: String?) {
         if (reason != null) stopReason = reason
         if (type == "message_stop") stopped = true
+    }
+
+    fun record(event: JsonObject) {
+        (event["message"] as? JsonObject)?.get("model")?.jsonPrimitive?.contentOrNull?.let { responseModel = it }
+        event["model"]?.jsonPrimitive?.contentOrNull?.let { responseModel = it }
+        val index = event["index"]?.jsonPrimitive?.intOrNull ?: return
+        when (event["type"]?.jsonPrimitive?.contentOrNull) {
+            "content_block_start" -> {
+                require(index !in blocks) { "Claude response reused a content block index" }
+                blocks[index] = requireNotNull(event["content_block"] as? JsonObject)
+            }
+            "content_block_delta" -> {
+                val delta = event["delta"] as? JsonObject ?: return
+                val before = blocks[index] ?: return
+                val field = when (delta["type"]?.jsonPrimitive?.contentOrNull) {
+                    "text_delta" -> "text"
+                    "thinking_delta" -> "thinking"
+                    "signature_delta" -> "signature"
+                    "input_json_delta" -> {
+                        inputs.getOrPut(index) { StringBuilder() }.append(delta["partial_json"]?.jsonPrimitive?.content.orEmpty())
+                        return
+                    }
+                    else -> return
+                }
+                blocks[index] = JsonObject(before + (field to JsonPrimitive(
+                    before[field]?.jsonPrimitive?.content.orEmpty() + delta[field]?.jsonPrimitive?.content.orEmpty())))
+            }
+            "content_block_stop" -> inputs.remove(index)?.let { input ->
+                val block = requireNotNull(blocks[index])
+                blocks[index] = JsonObject(block + ("input" to json.parseToJsonElement(input.toString()).jsonObject))
+            }
+        }
+    }
+
+    fun proofUpdates(): List<Pair<Int, UIMessagePart.Reasoning>> {
+        val request = request ?: return emptyList()
+        val endpoint = requireNotNull(responseEndpoint)
+        require(inputs.isEmpty()) { "Claude response ended before tool input block completed" }
+        require(blocks.keys.toList() == (0 until blocks.size).toList()) { "Claude response has incomplete content block sequence" }
+        val response = blocks.values.toList()
+        return response.mapIndexedNotNull { index, block ->
+            if (block["type"]?.jsonPrimitive?.content !in setOf("thinking", "redacted_thinking")) null else {
+                val evidence = claudeReplayEvidence(request, endpoint, response, index).copy(model = responseModel.orEmpty())
+                index to UIMessagePart.Reasoning("", createdAt = Clock.System.now(), finishedAt = Clock.System.now(),
+                    metadata = ClaudeReasoningMetadata(claudeReplay = evidence).toMetadata())
+            }
+        }
+    }
+
+    fun responseMetadata(): JsonObject? = request?.let {
+        ClaudeResponseMetadata(ClaudeReplayState(retiredDigests = retiredDigests)).toMetadata()
     }
 
     fun completionError(): HttpException? = if (!stopped) {

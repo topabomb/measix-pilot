@@ -18,6 +18,10 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -35,6 +39,9 @@ import net.weero.measix.pilot.data.enterprise.enrollFixture
 import net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage
 import net.weero.measix.pilot.data.repository.ConversationListRecord
 import net.weero.measix.pilot.data.repository.ConversationRepository
+import net.weero.measix.pilot.data.repository.FolderRepository
+import net.weero.measix.pilot.data.datastore.ConversationSortOrder
+import net.weero.measix.pilot.data.model.Folder
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -211,6 +218,71 @@ class ScopedConversationQueryTest {
         job.cancel()
         runCurrent()
         assertTrue(sources.all { it.invalid })
+    }
+
+    @Test fun sortChangeCancelsDelayedPagingGenerationForUnfiledAndFolderLists() = runTest {
+        for (inFolder in listOf(false, true)) {
+            val sessions = sessions()
+            sessions.recover()
+            val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+            val repository = mockk<ConversationRepository>()
+            val folders = mockk<FolderRepository>()
+            val folder = Folder(assistantId = assistant, name = "folder")
+            coEvery { folders.getFolder(folder.id) } returns folder
+            val releaseOld = CompletableDeferred<Unit>()
+            val startedOld = CompletableDeferred<Unit>()
+            val sources = mutableListOf<PagingSource<Int, LightConversationEntity>>()
+            fun source(sort: ConversationSortOrder) = object : PagingSource<Int, LightConversationEntity>() {
+                override fun getRefreshKey(state: PagingState<Int, LightConversationEntity>): Int? = null
+                override suspend fun load(params: LoadParams<Int>): LoadResult<Int, LightConversationEntity> {
+                    if (sort == ConversationSortOrder.UPDATED) {
+                        startedOld.complete(Unit)
+                        // Simulate a platform query finishing after its collecting generation was cancelled.
+                        withContext(NonCancellable) { releaseOld.await() }
+                    }
+                    return LoadResult.Page(listOf(LightConversationEntity(Uuid.random().toString(), assistant.toString(),
+                        sort.name, false, 10, 20, if (inFolder) folder.id.toString() else "", selection.access.scope)), null, null)
+                }
+            }.also { sources += it }
+            every { repository.unfiledPagingSource(selection.access.scope, assistant, any()) } answers { source(thirdArg()) }
+            every { repository.folderPagingSource(selection.access.scope, folder.id, any()) } answers { source(thirdArg()) }
+            val query = ConversationQueryService(repository, mockk(), folders, mockk(), mockk(), sessions,
+                ApplicationRecoveryGate().apply { ready() }, mockk(), mockk(), mockk())
+            val dispatcher = StandardTestDispatcher(testScheduler)
+            val differ = AsyncPagingDataDiffer(
+                diffCallback = object : DiffUtil.ItemCallback<ConversationSummary>() {
+                    override fun areItemsTheSame(oldItem: ConversationSummary, newItem: ConversationSummary) = oldItem.id == newItem.id
+                    override fun areContentsTheSame(oldItem: ConversationSummary, newItem: ConversationSummary) = oldItem == newItem
+                }, updateCallback = object : ListUpdateCallback {
+                    override fun onInserted(position: Int, count: Int) = Unit
+                    override fun onRemoved(position: Int, count: Int) = Unit
+                    override fun onMoved(fromPosition: Int, toPosition: Int) = Unit
+                    override fun onChanged(position: Int, count: Int, payload: Any?) = Unit
+                }, mainDispatcher = dispatcher, workerDispatcher = dispatcher,
+            )
+            val sort = MutableStateFlow(ConversationSortOrder.UPDATED)
+            val access = ConversationFolderAccess(selection, assistant)
+            val job = backgroundScope.launch {
+                sort.flatMapLatest { if (inFolder) query.folderPaging(access, folder.id, it) else query.unfiledPaging(access, it) }
+                    .collectLatest(differ::submitData)
+            }
+            try {
+                runCurrent()
+                assertTrue(startedOld.isCompleted)
+                sort.value = ConversationSortOrder.CREATED
+                runCurrent()
+                assertTrue(sources.first().invalid)
+                releaseOld.complete(Unit)
+                runCurrent()
+                assertEquals(listOf("CREATED"), differ.snapshot().items.map { it.title })
+                assertEquals(Instant.ofEpochMilli(10), differ.snapshot().items.single().sortTime)
+            } finally {
+                releaseOld.complete(Unit)
+                job.cancel()
+                runCurrent()
+            }
+            assertTrue(sources.all { it.invalid })
+        }
     }
 
     private fun sessions() = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))

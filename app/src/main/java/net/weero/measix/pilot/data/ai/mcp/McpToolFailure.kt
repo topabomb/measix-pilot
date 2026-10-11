@@ -1,6 +1,6 @@
 package net.weero.measix.pilot.data.ai.mcp
 
-import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolExecutionFailure
@@ -51,7 +51,7 @@ internal object McpToolFailureProjector {
     fun project(
         kind: McpToolFailureKind,
         remoteContent: List<UIMessagePart> = emptyList(),
-        structuredContent: JsonObject? = null,
+        structuredContent: JsonElement? = null,
         remoteMessage: String? = null,
         cause: Throwable? = null,
     ): ToolExecutionFailure {

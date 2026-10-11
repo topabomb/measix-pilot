@@ -94,6 +94,10 @@ class AssistantDetailVM(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = true
         )
 
+    val chatModel = settingsStore.userSettings.map { value ->
+        value.assistants.find { it.id == assistantId }?.let(value::getChatModel)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     val tags = settingsStore
         .userSettings
         .map { settings ->

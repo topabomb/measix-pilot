@@ -8,12 +8,14 @@ import me.rerere.tts.provider.providers.GeminiTTSProvider
 import me.rerere.tts.provider.providers.MiMoTTSProvider
 import me.rerere.tts.provider.providers.OpenAITTSProvider
 import me.rerere.tts.provider.providers.SystemTTSProvider
+import me.rerere.tts.provider.providers.VolcengineTTSProvider
 
 class TTSManager(private val context: Context) {
     private val openAIProvider = OpenAITTSProvider()
     private val geminiProvider = GeminiTTSProvider()
     private val systemProvider = SystemTTSProvider()
     private val mimoProvider = MiMoTTSProvider()
+    private val volcengineProvider = VolcengineTTSProvider()
 
     fun generateSpeech(
         providerSetting: TTSProviderSetting,
@@ -24,6 +26,7 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.Gemini -> geminiProvider.generateSpeech(context, providerSetting, request)
             is TTSProviderSetting.SystemTTS -> systemProvider.generateSpeech(context, providerSetting, request)
             is TTSProviderSetting.MiMo -> mimoProvider.generateSpeech(context, providerSetting, request)
+            is TTSProviderSetting.Volcengine -> volcengineProvider.generateSpeech(context, providerSetting, request)
         }
     }
 
@@ -37,6 +40,7 @@ class TTSManager(private val context: Context) {
             is TTSProviderSetting.Gemini -> geminiProvider.promptGuidance
             is TTSProviderSetting.SystemTTS -> systemProvider.promptGuidance
             is TTSProviderSetting.MiMo -> mimoProvider.promptGuidance
+            is TTSProviderSetting.Volcengine -> volcengineProvider.promptGuidance
         }
     }
 }

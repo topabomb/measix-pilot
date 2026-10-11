@@ -92,6 +92,12 @@ POST 与通知/恢复 GET 都解析有效 `428 managed_snapshot_required`，先�
 不在 Application/DI 构造阶段初始化 Ktor，也不为测试 override 初始化真实 transport。初始化返回后复查取消，超时/取消的连接
 不取得新 transport；已创建的共享 HTTP client 继续由工厂持有，单个 server 关闭或重连不能关闭它。
 
+RPC Client 使用固定 fork `com.github.rikkahub.mcp-kotlin-sdk:0.15.0-rikka.4`，源码钉在
+[`7303e3cbb7c19aeaa46712839b5e5bd9d6cbacd5`](https://github.com/rikkahub/mcp-kotlin-sdk/tree/7303e3cbb7c19aeaa46712839b5e5bd9d6cbacd5)。
+工厂显式选择 `ProtocolEra.Legacy`，继续 initialize／tools/list 协议，不自动启用另一发现入口。
+`structuredContent` 以 JsonElement 保留对象、数组和标量；SDK 将顶层 null 与字段缺失同样解释为无结构化结果，
+数组／对象内部的 null 不丢失。完整工具目录仍由原 capture 协议负责。
+
 `McpCatalogTool.definition` 保存完整远端 Tool JSON；名称、说明与输入 Schema 都从它投影，
 `outputSchema`、annotations、`_meta` 和扩展字段不会在 SDK 类型转换时丢弃。已有个人目录的三字段 JSON
 仍是合法的已保存目录表示，序列化字节与摘要不变；不得把历史个人缓存当作已经验证的企业 Gateway surface。
@@ -129,10 +135,18 @@ SDK 提前进入终态或断开 Client 引用不能代替实际清理；原 tran
 清除旧 access/refresh token 与 client secret，避免旧资源凭据发送到新 endpoint。`definitionDigest` 包含全部静态 headers
 （包括手工 `Authorization`）；自动 OAuth token 独立存放在 OAuth 状态中，其正常轮换不会使已确认目录失效。
 授权和 token refresh 的持久化 lease 同时校验 transport、canonical resource、规范化静态 headers 与 OAuth revision。
+`canonicalResource` 只统一无 query 的根路径有无尾斜杠，保留非根路径、query 和 percent-escape 身份；
+拒绝 fragment／userinfo。已保存 `authorizedResource` 用原值刷新，旧字段缺失按旧 HttpUrl 规范值恢复，
+成功 CAS 后才物化；不同 resource 先要求重新授权，不向新资源发送旧 refresh token。非法旧 URL 的编辑可保存修复，但不保留凭据。
+元数据只有 404／410 表示未提供并继续发现；认证、网络、5xx 或 JSON 错误保留诊断，不吞错降级。
+
 OAuth 回调使用 loopback：
 `McpOAuthCallbackServer` 每次授权绑定 OS 分配的 ephemeral loopback 端口，redirect path 固定为 `/callback`，
+新动态注册使用 `localhost`，全部解析出的 loopback 地址必须在同一端口可达；旧／手工 clientId 缺字段仍使用 IP，
+`callbackHost` 随注册身份保存并复用。同 ID 修改 secret 不改 host，更换 ID 清理旧 token／resource 并使用旧 IP 合同。
 高熵 `state` 绑定本次 coordinator lease。未知 path/state、畸形或超限请求不会消费有效回调；只接受一次合法
-code/error，响应 `Cache-Control: no-store`，日志不输出 code/token/verifier。授权服务器若
+code/error，响应 `Cache-Control: no-store`，日志不输出 code/token/verifier。
+成功、取消、超时及浏览器启动失败均关闭 listener 和已接收 socket，并等待 worker 实际退出后释放平台保活 lease。授权服务器若
 错误要求固定端口，返回明确互操作错误，不回退自定义 scheme。`McpOAuthCallbackService` 只在浏览器授权期间保活 loopback
 socket，并以引用计数 lease 支持并发授权，不保存 token、MCP config 或授权阶段。发现元数据、issuer、authorization、
 token 与 registration endpoint 必须保持 HTTPS，不接受 fragment 或 userinfo，且资源/issuer 精确匹配。PKCE、resource、canonical server URI 与 trust-boundary/revision CAS

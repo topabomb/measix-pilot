@@ -40,6 +40,17 @@ internal object ConversationContextIntegrity {
             }
             val origin = entry.payload.source is ConversationContextSource.Preset ||
                 entry.payload.source is ConversationContextSource.HistorySummary
+            entry.summaryCheckpoint()?.let { checkpoint ->
+                require(owner.role == MessageRole.USER && checkpoint.covered.none {
+                    it.message.nodeId == entry.ownerNodeId
+                } && checkpoint.previousEntryId != entry.id) { "invalid_history_summary_self_reference" }
+                checkpoint.previousEntryId?.let(byId::get)?.let { previous ->
+                    require(previous.summaryCheckpoint() != null &&
+                        nodeOrder.getValue(previous.ownerNodeId) < nodeOrder.getValue(entry.ownerNodeId)) {
+                        "invalid_history_summary_dependency"
+                    }
+                }
+            }
             (entry.payload.body as? ConversationContextBody.MessageReference)?.let { body ->
                 require(origin && body.message == ContextMessageLocator(entry.ownerNodeId, entry.ownerMessageId)) {
                     "context_message_reference_owner_mismatch"

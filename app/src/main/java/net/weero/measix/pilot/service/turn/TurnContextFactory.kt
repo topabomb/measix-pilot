@@ -48,7 +48,8 @@ class TurnContextFactory(
     ): TurnLaunchPlan {
         val workspaceReminder = assistant.workspaceId
             ?.let { workspaceRepository.getById(it.toString()) }
-            ?.let(::buildWorkspacePrompt)
+            ?.takeIf { it.resolvedShellStatus() == me.rerere.workspace.WorkspaceShellStatus.READY }
+            ?.let { buildWorkspacePrompt(it, workspaceRepository.rootfsEnvironment(it.root)) }
         val promptInputs = freezeTurnPromptSnapshot(
             settings = settings,
             assistant = assistant,
@@ -100,7 +101,7 @@ class TurnContextFactory(
 
 /**
  * [TurnContextFactory.prepareLaunch] 与 `StartTurn` 事务之间的短生命周期捕获。
- * 只保存已读取的快照与原始装配输入，不做任何冻结；唯一消费者是 [TurnContextFactory.materialize]。
+ * 保存已读取的快照与原始装配输入；START 从模型快照记录历史标识，随后由 [TurnContextFactory.materialize] 冻结请求上下文。
  */
 internal class TurnLaunchPlan(
     val realmAccess: net.weero.measix.pilot.data.enterprise.RealmAccess,

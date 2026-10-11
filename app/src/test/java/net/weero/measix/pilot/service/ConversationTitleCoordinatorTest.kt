@@ -212,6 +212,20 @@ class ConversationTitleCoordinatorTest {
     }
 
     @Test
+    fun `fork advances terminal numeric suffix without overflow or changing other parentheses`() = runTest {
+        val coordinator = ConversationTitleCoordinator()
+        for ((source, occupied, expected) in listOf(
+            Triple("Source(2)", listOf("Source(3)", "Source(5)"), "Source(4)"),
+            Triple("Source(0009)", emptyList(), "Source(10)"),
+            Triple("Source(922337203685477580799)", emptyList(), "Source(922337203685477580800)"),
+            Triple("Source(note)", emptyList(), "Source(note)(1)"),
+            Triple("Source(-1)", emptyList(), "Source(-1)(1)"),
+        )) {
+            assertEquals(source, expected, coordinator.createForkWithTitle(Uuid.random(), source, { occupied }) { it })
+        }
+    }
+
+    @Test
     fun `concurrent forks serialize query through create without cancelling source generation`() = runTest {
         val coordinator = ConversationTitleCoordinator()
         val id = Uuid.random()

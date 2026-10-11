@@ -872,7 +872,9 @@ private fun ChatPageContent(
                                     ?.messages
                                     ?.firstOrNull { it.id == editingMessageId }
                                     ?.role
-                                if (editingRole == MessageRole.USER) {
+                                val isSummary = snapshot.context.messages[editingMessageId]?.origin ==
+                                    net.weero.measix.pilot.service.ConversationContextCategory.HISTORY_SUMMARY
+                                if (editingRole == MessageRole.USER && !isSummary) {
                                     scope.launch {
                                         vm.handleMessageEditAndSend(configuration.target)?.let { receipt ->
                                             requestAppendScroll(
@@ -962,7 +964,6 @@ private fun ChatPageContent(
                 readiness = readiness,
                 assistant = assistant,
                 starters = configuration?.starters.orEmpty(),
-                modelById = configuration?.modelCatalog?.groups.orEmpty().flatMap { it.models }.associate { it.model.id to it.model },
                 hazeState = hazeState,
                 errors = errors,
                 onDismissError = onDismissError,

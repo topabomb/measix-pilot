@@ -121,7 +121,7 @@ class McpApplicationService(
         return edited.clone(
             commonOptions = edited.commonOptions.copy(
                 toolPolicies = policies,
-                oauth = latest.commonOptions.oauth.takeIf { latest.hasSameOAuthTrustBoundary(edited) },
+                oauth = latest.commonOptions.oauth?.takeIf { latest.hasSameOAuthTrustBoundary(edited) },
             )
         )
     }

@@ -306,12 +306,12 @@
   <string name="chat_page_compress_additional_prompt">追加指示（オプション）</string>
   <string name="chat_page_compress_additional_prompt_hint">保持または重点的に扱う内容を指定</string>
   <string name="chat_page_compress_context">履歴を圧縮</string>
-  <string name="chat_page_compress_context_desc">以前の完全な会話ターンを要約に置き換え、最近のメッセージを保持します。ローカルサンプルモデルは入力の一部を抜粋するだけで、意味を要約しません。テスト用の会話でのみ使用してください。</string>
+  <string name="chat_page_compress_context_desc">以降のリクエストでは過去の完了したターンの要約を使い、最近のメッセージを保持します。元のメッセージも保存されます。ローカルのサンプルモデルは文章を抜粋するだけなので、テスト用の会話でのみ使用してください。</string>
   <string name="chat_page_compress_context_title">会話履歴を圧縮</string>
   <string name="chat_page_compress_keep_recent">保持する最近のメッセージの最小数</string>
   <string name="chat_page_compress_not_enough_messages">圧縮するためのメッセージが不足しています。保持するメッセージ数を減らすか、メッセージを追加してください。</string>
   <string name="chat_page_compress_target_tokens">要約の目標（トークン）</string>
-  <string name="chat_page_compress_warning">圧縮すると、古いメッセージが AI 生成の要約に置き換わります。重要な内容を先に確認してください。この操作は元に戻せません。</string>
+  <string name="chat_page_compress_warning">AI が生成した要約の正確さを確認してください。要約は編集・削除できます。元のメッセージは保存されたままです。</string>
   <string name="chat_page_compressing">圧縮中…</string>
   <string name="chat_page_conversation_system_prompt">会話システムプロンプト</string>
   <string name="chat_page_conversation_system_prompt_clear">クリア</string>
@@ -418,7 +418,7 @@
   <string name="history_page_conversation_deleted">会話が削除されました</string>
   <string name="history_page_delete">削除</string>
   <string name="history_page_delete_all">すべて削除</string>
-  <string name="history_page_delete_all_confirmation">すべての会話を削除してもよろしいですか？この操作は元に戻せません。</string>
+  <string name="history_page_delete_all_confirmation">現在のスペースのすべての会話を削除しますか？この操作は取り消せません。</string>
   <string name="history_page_delete_all_conversations">すべての会話を削除</string>
   <string name="history_page_new_conversation">新しい会話</string>
   <string name="history_page_pin">ピン留め</string>
@@ -2135,4 +2135,22 @@
   <string name="mcp_readiness_on_demand">%1$d 件選択済み · 使用時に接続</string>
   <string name="about_page_platform_contract">プラットフォーム契約：%1$d</string>
   <string name="about_page_core_baseline">基準 Core：%1$s</string>
+  <string name="chat_page_export_include_reasoning">思考過程を含める</string>
+  <string name="setting_tts_page_provider_volcengine">Volcengine 音声合成</string>
+  <string name="setting_tts_page_resource_id">リソース ID</string>
+  <string name="setting_tts_page_volcengine_resource_description">有効な音声サービスのリソース ID（例：seed-tts-2.0）を入力します。</string>
+  <string name="setting_tts_page_volcengine_rate_description">合成速度は -50～100。0 は標準速度です。</string>
+  <string name="conversation_sort_title">会話の並び順</string>
+  <string name="conversation_sort_created">作成日時順</string>
+  <string name="conversation_sort_updated">更新日時順</string>
+  <string name="history_page_current_space">このスペースの履歴</string>
+  <string name="assistant_page_local_tools_chart_title">グラフ</string>
+  <string name="assistant_page_local_tools_chart_desc">端末上で折れ線・棒・散布図とデータ表を表示します。</string>
+  <string name="chart_mode_chart">グラフ</string>
+  <string name="chart_mode_table">表</string>
+  <string name="chart_series_name">系列 %1$d</string>
+  <string name="chart_previous_page">前へ</string>
+  <string name="chart_next_page">次へ</string>
+  <string name="reasoning_opus55_hint">このモデルは常に思考を行います。自動または思考の強度を選んでください。オフにはできません。</string>
+  <string name="reasoning_sonnet55_hint">オフにすると最初の回答前の思考を無効にします。ツール呼び出しの間では思考する場合があります。</string>
 </resources>

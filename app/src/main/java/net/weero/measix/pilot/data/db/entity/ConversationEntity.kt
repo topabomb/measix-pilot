@@ -15,10 +15,14 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
     tableName = "ConversationEntity",
     indices = [
         Index(value = ["parent_conversation_id"]),
-        Index(value = ["scope", "parent_conversation_id", "is_pinned", "update_at"]),
-        Index(value = ["scope", "assistant_id", "parent_conversation_id", "is_pinned", "update_at"]),
-        Index(value = ["scope", "assistant_id", "parent_conversation_id", "folder_id", "is_pinned", "update_at"]),
-        Index(value = ["scope", "folder_id", "parent_conversation_id", "is_pinned", "update_at"]),
+        Index(value = ["scope", "parent_conversation_id", "is_pinned", "update_at", "id"]),
+        Index(value = ["scope", "parent_conversation_id", "is_pinned", "create_at", "id"]),
+        Index(value = ["scope", "assistant_id", "parent_conversation_id", "is_pinned", "update_at", "id"]),
+        Index(value = ["scope", "assistant_id", "parent_conversation_id", "is_pinned", "create_at", "id"]),
+        Index(value = ["scope", "assistant_id", "parent_conversation_id", "folder_id", "is_pinned", "update_at", "id"]),
+        Index(value = ["scope", "assistant_id", "parent_conversation_id", "folder_id", "is_pinned", "create_at", "id"]),
+        Index(value = ["scope", "folder_id", "parent_conversation_id", "is_pinned", "update_at", "id"]),
+        Index(value = ["scope", "folder_id", "parent_conversation_id", "is_pinned", "create_at", "id"]),
     ],
     foreignKeys = [
         ForeignKey(

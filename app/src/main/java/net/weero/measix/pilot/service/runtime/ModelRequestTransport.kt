@@ -75,7 +75,7 @@ internal suspend fun ModelRequestTarget.generateImage(
 ): Flow<ImageGenerationItem> {
     return when (this) {
         is ModelRequestTarget.Remote -> {
-            validateOverrides(params.customHeaders, params.customBody)
+            validateOverrides(provider.customHeaders + params.customHeaders, params.customBody)
             providers.getProviderByType(provider).generateImage(provider,
                 params.copy(customHeaders = params.customHeaders + headers, credentials = credentials))
         }
@@ -92,7 +92,7 @@ internal suspend fun ModelRequestTarget.editImage(
 ): Flow<ImageGenerationItem> {
     return when (this) {
         is ModelRequestTarget.Remote -> {
-            validateOverrides(params.customHeaders, params.customBody)
+            validateOverrides(provider.customHeaders + params.customHeaders, params.customBody)
             providers.getProviderByType(provider).editImage(provider,
                 params.copy(customHeaders = params.customHeaders + headers, credentials = credentials))
         }
@@ -101,7 +101,7 @@ internal suspend fun ModelRequestTarget.editImage(
 }
 
 private fun ModelRequestTarget.Remote.requestParams(params: TextGenerationParams): TextGenerationParams {
-    validateOverrides(params.customHeaders, params.customBody)
+    validateOverrides(provider.customHeaders + params.customHeaders, params.customBody)
     return params.copy(customHeaders = params.customHeaders + headers, credentials = credentials)
 }
 

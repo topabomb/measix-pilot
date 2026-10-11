@@ -39,6 +39,7 @@ private data class ImageGenerationResponseWire(
 private data class ImageGenerationItemWire(
     @SerialName("b64_json") val b64Json: String? = null,
     val url: String? = null,
+    @SerialName("media_type") val mediaType: String? = null,
     @SerialName("output_format") val outputFormat: String? = null,
     @SerialName("respect_moderation") val respectModeration: JsonElement? = null,
     val moderation: JsonElement? = null,
@@ -158,7 +159,8 @@ private fun ImageGenerationItemWire.toParsed(defaultFormat: String?): ParsedImag
     if (!b64Json.isNullOrBlank()) {
         return ParsedImageGenerationItem.Base64Json(
             data = b64Json,
-            mimeType = (outputFormat ?: defaultFormat ?: "png").toImageMimeType(),
+            mimeType = mediaType?.also { require(it.startsWith("image/") && it.none(Char::isWhitespace)) { "invalid_image_media_type: $it" } }
+                ?: (outputFormat ?: defaultFormat ?: "png").toImageMimeType(),
         )
     }
     return url?.takeIf(String::isNotBlank)?.let(ParsedImageGenerationItem::RemoteUrl)

@@ -28,6 +28,7 @@ class LocalTools internal constructor(
         buildContext: AssistantToolBuildContext? = null,
     ): List<Tool> {
         val tools = mutableListOf<Tool>()
+        if (options.contains(LocalToolOption.ChartDisplay)) tools.add(buildChartDisplayTool())
         if (options.contains(LocalToolOption.JavascriptEngine)) {
             tools.add(javascriptTool)
         }

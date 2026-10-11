@@ -306,12 +306,12 @@
   <string name="chat_page_compress_additional_prompt">추가 지침(선택 사항)</string>
   <string name="chat_page_compress_additional_prompt_hint">보존하거나 집중할 내용을 지정하세요</string>
   <string name="chat_page_compress_context">기록 압축</string>
-  <string name="chat_page_compress_context_desc">이전의 완전한 대화 턴을 요약으로 대체하고 최근 메시지는 유지합니다. 로컬 예제 모델은 입력의 일부만 발췌하며 의미를 요약하지 않습니다. 테스트 대화에서만 사용하세요.</string>
+  <string name="chat_page_compress_context_desc">이후 요청에는 이전에 완료된 턴의 요약을 사용하고 최근 메시지는 유지합니다. 원본 메시지도 저장됩니다. 로컬 예제 모델은 텍스트를 발췌하므로 테스트 대화에서만 사용하세요.</string>
   <string name="chat_page_compress_context_title">대화 기록 압축</string>
   <string name="chat_page_compress_keep_recent">유지할 최근 메시지의 최소 개수</string>
   <string name="chat_page_compress_not_enough_messages">압축할 메시지가 부족합니다. 유지할 메시지 수를 줄이거나 더 많은 메시지를 추가하세요.</string>
   <string name="chat_page_compress_target_tokens">요약 목표(토큰)</string>
-  <string name="chat_page_compress_warning">압축하면 오래된 메시지가 AI가 생성한 요약으로 대체됩니다. 중요한 내용을 먼저 확인하세요. 이 작업은 되돌릴 수 없습니다.</string>
+  <string name="chat_page_compress_warning">AI가 생성한 요약이 정확한지 확인하세요. 요약을 수정하거나 삭제해도 원본 메시지는 유지됩니다.</string>
   <string name="chat_page_compressing">압축 중...</string>
   <string name="chat_page_conversation_system_prompt">대화 시스템 프롬프트</string>
   <string name="chat_page_conversation_system_prompt_clear">지우기</string>
@@ -418,7 +418,7 @@
   <string name="history_page_conversation_deleted">대화 삭제됨</string>
   <string name="history_page_delete">삭제</string>
   <string name="history_page_delete_all">전체 삭제</string>
-  <string name="history_page_delete_all_confirmation">정말 모든 대화를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.</string>
+  <string name="history_page_delete_all_confirmation">현재 공간의 모든 대화를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.</string>
   <string name="history_page_delete_all_conversations">모든 대화 삭제</string>
   <string name="history_page_new_conversation">새 대화</string>
   <string name="history_page_pin">고정</string>
@@ -2135,4 +2135,22 @@
   <string name="mcp_readiness_on_demand">%1$d개 선택됨 · 사용 시 연결</string>
   <string name="about_page_platform_contract">플랫폼 계약: %1$d</string>
   <string name="about_page_core_baseline">기준 Core: %1$s</string>
+  <string name="chat_page_export_include_reasoning">추론 과정 포함</string>
+  <string name="setting_tts_page_provider_volcengine">Volcengine 음성 합성</string>
+  <string name="setting_tts_page_resource_id">리소스 ID</string>
+  <string name="setting_tts_page_volcengine_resource_description">사용 가능한 음성 서비스의 리소스 ID를 입력하세요. 예: seed-tts-2.0.</string>
+  <string name="setting_tts_page_volcengine_rate_description">합성 속도 범위는 -50~100이며, 0은 기본 속도입니다.</string>
+  <string name="conversation_sort_title">대화 정렬</string>
+  <string name="conversation_sort_created">생성 시간순</string>
+  <string name="conversation_sort_updated">업데이트 시간순</string>
+  <string name="history_page_current_space">이 공간의 대화 기록</string>
+  <string name="assistant_page_local_tools_chart_title">차트</string>
+  <string name="assistant_page_local_tools_chart_desc">기기에서 선형, 막대, 분산형 차트와 데이터 표를 표시합니다.</string>
+  <string name="chart_mode_chart">차트</string>
+  <string name="chart_mode_table">표</string>
+  <string name="chart_series_name">계열 %1$d</string>
+  <string name="chart_previous_page">이전</string>
+  <string name="chart_next_page">다음</string>
+  <string name="reasoning_opus55_hint">이 모델은 항상 추론합니다. 자동 또는 추론 강도를 선택하세요. 끄기는 지원하지 않습니다.</string>
+  <string name="reasoning_sonnet55_hint">끄기는 첫 응답 전의 추론만 비활성화합니다. 도구 호출 사이에는 계속 추론할 수 있습니다.</string>
 </resources>

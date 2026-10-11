@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.service.turn
 
 import me.rerere.ai.ui.ProviderToolCallSlot
+import me.rerere.ai.ui.ProviderContentBlockSlot
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.ClaudeReasoningMetadata
 import me.rerere.ai.ui.GoogleThoughtMetadata
@@ -19,6 +20,7 @@ import kotlin.uuid.Uuid
 internal class StepOutputAccumulator {
     private var currentStepId: Uuid? = null
     private val localCallsBySlot = mutableMapOf<ProviderToolCallSlot, Uuid>()
+    private val contentIndices = mutableMapOf<ProviderContentBlockSlot, Int>()
     fun accumulate(active: UIMessage, chunk: MessageChunk, model: Model?): UIMessage {
         require(active.role == me.rerere.ai.core.MessageRole.ASSISTANT)
         val step = active.parts.filterIsInstance<UIMessagePart.Step>().last()
@@ -28,12 +30,18 @@ internal class StepOutputAccumulator {
         if (currentStepId != step.stepId) {
             currentStepId = step.stepId
             localCallsBySlot.clear()
+            contentIndices.clear()
         }
         require(choice.toolCallSlots.size == delta.getTools().size) { "Provider Tool deltas require explicit transport slots" }
+        require(choice.contentBlockSlots.isEmpty() || choice.contentBlockSlots.size == delta.parts.size) {
+            "Provider content deltas require one slot per part"
+        }
         var toolOrdinal = 0
-        var parts = delta.parts.fold(active.parts) { acc, part ->
+        var parts = delta.parts.foldIndexed(active.parts) { index, acc, part ->
             if (part is UIMessagePart.Tool) {
                 mergeTool(acc, acc.currentStepStart(), part, choice.toolCallSlots[toolOrdinal++])
+            } else if (choice.contentBlockSlots.isNotEmpty()) {
+                mergeContentBlock(acc, part, choice.contentBlockSlots[index])
             } else mergePart(acc, part)
         }
         if (delta.parts.none { it is UIMessagePart.Reasoning }) {
@@ -50,6 +58,26 @@ internal class StepOutputAccumulator {
             annotations = delta.annotations.ifEmpty { active.annotations },
             providerMetadata = mergeMessageMetadata(active.providerMetadata, delta.providerMetadata),
         )
+    }
+
+    private fun mergeContentBlock(acc: List<UIMessagePart>, delta: UIMessagePart, slot: ProviderContentBlockSlot): List<UIMessagePart> {
+        val index = contentIndices[slot]
+        if (index == null) {
+            require(delta is UIMessagePart.Text || delta is UIMessagePart.Reasoning) { "Unsupported slotted content type" }
+            contentIndices[slot] = acc.size
+            return acc + delta
+        }
+        val previous = acc[index]
+        val merged = when {
+            previous is UIMessagePart.Text && delta is UIMessagePart.Text -> previous.copy(text = previous.text + delta.text)
+            previous is UIMessagePart.Reasoning && delta is UIMessagePart.Reasoning -> previous.copy(
+                reasoning = previous.reasoning + delta.reasoning,
+                metadata = mergeReasoningPartMetadata(previous.metadata, delta.metadata),
+                finishedAt = delta.finishedAt ?: previous.finishedAt,
+            )
+            else -> error("Provider content block changed type")
+        }
+        return acc.toMutableList().apply { set(index, merged) }
     }
 
     private fun mergePart(acc: List<UIMessagePart>, deltaPart: UIMessagePart): List<UIMessagePart> {

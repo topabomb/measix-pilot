@@ -71,8 +71,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalFocusManager
@@ -238,12 +240,23 @@ internal fun ChatInput(
             else -> {}
         }
     }
+    val scrimColor = MaterialTheme.colorScheme.background.copy(
+        alpha = net.weero.measix.pilot.ui.theme.ChatSurfacePolicy.pageChromeAlpha(assistant.hasVisibleChatBackground()),
+    )
     Surface(
         color = Color.Transparent,
     ) {
         Column(
             modifier = modifier
                 .imePadding()
+                .drawWithCache {
+                    val scrim = Brush.verticalGradient(
+                        0f to scrimColor.copy(alpha = 0f),
+                        0.7f to scrimColor,
+                        1f to scrimColor,
+                    )
+                    onDrawBehind { drawRect(scrim) }
+                }
                 .navigationBarsPadding()
                 .padding(horizontal = 8.dp)
                 .padding(bottom = 8.dp),
@@ -299,8 +312,9 @@ internal fun ChatInput(
                             )
 
                             // Reasoning
-                            if (model?.abilities?.contains(ModelAbility.REASONING) == true) {
+                            if (model != null && (ModelAbility.REASONING in model.abilities || me.rerere.ai.registry.ModelRegistry.CLAUDE_5_5.match(model.modelId))) {
                                 ReasoningButton(
+                                    modelId = model.modelId,
                                     reasoningLevel = assistant.reasoningLevel,
                                     onUpdateReasoningLevel = {
                                         onUpdateReasoning(it)

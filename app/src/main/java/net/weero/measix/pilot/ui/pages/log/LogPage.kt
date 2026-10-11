@@ -46,6 +46,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.ui.components.ui.ErrorDetails
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import me.rerere.common.android.LogEntry
 import me.rerere.common.android.Logging
 import net.weero.measix.pilot.R
@@ -192,6 +197,9 @@ private fun RequestLogCard(log: LogEntry.RequestLog, onClick: () -> Unit) {
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
+    val copied = stringResource(R.string.copied)
+    var copyFailure by remember { mutableStateOf<ChatError?>(null) }
+    copyFailure?.let { ErrorDetails(it, onDismiss = { copyFailure = null }) }
 
     Card(
         modifier = Modifier
@@ -230,15 +238,22 @@ private fun RequestLogCard(log: LogEntry.RequestLog, onClick: () -> Unit) {
                                     log.durationMs?.let { appendLine("Duration: ${it}ms") }
                                     log.error?.let { appendLine("Error: $it") }
                                 }
-                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Request log", text)))
-                                toaster.show("Copied", ToastType.Success)
+                                try {
+                                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Request log", text)))
+                                    toaster.show(copied, ToastType.Success)
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (error: Exception) {
+                                    logDiagnosticFailure("LogPage", "Clipboard copy failed", error)
+                                    copyFailure = ChatError(detail = error.userVisibleDiagnostic())
+                                }
                             }
                         },
                         modifier = Modifier.size(24.dp),
                     ) {
                         Icon(
                             HugeIcons.Copy01,
-                            contentDescription = "Copy log",
+                            contentDescription = stringResource(R.string.copy),
                             modifier = Modifier.size(16.dp),
                         )
                     }
@@ -437,6 +452,9 @@ private fun TextLogCard(log: LogEntry.TextLog) {
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
+    val copied = stringResource(R.string.copied)
+    var copyFailure by remember { mutableStateOf<ChatError?>(null) }
+    copyFailure?.let { ErrorDetails(it, onDismiss = { copyFailure = null }) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -464,15 +482,22 @@ private fun TextLogCard(log: LogEntry.TextLog) {
                     IconButton(
                         onClick = {
                             scope.launch {
-                                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(log.tag, log.message)))
-                                toaster.show("Copied", ToastType.Success)
+                                try {
+                                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(log.tag, log.message)))
+                                    toaster.show(copied, ToastType.Success)
+                                } catch (cancelled: CancellationException) {
+                                    throw cancelled
+                                } catch (error: Exception) {
+                                    logDiagnosticFailure("LogPage", "Clipboard copy failed", error)
+                                    copyFailure = ChatError(detail = error.userVisibleDiagnostic())
+                                }
                             }
                         },
                         modifier = Modifier.size(24.dp),
                     ) {
                         Icon(
                             HugeIcons.Copy01,
-                            contentDescription = "Copy log",
+                            contentDescription = stringResource(R.string.copy),
                             modifier = Modifier.size(16.dp),
                         )
                     }

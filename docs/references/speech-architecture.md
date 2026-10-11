@@ -11,7 +11,9 @@
 
 ## 语音合成与播放
 
-个人 TTS 支持 OpenAI、Gemini、MiMo 与 SystemTTS，配置由 `TTSProviderSetting` 定义；云端音色和系统引擎参数不能互相代用。
+个人 TTS 支持 OpenAI、Gemini、MiMo、Volcengine 与 SystemTTS，配置由 `TTSProviderSetting` 定义；云端音色和系统引擎参数不能互相代用。
+
+`VolcengineTTSProvider` 使用 V3 单向 SSE 和 MP3，资源 ID、音色及服务端语速在播放会话中冻结；每段合成复验原空间准入，仅更新同 endpoint 的凭据。只在明确成功终态且音频非空时交付完整分片；截断、服务错误及本地字节上限均失败，不播放部分结果。调用禁止重试、重定向与认证重放，取消等待正文读取实际退出。解析失败保留原异常类型名称、堆栈和因果诊断，并脱敏已知请求凭据。企业允许使用自有 TTS 时复用这条个人配置链；平台下发协议不增加未经约定的火山映射。
 
 `selectedTTSProviderId` 选中一个 provider；`defaultTTSPlaybackSpeed` 是播放层公共速度，不是服务端 TTS voice。
 

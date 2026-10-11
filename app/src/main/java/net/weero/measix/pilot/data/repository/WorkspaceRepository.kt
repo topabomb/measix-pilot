@@ -78,6 +78,8 @@ class WorkspaceRepository(
     suspend fun getByRoot(root: String): WorkspaceEntity? = dao.getByRoot(root)
     suspend fun allWorkspaces(): List<WorkspaceEntity> = dao.getAll()
 
+    suspend fun rootfsEnvironment(root: String) = runInterruptible(Dispatchers.IO) { rootfsInstaller.environment(root) }
+
     suspend fun statDocument(root: String, path: String) = runInterruptible(Dispatchers.IO) { manager.statDocument(root, path) }
     suspend fun listDocuments(root: String, path: String) = runInterruptible(Dispatchers.IO) { manager.listDocuments(root, path) }
     suspend fun createDocument(root: String, path: String, name: String, directory: Boolean) =

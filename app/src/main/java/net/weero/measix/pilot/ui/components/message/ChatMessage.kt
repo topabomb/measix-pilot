@@ -58,7 +58,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ToolCallLocator
-import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.MessageTerminalStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
@@ -111,7 +110,6 @@ fun ChatMessage(
     modifier: Modifier = Modifier,
     loading: Boolean = false,
     turnFinished: Boolean = !loading,
-    model: Model? = null,
     modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
     assistant: Assistant? = null,
     lastMessage: Boolean = false,
@@ -165,7 +163,7 @@ fun ChatMessage(
         showUserAvatar = settings.showUserAvatar,
         showAssistantIcon = settings.showModelIcon,
         showAssistantName = settings.showModelName,
-        hasAssistantIdentity = model != null || assistant?.useAssistantAvatar == true,
+        hasAssistantIdentity = message.role == MessageRole.ASSISTANT,
     )
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -181,7 +179,6 @@ fun ChatMessage(
             ) {
                 ChatMessageAssistantAvatar(
                     message = message,
-                    model = model,
                     modelIconFallback = modelIconFallback,
                     assistant = assistant,
                     loading = loading,
@@ -209,7 +206,6 @@ fun ChatMessage(
                 parts = renderableParts,
                 annotations = message.annotations,
                 loading = loading,
-                model = model,
                 onToolDecision = if (readOnly) null else onToolDecision,
                 onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
                 toolLivePhases = toolLivePhases,
@@ -254,6 +250,8 @@ fun ChatMessage(
                         ChatMessageActionButtons(
                             message = message,
                             onRegenerate = onRegenerate,
+                            canRegenerate = contextSummary?.origin !=
+                                net.weero.measix.pilot.service.ConversationContextCategory.HISTORY_SUMMARY,
                             node = node,
                             onUpdate = onUpdate,
                             onOpenActionSheet = {
@@ -286,7 +284,6 @@ fun ChatMessage(
             onDelete = onDelete,
             onShare = onShare,
             onFork = onFork,
-            model = model,
             onSelectAndCopy = {
                 showSelectCopySheet = true
             },
@@ -404,7 +401,6 @@ private fun MessagePartsBlock(
     assistant: Assistant?,
     messageId: kotlin.uuid.Uuid,
     role: MessageRole,
-    model: Model?,
     parts: List<UIMessagePart>,
     annotations: List<UIMessageAnnotation>,
     loading: Boolean,
@@ -497,7 +493,6 @@ private fun MessagePartsBlock(
                                 key(step.reasoning.createdAt) {
                                     ChatMessageReasoningStep(
                                         reasoning = step.reasoning,
-                                        model = model,
                                         assistant = assistant,
                                         collapsedAdaptiveWidth = isReasoningOnlyBlock,
                                     )

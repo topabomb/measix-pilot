@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onStart
+import net.weero.measix.pilot.data.datastore.ConversationSortOrder
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -40,14 +42,22 @@ class HistoryVM internal constructor(
     internal val readFailure = _readFailure.asStateFlow()
     private val refresh = MutableStateFlow(0)
     fun retry() { refresh.value += 1 }
-    val conversations = combine(conversationQueryService.observeCurrentSelection(), assistantCatalog, refresh) {
-        selection, catalog, _ -> selection to catalog
-    }.flatMapLatest { (selection, state) ->
-        val catalog = (state as? AssistantCatalogReadState.Available)?.catalog?.takeIf { it.selection == selection }
-        val reference = catalog?.selected?.reference
+    private val sortRead = refresh.flatMapLatest {
+        conversationQueryService.observeSortOrder().map<ConversationSortOrder, Result<ConversationSortOrder>?> { Result.success(it) }
+            .onStart { emit(null) }
+            .catch { error ->
+                if (error is CancellationException) throw error
+                Log.e(TAG, "Conversation sort preference read failed", error)
+                emit(Result.failure(error))
+            }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    internal val sortOrder = sortRead.map { it?.getOrNull() }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val conversations = combine(conversationQueryService.observeCurrentSelection(), sortRead, refresh) { selection, sort, _ ->
+        selection to sort
+    }.flatMapLatest { (selection, sort) ->
         (when {
-            selection?.access is RealmAccess.Enterprise -> conversationQueryService.conversationsInRealm(selection)
-            reference != null -> conversationQueryService.conversationsOfAssistant(reference)
+            sort?.isFailure == true -> flowOf(Result.failure(requireNotNull(sort.exceptionOrNull())))
+            selection != null && sort != null -> conversationQueryService.conversationsInRealm(selection, sort.getOrThrow())
             else -> flowOf(Result.success(emptyList()))
         })
             .catch { error ->

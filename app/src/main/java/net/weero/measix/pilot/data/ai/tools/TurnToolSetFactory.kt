@@ -96,7 +96,7 @@ class TurnToolSetFactory(
                 addAll(createSearchTools(settings, configuration))
             }
 
-            inspectionModel?.let { add(createAttachmentInspectionTool(it, providerManager)) }
+            inspectionModel?.let { add(createAttachmentInspectionTool(it, providerManager, conversationId)) }
 
             val localToolOptions = if (turnKind == TurnKind.SUB_ASSISTANT) {
                 filterTargetLocalTools(assistant.localTools)

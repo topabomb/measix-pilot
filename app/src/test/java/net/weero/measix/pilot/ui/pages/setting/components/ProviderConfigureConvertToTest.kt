@@ -37,6 +37,7 @@ class ProviderConfigureConvertToTest {
             id = ConfigurationReference.random(),
             enabled = false,
             name = "My Provider",
+            customHeaders = listOf(me.rerere.ai.provider.CustomHeader("X-Provider", "preserved")),
             models = listOf(model),
             balanceOption = balanceOption,
             apiKey = "sk-test",
@@ -51,6 +52,8 @@ class ProviderConfigureConvertToTest {
         assertEquals(original.enabled, google.enabled)
         assertEquals(original.name, google.name)
         assertEquals(original.models, google.models)
+        assertEquals(original.customHeaders, google.customHeaders)
+        assertEquals(original.customHeaders, google.convertTo(ProviderSetting.Claude::class).copyProvider().customHeaders)
         assertEquals(original.balanceOption, google.balanceOption)
         assertEquals(original.apiKey, google.apiKey)
         assertEquals("https://generativelanguage.googleapis.com/v1beta", google.baseUrl)

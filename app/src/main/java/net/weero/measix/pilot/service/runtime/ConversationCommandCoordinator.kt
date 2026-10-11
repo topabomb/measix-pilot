@@ -40,35 +40,6 @@ class ConversationCommandCoordinator(
             )
         } }
 
-    /** A lineage change commits all aggregates before any runtime publishes or disappears. */
-    internal suspend fun commitTreeMutation(
-        scope: ConfigurationScope,
-        rootId: Uuid,
-        replacements: Map<Uuid, ReplaceMessageTree>,
-        deletedChildIds: Set<Uuid>,
-    ) = withRootTree(scope, rootId) {
-        check(rootId in replacements && rootId !in deletedChildIds)
-        check(replacements.keys.none { it in deletedChildIds })
-        val childIds = repository.getChildConversationIds(rootId).toSet()
-        check((replacements.keys - rootId + deletedChildIds).all { it in childIds })
-        deletedChildIds.forEach { ensureNotActive(it, includeAuxiliary = true) }
-        val planned = replacements.map { (id, command) ->
-            val runtime = load(id)
-            check(!runtime.durable.header.newConversation) { "tree_mutation_requires_persisted_conversation" }
-            val change = ConversationTransition.plan(runtime.durable, command, nowMillis()) as ConversationChange.Durable
-            Triple(runtime, command, change)
-        }
-        val write = ConversationWrite.MutateTree(rootId, planned.map {
-            (it.third.write as ConversationWrite.Mutate).mutation
-        }, deletedChildIds)
-        coroutineContext.ensureActive()
-        withContext(NonCancellable) {
-            commitDurable(write)
-            planned.forEach { (runtime, command, change) -> runtime.publishCommitted(command, change.snapshot) }
-            deletedChildIds.forEach { registry.evictRuntime(it) }
-        }
-    }
-
     internal suspend fun <T> withResidentRuntime(
         conversationId: Uuid,
         operation: suspend (ConversationRuntime?) -> T,
@@ -447,7 +418,6 @@ class ConversationCommandCoordinator(
 
     private suspend fun commitDurable(write: ConversationWrite) {
         when (write) {
-            is ConversationWrite.MutateTree -> repository.commit(write)
             is ConversationWrite.MaterializeDraft -> repository.commit(write)
             is ConversationWrite.Mutate -> {
                 if (write.mutation.hasChanges() || write.executionFacts != null) {
@@ -511,6 +481,9 @@ internal fun validateConversationCommandOwner(
             throw ConversationCommandConflictException("stale finalization for turn ${command.handle.turnId}")
         }
         is HeaderConversationCommand -> Unit
+        is InsertHistorySummaryCheckpoint -> if (activeTurn != null || activeTurnId != null) {
+            throw ConversationCommandConflictException("summary_requires_idle_conversation")
+        }
         is ResolveToolInteraction -> {
             val handle = command.handle
             requireActiveIdentity(handle.turnId)

@@ -277,7 +277,10 @@ internal object TurnTransition {
         }
         require(command.initialStep.ordinal == 0 && command.initialStep.outcome == null && command.initialStep.modelResult == null)
         require(command.initialStep.stepId != Uuid.NIL)
-        val slot = openAssistantMessage(command.assistantMessageId, command.initialStep)
+        val slot = openAssistantMessage(command.assistantMessageId, command.initialStep).copy(
+            modelId = command.modelInfo?.id,
+            modelInfo = command.modelInfo,
+        )
         val nodes = current.nodes.toMutableList()
         if (target.appendVariantToExistingAssistantNode) {
             val last = nodes[nodes.lastIndex]

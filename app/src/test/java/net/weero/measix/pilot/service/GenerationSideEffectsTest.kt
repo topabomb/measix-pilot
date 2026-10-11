@@ -73,12 +73,15 @@ class GenerationSideEffectsTest {
         val bodies = listOf(CustomBody(key = "gateway_mode", value = JsonPrimitive("strict")))
         val model = Model(modelId = "custom-chat-model", customHeaders = headers, customBodies = bodies)
 
-        val params = backgroundTextGenerationParams(model, ReasoningLevel.LOW)
+        val conversationId = Uuid.random()
+        val params = backgroundTextGenerationParams(model, ReasoningLevel.LOW, conversationId)
 
         assertEquals(model, params.model)
         assertEquals(ReasoningLevel.LOW, params.reasoningLevel)
         assertEquals(headers, params.customHeaders)
         assertEquals(bodies, params.customBody)
+        assertEquals(conversationId.toString(), params.openCodeSessionId)
+        assertEquals(null, params.providerSessionId)
     }
 
     @Test

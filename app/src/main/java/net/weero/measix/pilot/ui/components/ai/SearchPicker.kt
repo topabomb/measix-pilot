@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
+import androidx.activity.compose.BackHandler
 import net.weero.measix.pilot.data.configuration.AssistantSearchMode
 import androidx.compose.material3.LocalContentColor
 
@@ -134,10 +135,11 @@ fun SearchPickerButton(
     }
 
     if (showSearchPicker) {
+        var selectingProvider by remember { mutableStateOf(false) }
         AdaptiveModal(
             onDismissRequest = { showSearchPicker = false },
         ) {
-            var selectingProvider by remember { mutableStateOf(false) }
+            BackHandler(enabled = selectingProvider) { selectingProvider = false }
             AnimatedContent(
                 targetState = selectingProvider,
                 transitionSpec = {

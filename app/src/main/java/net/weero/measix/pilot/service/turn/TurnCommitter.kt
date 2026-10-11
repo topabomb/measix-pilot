@@ -76,11 +76,12 @@ class TurnCommitter(
             runtime: ConversationRuntime,
             turnId: Uuid,
             turnFinalizer: TurnFinalizer,
+            model: me.rerere.ai.provider.Model,
         ): StartedTurn {
             val command = TurnTransition.buildStartTurnCommand(
                 current = runtime.durable,
                 turnId = turnId,
-            )
+            ).copy(modelInfo = me.rerere.ai.ui.MessageModelInfo(model.id, model.modelId, model.displayName))
             val handle = commandCoordinator.startTurn(runtime.id, command)
             runtime.markRunning(handle)
             return StartedTurn(

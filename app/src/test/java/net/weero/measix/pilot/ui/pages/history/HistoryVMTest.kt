@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.history
 
+import net.weero.measix.pilot.data.datastore.ConversationSortOrder
 import androidx.lifecycle.ViewModelStore
 import io.mockk.every
 import io.mockk.coEvery
@@ -36,6 +37,105 @@ import java.time.Instant
 import kotlin.uuid.Uuid
 
 class HistoryVMTest {
+    @Test fun sortReadFailureIsDiagnosedAndRetriedByHistoryAndDrawer() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val selection = RealmSelection(RealmAccess.Personal, 1)
+            val query = mockk<ConversationQueryService>()
+            every { query.observeCurrentSelection() } returns flowOf(selection)
+            var failRead = true
+            every { query.observeSortOrder() } answers { kotlinx.coroutines.flow.flow {
+                if (failRead) throw java.io.IOException("sort read failed", IllegalStateException("damaged preference"))
+                emit(ConversationSortOrder.CREATED)
+            } }
+            every { query.conversationActivities() } returns flowOf(emptyMap())
+            every { query.conversationsInRealm(selection, ConversationSortOrder.CREATED) } returns flowOf(Result.success(emptyList()))
+            val configuration = mockk<ConfigurationQueryService>()
+            every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Loading)
+            val history = HistoryVM(query, configuration, mockk())
+            val drawer = net.weero.measix.pilot.ui.pages.chat.ChatDrawerVM(mockk(), configuration, query, mockk(), androidx.lifecycle.SavedStateHandle())
+            store.put("history", history)
+            store.put("drawer", drawer)
+            runCurrent()
+            for (diagnostic in listOf(history.readFailure.value, drawer.sortFailure.value)) {
+                org.junit.Assert.assertTrue(diagnostic.orEmpty().contains("sort read failed"))
+                org.junit.Assert.assertTrue(diagnostic.orEmpty().contains("damaged preference"))
+            }
+            org.junit.Assert.assertNull(history.sortOrder.value)
+            org.junit.Assert.assertNull(drawer.sortOrder.value)
+            io.mockk.verify(exactly = 0) { query.conversationsInRealm(any(), any()) }
+            failRead = false
+            history.retry()
+            drawer.retryFolders()
+            runCurrent()
+            assertEquals(ConversationSortOrder.CREATED, history.sortOrder.value)
+            assertEquals(ConversationSortOrder.CREATED, drawer.sortOrder.value)
+            org.junit.Assert.assertNull(history.readFailure.value)
+            org.junit.Assert.assertNull(drawer.sortFailure.value)
+        } finally { store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `history waits for persisted sort instead of querying an initial placeholder`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val selection = RealmSelection(RealmAccess.Personal, 1)
+            val sort = kotlinx.coroutines.flow.MutableSharedFlow<ConversationSortOrder>()
+            val query = mockk<ConversationQueryService>()
+            every { query.observeCurrentSelection() } returns flowOf(selection)
+            every { query.observeSortOrder() } returns sort
+            every { query.conversationsInRealm(selection, ConversationSortOrder.CREATED) } returns flowOf(Result.success(emptyList()))
+            val configuration = mockk<ConfigurationQueryService>()
+            every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Loading)
+            val vm = HistoryVM(query, configuration, mockk())
+            store.put("history", vm)
+            runCurrent()
+            org.junit.Assert.assertNull(vm.sortOrder.value)
+            io.mockk.verify(exactly = 0) { query.conversationsInRealm(any(), any()) }
+            sort.emit(ConversationSortOrder.CREATED)
+            runCurrent()
+            assertEquals(ConversationSortOrder.CREATED, vm.sortOrder.value)
+            io.mockk.verify(exactly = 1) { query.conversationsInRealm(selection, ConversationSortOrder.CREATED) }
+            io.mockk.verify(exactly = 0) { query.conversationsInRealm(selection, ConversationSortOrder.UPDATED) }
+        } finally { store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `personal history survives missing assistant definitions and sort cancels old query`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val selection = RealmSelection(RealmAccess.Personal, 1)
+            val selected = MutableStateFlow<RealmSelection?>(selection)
+            val sort = MutableStateFlow(ConversationSortOrder.UPDATED)
+            val removedAssistant = ConfigurationReference.random()
+            val row = historyRow(selection, removedAssistant)
+            val query = mockk<ConversationQueryService>()
+            every { query.observeCurrentSelection() } returns selected
+            every { query.observeSortOrder() } returns sort
+            var oldClosed = false
+            every { query.conversationsInRealm(selection, ConversationSortOrder.UPDATED) } returns kotlinx.coroutines.flow.flow {
+                try { emit(Result.success(listOf(row))); kotlinx.coroutines.awaitCancellation() }
+                finally { oldClosed = true }
+            }
+            every { query.conversationsInRealm(selection, ConversationSortOrder.CREATED) } returns flowOf(Result.success(listOf(row.copy(title = "created"))))
+            val configuration = mockk<ConfigurationQueryService>()
+            every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Unavailable("definition removed by restore"))
+            val vm = HistoryVM(query, configuration, mockk())
+            store.put("history", vm)
+            runCurrent()
+            assertEquals(listOf(row), vm.conversations.value)
+            sort.value = ConversationSortOrder.CREATED
+            runCurrent()
+            org.junit.Assert.assertTrue(oldClosed)
+            assertEquals("created", vm.conversations.value.single().title)
+            selected.value = null
+            runCurrent()
+            org.junit.Assert.assertTrue(vm.conversations.value.isEmpty())
+            io.mockk.verify(exactly = 0) { query.conversationsOfAssistant(any(), any()) }
+        } finally { store.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun `partial batch failure still repairs committed deleted routes once`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -204,6 +304,8 @@ class HistoryVMTest {
 
     private fun commandVm(selected: MutableStateFlow<RealmSelection?>, application: ConversationApplicationService): HistoryVM {
         val query = mockk<ConversationQueryService>()
+        every { query.observeSortOrder() } returns flowOf(ConversationSortOrder.UPDATED)
+        every { query.conversationsInRealm(any(), any()) } returns flowOf(Result.success(emptyList()))
         every { query.observeCurrentSelection() } returns selected
         val configuration = mockk<ConfigurationQueryService>()
         every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Loading)
@@ -221,6 +323,7 @@ class HistoryVMTest {
             val configuration = mockk<ConfigurationQueryService>()
             every { configuration.observeAssistantCatalog() } returns catalog
             val conversations = mockk<ConversationQueryService>()
+            every { conversations.observeSortOrder() } returns flowOf(ConversationSortOrder.UPDATED)
             val selected = MutableStateFlow<RealmSelection?>(selection)
             every { conversations.observeCurrentSelection() } returns selected
             val row = mockk<ConversationSummary>()
@@ -252,10 +355,11 @@ class HistoryVMTest {
             every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Available(
                 AssistantCatalogUiModel(selection, ConfigurationSelection(assistant, null), emptyMap(), emptyList())))
             val conversations = mockk<ConversationQueryService>()
+            every { conversations.observeSortOrder() } returns flowOf(ConversationSortOrder.UPDATED)
             every { conversations.observeCurrentSelection() } returns flowOf(selection)
             val row = mockk<ConversationSummary>()
             var failed = true
-            every { conversations.conversationsOfAssistant(assistant) } answers {
+            every { conversations.conversationsInRealm(selection) } answers {
                 flowOf(if (failed) Result.failure(IllegalStateException("history unreadable", java.io.IOException("disk cause")))
                     else Result.success(listOf(row)))
             }
@@ -290,6 +394,7 @@ class HistoryVMTest {
             val configuration = mockk<ConfigurationQueryService>()
             every { configuration.observeAssistantCatalog() } returns catalog
             val conversations = mockk<ConversationQueryService>()
+            every { conversations.observeSortOrder() } returns flowOf(ConversationSortOrder.UPDATED)
             val selected = MutableStateFlow<RealmSelection?>(selection)
             every { conversations.observeCurrentSelection() } returns selected
             val row = mockk<ConversationSummary>()

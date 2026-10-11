@@ -433,7 +433,10 @@ class ConversationApplicationService internal constructor(
                 val runtime = commandCoordinator.load(target.conversationId)
                 ownerRuntime = runtime
                 owned = sideEffects.launchCompression(runtime, target.selection.access, additionalPrompt, targetTokens, keepRecentMessages) { summary ->
-                    subAssistantLifecycle.commitSummary(runtime.durable, summary.nodes, summary.origins)
+                    val current = runtime.durable
+                    commandCoordinator.executeOrThrow(current.conversationId,
+                        net.weero.measix.pilot.service.runtime.InsertHistorySummaryCheckpoint(
+                            current.nodes, current.modelContextEntries, summary.node, summary.origin, summary.insertIndex))
                 }
             }
             return requireNotNull(owned).await()
@@ -750,9 +753,13 @@ class ConversationApplicationService internal constructor(
                     val assistant = requireNotNull(configuration.assistants[snapshot.header.assistantId]) { "conversation_assistant_missing" }
                     val node = snapshot.nodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
                         ?: throw NoSuchElementException("Message not found")
-                    val processedParts = preprocessUserInputParts(parts, assistant)
+                    val original = node.messages.single { it.id == messageId }
+                    val isSummary = snapshot.modelContextEntries.any { it.ownerNodeId == node.id && it.ownerMessageId == original.id &&
+                        it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary }
+                    val processedParts = if (isSummary) parts else preprocessUserInputParts(parts, assistant)
                     commandCoordinator.executeOrThrow(target.conversationId, EditMessageVariant(
-                        nodeId = node.id, variant = UIMessage(role = node.currentMessage.role, parts = processedParts),
+                        nodeId = node.id, variant = UIMessage(role = original.role, parts = processedParts,
+                            modelId = original.modelId, modelInfo = original.modelInfo), sourceMessageId = original.id,
                     ))
                     artifactDraftScope?.publishCommittedReferences(processedParts)
                 }

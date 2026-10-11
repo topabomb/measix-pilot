@@ -23,6 +23,9 @@ trim_trailing_whitespace = false
 [workspace/tools/*.py]
 end_of_line = lf
 
+[workspace/tools/*.S]
+end_of_line = lf
+
 [workspace/tools/patches/*.patch]
 end_of_line = lf
 trim_trailing_whitespace = false

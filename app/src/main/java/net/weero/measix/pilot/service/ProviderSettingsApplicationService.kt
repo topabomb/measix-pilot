@@ -22,6 +22,7 @@ import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.utils.SimpleCache
 import java.security.MessageDigest
+import me.rerere.ai.util.toHeaders
 import java.util.concurrent.TimeUnit
 
 /**
@@ -186,6 +187,7 @@ class ProviderSettingsApplicationService(
         model = model,
         customHeaders = model.customHeaders,
         customBody = model.customBodies,
+        openCodeSessionId = kotlin.uuid.Uuid.random().toString(),
     )
 
     private fun UIMessage?.textContent(): String = this?.parts
@@ -222,6 +224,9 @@ internal fun ProviderSetting.OpenAI.balanceRequestFingerprint(): String {
         apiKey,
         balanceOption.apiPath,
         balanceOption.resultPath,
+        customHeaders.toHeaders().let { headers ->
+            headers.names().sorted().joinToString("\u0000") { name -> "${name.lowercase(java.util.Locale.ROOT)}=${headers[name]}" }
+        },
     ).joinToString(separator = "\u0000")
     return MessageDigest.getInstance("SHA-256")
         .digest(requestMaterial.toByteArray())

@@ -80,7 +80,11 @@ class ProviderStreamContractTest {
                 return me.rerere.ai.provider.CustomHeader("X-Test", "assembly")
             }
         }
-        val generation = params.copy(providerSessionId = "conversation", customHeaders = headers)
+        for (generation in listOf(
+            params.copy(providerSessionId = "conversation", customHeaders = headers),
+            params.copy(openCodeSessionId = "auxiliary", customHeaders = headers),
+            params.copy(providerSessionId = "conversation", openCodeSessionId = "auxiliary", customHeaders = headers),
+        )) {
         for (wire in Wire.entries) for (stream in listOf(false, true)) {
             for (vertex in if (wire == Wire.GOOGLE) listOf(false, true) else listOf(false)) {
             var captured: okhttp3.Request? = null
@@ -113,7 +117,9 @@ class ProviderStreamContractTest {
             } catch (failure: Exception) {
                 if (failure is kotlinx.coroutines.CancellationException) throw failure
                 val request = requireNotNull(captured)
-                assertEquals("$wire stream=$stream vertex=$vertex", if (vertex) null else "conversation", request.header("x-opencode-session"))
+                assertEquals("$wire stream=$stream vertex=$vertex",
+                    if (vertex) null else generation.openCodeSessionId ?: generation.providerSessionId,
+                    request.header("x-opencode-session"))
                 if (vertex) assertEquals("aiplatform.googleapis.com", request.url.host)
                 if (wire == Wire.RESPONSES) assertEquals("/v1/custom/responses", request.url.encodedPath)
             } finally {
@@ -121,6 +127,7 @@ class ProviderStreamContractTest {
                 client.connectionPool.evictAll()
             }
             }
+        }
         }
     }
 
@@ -245,6 +252,8 @@ class ProviderStreamContractTest {
                 """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"same","name":"a","input":{}}}""",
                 """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"same","name":"b","input":{}}}""",
                 """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}""",
+                """{"type":"content_block_stop","index":0}""",
+                """{"type":"content_block_stop","index":1}""",
             ),
             Wire.GOOGLE to listOf(
                 """{"candidates":[{"content":{"parts":[{"functionCall":{"id":"same","name":"a","args":{}}}]}}]}""",

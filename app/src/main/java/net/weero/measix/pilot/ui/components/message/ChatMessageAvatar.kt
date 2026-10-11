@@ -12,7 +12,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.model.Assistant
@@ -55,7 +54,6 @@ fun ChatMessageUserAvatar(
 fun ChatMessageAssistantAvatar(
     message: UIMessage,
     loading: Boolean,
-    model: Model?,
     modelIconFallback: ModelIconFallback,
     assistant: Assistant?,
     modifier: Modifier = Modifier,
@@ -64,7 +62,8 @@ fun ChatMessageAssistantAvatar(
     val settings = LocalSettings.current
     val showIcon = settings.displaySetting.showModelIcon
     val useAssistantAvatar = assistant?.useAssistantAvatar == true
-    if (message.role == MessageRole.ASSISTANT && (model != null || useAssistantAvatar)) {
+    val model = message.modelInfo
+    if (message.role == MessageRole.ASSISTANT) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -92,10 +91,10 @@ fun ChatMessageAssistantAvatar(
                         )
                     }
                 }
-            } else if (model != null) {
+            } else {
                 if (showIcon) {
                     ModelIcon(
-                        name = model.modelId,
+                        name = model?.modelId ?: "AI",
                         fallback = modelIconFallback,
                         modifier = Modifier.size(28.dp),
                         loading = loading
@@ -108,7 +107,7 @@ fun ChatMessageAssistantAvatar(
                 ) {
                     if (settings.displaySetting.showModelName) {
                         Text(
-                            text = sourceLabel ?: model.displayName,
+                            text = sourceLabel ?: model?.displayLabel ?: stringResource(R.string.setting_files_page_generated_unknown_model),
                             style = MaterialTheme.typography.labelLargeEmphasized,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,

@@ -279,6 +279,20 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    val CLAUDE_OPUS_5_5 = defineModel {
+        tokens("claude", "opus", "5", "5")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val CLAUDE_SONNET_5_5 = defineModel {
+        tokens("claude", "sonnet", "5", "5")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val CLAUDE_5_5 = defineGroup { add(CLAUDE_OPUS_5_5, CLAUDE_SONNET_5_5) }
+
     private val CLAUDE_SONNET_5 = defineModel {
         tokens("claude", "sonnet", "5")
         notTokens("claude", "sonnet", "4")
@@ -299,13 +313,15 @@ object ModelRegistry {
             CLAUDE_OPUS_4_6,
             CLAUDE_OPUS_4_7,
             CLAUDE_OPUS_4_8,
+            CLAUDE_OPUS_5_5,
+            CLAUDE_SONNET_5_5,
             CLAUDE_SONNET_5,
             CLAUDE_OPUS_5,
         )
     }
 
     val CLAUDE_XHIGH_EFFORT = defineGroup {
-        add(CLAUDE_OPUS_4_7, CLAUDE_OPUS_4_8)
+        add(CLAUDE_OPUS_4_7, CLAUDE_OPUS_4_8, CLAUDE_OPUS_5_5, CLAUDE_SONNET_5_5)
     }
 
     val CLAUDE_MANUAL_THINKING_WITH_EFFORT = defineGroup {
@@ -323,6 +339,8 @@ object ModelRegistry {
             CLAUDE_OPUS_4_6,
             CLAUDE_OPUS_4_7,
             CLAUDE_OPUS_4_8,
+            CLAUDE_OPUS_5_5,
+            CLAUDE_SONNET_5_5,
             CLAUDE_SONNET_5,
             CLAUDE_OPUS_5,
         )
@@ -696,6 +714,8 @@ object ModelRegistry {
         CLAUDE_OPUS_4_6,
         CLAUDE_OPUS_4_7,
         CLAUDE_OPUS_4_8,
+        CLAUDE_OPUS_5_5,
+        CLAUDE_SONNET_5_5,
         CLAUDE_SONNET_5,
         CLAUDE_OPUS_5,
         DEEPSEEK_V3_MODEL,

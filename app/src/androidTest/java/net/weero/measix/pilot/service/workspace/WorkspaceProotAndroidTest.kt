@@ -53,17 +53,41 @@ class WorkspaceProotAndroidTest {
             withContext(Dispatchers.IO) { RootfsInstaller(manager, native).install(root, requireNotNull(url)) }
             stage = "guest absolute bin link"
             withContext(Dispatchers.IO) {
+                val environment = RootfsCompatibility(native).requireCompatible(manager.linuxDir(root))
                 val bin = File(manager.linuxDir(root), "bin").toPath()
-                assertTrue("The Ubuntu fixture must provide a bin symlink", java.nio.file.Files.isSymbolicLink(bin))
-                java.nio.file.Files.delete(bin)
-                java.nio.file.Files.createSymbolicLink(bin, File("/usr/bin").toPath())
+                if (environment.distribution?.contains("Alpine") == true) {
+                    assertEquals("/bin/sh", environment.shell)
+                    assertFalse(File(manager.linuxDir(root), "bin/bash").exists())
+                    assertTrue(java.nio.file.Files.isSymbolicLink(File(manager.linuxDir(root), "bin/sh").toPath()))
+                } else {
+                    assertTrue("The Ubuntu fixture must provide a bin symlink", java.nio.file.Files.isSymbolicLink(bin))
+                    java.nio.file.Files.delete(bin)
+                    java.nio.file.Files.createSymbolicLink(bin, File("/usr/bin").toPath())
+                    assertEquals("/bin/bash", environment.shell)
+                }
                 assertTrue(manager.hasRootfsFiles(root))
                 assertTrue(RootfsCompatibility(native).isCompatible(manager.linuxDir(root)))
             }
             assertTrue(workspaceRootfsReady(context, root))
+            InstrumentationRegistry.getArguments().getString("prootForkProbeUrl")?.let { probeUrl ->
+                stage = "raw fork register preservation"
+                assertEquals(RootfsCompatibility.Architecture.X86_64, RootfsCompatibility(native).architecture)
+                withContext(Dispatchers.IO) {
+                    val probe = File(manager.filesDir(root), "fork-registers")
+                    val bytes = java.net.URL(probeUrl).openStream().use { it.readBytes() }
+                    check(bytes.size in 1..65536) { "Invalid raw fork fixture size" }
+                    probe.writeBytes(bytes)
+                    check(probe.setExecutable(true))
+                }
+                val probe = runInterruptible(Dispatchers.IO) {
+                    manager.executeCommand(root, "set -e; for i in \$(seq 1 32); do /workspace/fork-registers; done", timeoutMillis = 10_000)
+                }
+                assertEquals(probe.stderr, 0, probe.exitCode)
+                assertEquals(List(32) { "fork-registers-ok" }, probe.stdout.trim().lines())
+            }
             stage = "shell file operations and output"
             val result = runInterruptible(Dispatchers.IO) {
-                manager.executeCommand(root, "set -e; test \"\$PWD\" = /workspace; mkdir probe; printf CONTENT > probe/a; mv probe/a probe/b; test \"\$(stat -c %s probe/b)\" = 7; cat probe/b; printf '\\n'; uname -r; for i in {1..1000}; do echo LINE_\$i; done")
+                manager.executeCommand(root, "set -e; test \"\$PWD\" = /workspace; mkdir probe; printf CONTENT > probe/a; mv probe/a probe/b; test \"\$(stat -c %s probe/b)\" = 7; cat probe/b; printf '\\n'; uname -r; for i in \$(seq 1 1000); do echo LINE_\$i; done")
             }
             assertEquals(result.stderr, 0, result.exitCode)
             assertTrue(result.stdout.contains("CONTENT\n4.14.0\n"))
@@ -112,7 +136,7 @@ class WorkspaceProotAndroidTest {
             val childMarker = "proot-child-$root"
             val forking = launch(Dispatchers.IO) {
                 runInterruptible {
-                    manager.executeCommand(root, "for i in {1..64}; do (exec -a $childMarker sleep 30) & touch fork-started; done; wait")
+                    manager.executeCommand(root, "for i in \$(seq 1 64); do (exec -a $childMarker sleep 30) & touch fork-started; done; wait")
                 }
             }
             withTimeout(10_000) {
@@ -219,9 +243,9 @@ class WorkspaceProotAndroidTest {
                 val separator = line.indexOf(':')
                 if (separator < 0) null else line.substring(0, separator) to line.substring(separator + 1).trim()
             }.toMap()
-            // A tracer can finish reaping before init removes its orphaned zombie's PID.
+            // A tracer can finish reaping before init removes an orphaned zombie/dead PID.
             // Any running, stopped, or still-traced child is an immediate ownership failure.
-            assertTrue("Guest process $pid survived its owner: $status", fields["State"]?.startsWith("Z ") == true)
+            assertTrue("Guest process $pid survived its owner: $status", fields["State"]?.substringBefore(' ') in setOf("Z", "X"))
             assertEquals(status, "1", fields["PPid"])
             assertEquals(status, "0", fields["TracerPid"])
             delay(10)

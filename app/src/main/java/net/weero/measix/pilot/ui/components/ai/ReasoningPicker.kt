@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import me.rerere.ai.core.ReasoningLevel
+import me.rerere.ai.registry.ModelRegistry
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Idea
 import me.rerere.hugeicons.stroke.Idea01
@@ -41,15 +42,13 @@ import net.weero.measix.pilot.ui.components.ui.icons.ReasoningLow
 import net.weero.measix.pilot.ui.components.ui.icons.ReasoningMedium
 import kotlin.math.roundToInt
 
-private val levels = ReasoningLevel.entries
-private val levelCount = levels.size
-
 @Composable
 fun ReasoningButton(
     modifier: Modifier = Modifier,
     onlyIcon: Boolean = false,
     reasoningLevel: ReasoningLevel,
     onUpdateReasoningLevel: (ReasoningLevel) -> Unit,
+    modelId: String? = null,
 ) {
     var showPicker by remember { mutableStateOf(false) }
 
@@ -57,7 +56,8 @@ fun ReasoningButton(
         ReasoningPicker(
             reasoningLevel = reasoningLevel,
             onDismissRequest = { showPicker = false },
-            onUpdateReasoningLevel = onUpdateReasoningLevel
+            onUpdateReasoningLevel = onUpdateReasoningLevel,
+            modelId = modelId,
         )
     }
 
@@ -87,7 +87,12 @@ fun ReasoningPicker(
     reasoningLevel: ReasoningLevel,
     onDismissRequest: () -> Unit = {},
     onUpdateReasoningLevel: (ReasoningLevel) -> Unit,
+    modelId: String? = null,
 ) {
+    val opus55 = modelId?.let(ModelRegistry.CLAUDE_OPUS_5_5::match) == true
+    val sonnet55 = modelId?.let(ModelRegistry.CLAUDE_SONNET_5_5::match) == true
+    val levels = ReasoningLevel.entries.filter { !opus55 || it != ReasoningLevel.OFF }
+    val levelCount = levels.size
     val currentIndex = levels.indexOf(reasoningLevel).coerceAtLeast(0)
     var sliderValue by remember { mutableFloatStateOf(currentIndex.toFloat()) }
 
@@ -116,7 +121,11 @@ fun ReasoningPicker(
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
-                    text = stringResource(R.string.reasoning_picker_hint),
+                    text = stringResource(when {
+                        opus55 -> R.string.reasoning_opus55_hint
+                        sonnet55 -> R.string.reasoning_sonnet55_hint
+                        else -> R.string.reasoning_picker_hint
+                    }),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,

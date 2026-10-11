@@ -46,7 +46,8 @@ class HistoryPageAndroidTest {
         val rows = MutableStateFlow(Result.success(listOf(first, second)))
         val query = mockk<ConversationQueryService>()
         every { query.observeCurrentSelection() } returns flowOf(selection)
-        every { query.conversationsOfAssistant(assistant) } returns rows
+        every { query.observeSortOrder() } returns flowOf(net.weero.measix.pilot.data.datastore.ConversationSortOrder.UPDATED)
+        every { query.conversationsInRealm(selection, net.weero.measix.pilot.data.datastore.ConversationSortOrder.UPDATED) } returns rows
         val configuration = mockk<ConfigurationQueryService>()
         every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Available(
             AssistantCatalogUiModel(selection, ConfigurationSelection(assistant, null), emptyMap(), emptyList())))

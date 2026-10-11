@@ -59,6 +59,7 @@ private const val INSPECTION_SYSTEM_INSTRUCTION =
 internal fun createAttachmentInspectionTool(
     captured: net.weero.measix.pilot.service.ModelExecutionSnapshot,
     providerManager: ProviderManager,
+    conversationId: kotlin.uuid.Uuid,
 ): Tool {
     check(Modality.IMAGE in captured.model.inputModalities) { "Attachment inspection model does not support IMAGE input" }
     check(captured.mediaCapabilities.userImages == RequestImageSupport.STRUCTURED) {
@@ -113,6 +114,7 @@ internal fun createAttachmentInspectionTool(
                 captured = captured,
                 providerManager = providerManager,
                 resolveAttachments = this.resolveAttachments,
+                conversationId = conversationId,
             )
         },
         execute = { _ ->
@@ -127,6 +129,7 @@ internal suspend fun executeInspection(
     captured: net.weero.measix.pilot.service.ModelExecutionSnapshot,
     providerManager: ProviderManager,
     resolveAttachments: suspend (paths: List<String>) -> ToolAttachmentResolution,
+    conversationId: kotlin.uuid.Uuid,
 ): List<UIMessagePart> {
     inspectionArgumentError(args)?.let {
         return inspectionFailure(AttachmentFailureReasons.INVALID_ATTACHMENTS, it)
@@ -168,6 +171,7 @@ internal suspend fun executeInspection(
                 customHeaders = captured.model.customHeaders,
                 customBody = captured.model.customBodies,
                 mediaCapabilities = captured.mediaCapabilities,
+                openCodeSessionId = conversationId.toString(),
             ),
         ) }
         val text = result.choices.firstOrNull()?.message?.toText()?.trim().orEmpty()

@@ -20,6 +20,10 @@ ConversationPresentation 的有序消息、阶段和预览能力
 同一展开/复制入口；`ask_user` 专用交互卡片也披露保存的诊断。入口不依赖 output 或可回放结果是否存在，
 诊断不进入 Provider 请求。
 
+Assistant 消息的 `MessageModelInfo` 在 START 提交时从捕获模型保存，包含配置引用、wire model ID 和显示名称。
+主聊天、子助手、消息详情及导出读取该历史值，不查询当前模型目录重写名称。旧消息缺字段显示未知模型；
+正文编辑和 fork 保留原值，重新生成的新 variant 捕获本次模型。显示信息不是执行或设置访问的授权凭据。
+
 `groupMessageParts` 将连续推理和普通工具合成 `ThinkingBlock`；`assistant_call` 单独形成
 `SubAssistantCallBlock`，正文和媒体使用 `ContentBlock`。普通 `UIMessagePart.Step` 不显示也不切断折叠时间线；
 有已接纳上下文变化的 Step 才结束前组并插入 `ContextUpdateBlock`，分组不改变消息顺序。
@@ -31,6 +35,13 @@ ConversationPresentation 的有序消息、阶段和预览能力
 工作区产出提示仅从 `workspace_write_file` / `workspace_edit_file` 的成功且结构有效结果提取，
 不能从参数或“存在结果”推断写入成功；统一 diff 来自显示 metadata，不混入 Provider 工具文本。
 工具的本地化名称只用于显示，协议名仍是执行和持久化身份。
+
+`chart_display` 使用 `ChartSpec` 的唯一纯校验；聊天和图片导出通过 `completedChart` 核对明确 COMPLETED 结果与阶段，
+畸形历史或非成功调用保留通用详情。原生 Canvas 支持折线、线性零基线柱状和散点，图表与分页表格共享参数。
+表格每页六行，列可横向滚动，不增加嵌套纵向滚动；默认线性刻度保留端点和步长的小数精度，极窄范围使用有界科学计数。
+图表至多 8 个系列、1000 个数据点、规范化 JSON 64 KiB 字符，标签至多 160 字符；非零数值绝对值在 1e-100 至 1e100，
+显式轴范围包含所有数据点。对数值和对数域严格校验，刻度去重后至多六个，对数刻度按相邻间距保留可辨精度，不加载脚本或网络。
+工具默认关闭，启用沿原助手本地工具偏好；成功输出为有界保留结果，调用参数与结果仍由原 Turn 检查点持久化。
 
 ## 2. 应用上下文变化展示
 

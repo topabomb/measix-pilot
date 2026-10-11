@@ -477,7 +477,7 @@ class ClaudeProviderMessageTest {
             Boolean::class.javaPrimitiveType,
         )
         method.isAccessible = true
-        return method.invoke(provider, providerSetting, messages.toModelRequests(), params, false) as JsonObject
+        return (method.invoke(provider, providerSetting, messages.toModelRequests(), params, false) as ClaudePreparedRequest).body
     }
 
     @org.junit.Test

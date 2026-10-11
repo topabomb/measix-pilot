@@ -20,6 +20,9 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -134,6 +137,7 @@ class SettingsStore internal constructor(
     private val appContext: Context,
     private val scope: AppScope,
     private val dataStore: DataStore<Preferences> = appContext.settingsStore,
+    private val computationDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     companion object {
         internal val USER_SETTINGS = stringPreferencesKey("user_settings")
@@ -220,6 +224,7 @@ class SettingsStore internal constructor(
             JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
         }
         .distinctUntilChanged()
+        .flowOn(computationDispatcher)
 
     internal suspend fun lastConversation(scope: ConfigurationScope): kotlin.uuid.Uuid? =
         userDocuments.first().preferences.lastConversation(scope)
@@ -249,7 +254,7 @@ class SettingsStore internal constructor(
         operation: suspend (List<McpServerConfig>) -> T,
     ): T = updateMutex.withLock { operation(userDocuments.first().configuration.mcpServers.normalizeMcpDefinitions()) }
 
-    private val userSettingsRaw = userDocuments.map { it.personalSettings() }
+    private val userSettingsRaw = userDocuments.map { it.personalSettings() }.flowOn(computationDispatcher)
     private val _userSettings = MutableStateFlow(Settings.dummy())
 
     /** Shared user definitions and personal selections. Realm execution uses observeConfiguration instead. */
@@ -264,7 +269,7 @@ class SettingsStore internal constructor(
     }.distinctUntilChanged { previous, current ->
         // Catalog iteration order is visible to consumers, but Map equality ignores pure reorders.
         previous == current && previous.catalog.keys.toList() == current.catalog.keys.toList()
-    }
+    }.flowOn(computationDispatcher)
 
     /** Lock order is session, user configuration, then the caller's durable data transaction. */
     internal suspend fun <T> withResolvedConfiguration(
@@ -272,7 +277,11 @@ class SettingsStore internal constructor(
         enterpriseState: EnterpriseState,
         operation: suspend (ResolvedConfiguration) -> T,
     ): T = updateMutex.withLock {
-        operation(ConfigurationResolver.resolve(userDocuments.first(), scope, enterpriseState))
+        val document = userDocuments.first()
+        val configuration = withContext(computationDispatcher) {
+            ConfigurationResolver.resolve(document, scope, enterpriseState)
+        }
+        operation(configuration)
     }
 
     internal suspend fun <T> withExecutionConfiguration(
@@ -281,14 +290,17 @@ class SettingsStore internal constructor(
         operation: suspend (ExecutionConfigurationSnapshot) -> T,
     ): T = updateMutex.withLock {
         val encoded = requireNotNull(dataStore.data.first()[USER_SETTINGS]) { "user_settings_migration_incomplete" }
-        val document = JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
-        val revision = java.security.MessageDigest.getInstance("SHA-256")
-            .digest(encoded.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-        operation(ExecutionConfigurationSnapshot(
-            userSettings = document.personalSettings().withBuiltInDefinitions(),
-            configuration = ConfigurationResolver.resolve(document, scope, enterpriseState),
-            userRevision = revision,
-        ))
+        val snapshot = withContext(computationDispatcher) {
+            val document = JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
+            val revision = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(encoded.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+            ExecutionConfigurationSnapshot(
+                userSettings = document.personalSettings().withBuiltInDefinitions(),
+                configuration = ConfigurationResolver.resolve(document, scope, enterpriseState),
+                userRevision = revision,
+            )
+        }
+        operation(snapshot)
     }
 
     /** Called while the enterprise session owner holds its authorization boundary. */
@@ -341,6 +353,24 @@ class SettingsStore internal constructor(
         }
         caller.ensureActive()
         mutation.result
+    }
+
+    internal fun observeConversationSortOrder(): Flow<ConversationSortOrder> =
+        userDocuments.map { it.preferences.common.display.conversationSortOrder }.distinctUntilChanged()
+
+    internal fun observeCollapsedModelGroups(scope: ConfigurationScope): Flow<Set<String>> =
+        userDocuments.map { it.preferences.collapsedModelGroups(scope) }.distinctUntilChanged()
+
+    internal suspend fun setModelGroupCollapsed(
+        scope: ConfigurationScope,
+        groupId: String,
+        collapsed: Boolean,
+        requireOwner: () -> Unit,
+    ) = updateMutex.withLock {
+        require(groupId.isNotBlank()) { "model_group_id_required" }
+        commitUserDocument(requireOwner) { document ->
+            document.copy(preferences = document.preferences.withModelGroupCollapsed(scope, groupId, collapsed))
+        }
     }
 
     /** The session owner serializes authorization changes through the entire preference commit. */
@@ -450,7 +480,8 @@ class SettingsStore internal constructor(
     }
 
     private suspend fun publishUserSettings() {
-        _userSettings.value = userSettingsRaw.first().materializeForRead()
+        val settings = userSettingsRaw.first()
+        _userSettings.value = withContext(computationDispatcher) { settings.materializeForRead() }
     }
 
     /** Personal restore preserves domain preferences and pending deletion receipts in the same document. */
@@ -572,6 +603,7 @@ data class Settings(
     val customThemes: List<CustomTheme> = emptyList(),
     val displaySetting: DisplaySetting = DisplaySetting(),
     val favoriteModels: List<ConfigurationReference> = emptyList(),
+    val collapsedModelGroupIds: Set<String> = emptySet(),
     val chatModelId: ConfigurationReference = ConfigurationReference.random(),
     val fastModelId: ConfigurationReference = ConfigurationReference.random(),
     val titleModelId: ConfigurationReference? = null,
@@ -645,7 +677,11 @@ enum class ChatFontFamily {
 }
 
 @Serializable
+enum class ConversationSortOrder { UPDATED, CREATED }
+
+@Serializable
 data class DisplaySetting(
+    val conversationSortOrder: ConversationSortOrder = ConversationSortOrder.UPDATED,
     val userAvatar: Avatar = Avatar.Dummy,
     val userNickname: String = "",
     val useAppIconStyleLoadingIndicator: Boolean = true,

@@ -88,6 +88,7 @@ internal data class UserProfile(
 /** Display behavior is shared; the user's profile is owned by UserConfiguration. */
 @Serializable
 internal data class DisplayPreferences(
+    val conversationSortOrder: ConversationSortOrder = ConversationSortOrder.UPDATED,
     val useAppIconStyleLoadingIndicator: Boolean = true,
     val showUserAvatar: Boolean = true,
     val showAssistantBubble: Boolean = false,
@@ -128,6 +129,7 @@ internal data class DisplayPreferences(
     val volumeKeyScrollRatio: Float = 1.0f,
 ) {
     fun project(profile: UserProfile): DisplaySetting = DisplaySetting(
+        conversationSortOrder = conversationSortOrder,
         userAvatar = profile.avatar,
         userNickname = profile.nickname,
         useAppIconStyleLoadingIndicator = useAppIconStyleLoadingIndicator,
@@ -205,6 +207,7 @@ internal data class ScopedUserPreferences(
     val assistantUsage: List<AssistantUsagePreferences> = emptyList(),
     val gateways: List<GatewayPreference> = emptyList(),
     val lastConversationId: kotlin.uuid.Uuid? = null,
+    val collapsedModelGroupIds: Set<String> = emptySet(),
 ) {
     init {
         require(scope is ConfigurationScope.Enterprise || assistantUsage.isEmpty()) { "personal_assistants_use_shared_definitions" }
@@ -238,6 +241,15 @@ internal data class UserPreferences(
 
     fun lastConversation(scope: ConfigurationScope): kotlin.uuid.Uuid? =
         scopes.singleOrNull { it.scope == scope }?.lastConversationId
+
+    fun collapsedModelGroups(scope: ConfigurationScope): Set<String> =
+        scopes.singleOrNull { it.scope == scope }?.collapsedModelGroupIds.orEmpty()
+
+    fun withModelGroupCollapsed(scope: ConfigurationScope, groupId: String, collapsed: Boolean): UserPreferences {
+        val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
+        val groups = if (collapsed) existing.collapsedModelGroupIds + groupId else existing.collapsedModelGroupIds - groupId
+        return copy(scopes = scopes.filterNot { it.scope == scope } + existing.copy(collapsedModelGroupIds = groups))
+    }
 
     fun withLastConversation(scope: ConfigurationScope, id: kotlin.uuid.Uuid?): UserPreferences {
         val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
@@ -321,6 +333,7 @@ internal data class UserSettingsDocument(
             backupReminderConfig = common.backupReminderConfig,
             displaySetting = common.display.project(configuration.profile),
             favoriteModels = selected.favoriteModels,
+            collapsedModelGroupIds = preferences.collapsedModelGroups(ConfigurationScope.Personal),
             chatModelId = selected.chatModelId ?: DEFAULT_AUTO_MODEL_ID,
             fastModelId = selected.fastModelId ?: DEFAULT_AUTO_MODEL_ID,
             titleModelId = selected.titleModelId,
@@ -383,6 +396,7 @@ internal data class UserSettingsDocument(
                     defaultTTSPlaybackSpeed = settings.defaultTTSPlaybackSpeed,
                     backupReminderConfig = settings.backupReminderConfig,
                     display = DisplayPreferences(
+                        conversationSortOrder = settings.displaySetting.conversationSortOrder,
                         useAppIconStyleLoadingIndicator = settings.displaySetting.useAppIconStyleLoadingIndicator,
                         showUserAvatar = settings.displaySetting.showUserAvatar,
                         showAssistantBubble = settings.displaySetting.showAssistantBubble,
@@ -425,7 +439,8 @@ internal data class UserSettingsDocument(
                 ),
                 scopes = preferences.scopes.filterNot { it.scope == ConfigurationScope.Personal } +
                     (preferences.scopes.singleOrNull { it.scope == ConfigurationScope.Personal }
-                        ?: ScopedUserPreferences(ConfigurationScope.Personal)).copy(selections = personal),
+                        ?: ScopedUserPreferences(ConfigurationScope.Personal)).copy(
+                            selections = personal, collapsedModelGroupIds = settings.collapsedModelGroupIds),
             ),
             internalState = SettingsInternalState(
                 launchCount = settings.launchCount,

@@ -324,12 +324,12 @@
   <string name="chat_page_compress_additional_prompt">Additional Instructions (Optional)</string>
   <string name="chat_page_compress_additional_prompt_hint">Specify what to preserve or focus on</string>
   <string name="chat_page_compress_context">Compress History</string>
-  <string name="chat_page_compress_context_desc">Replace older complete turns with a summary and keep recent messages. Local example models only excerpt part of the input; they do not summarize its meaning. Use them only with test conversations.</string>
+  <string name="chat_page_compress_context_desc">Use a summary of older complete turns in future requests and keep recent messages. Original messages remain saved. Local example models only excerpt text; use them only with test conversations.</string>
   <string name="chat_page_compress_context_title">Compress Conversation History</string>
   <string name="chat_page_compress_keep_recent">Minimum recent messages to keep</string>
   <string name="chat_page_compress_not_enough_messages">Not enough messages to compress. Reduce the number of messages to keep or add more messages.</string>
   <string name="chat_page_compress_target_tokens">Summary target (tokens)</string>
-  <string name="chat_page_compress_warning">Compression replaces older messages with an AI-generated summary. Review important details first; this cannot be undone.</string>
+  <string name="chat_page_compress_warning">Review the AI-generated summary for accuracy. You can edit or delete the summary; original messages remain saved.</string>
   <string name="chat_page_compressing">Compressing...</string>
   <string name="chat_page_conversation_system_prompt">Conversation System Prompt</string>
   <string name="chat_page_conversation_system_prompt_clear">Clear</string>
@@ -437,7 +437,7 @@
   <string name="history_page_conversation_deleted">Conversation deleted</string>
   <string name="history_page_delete">Delete</string>
   <string name="history_page_delete_all">Delete All</string>
-  <string name="history_page_delete_all_confirmation">Are you sure you want to delete all conversations? This action cannot be undone.</string>
+  <string name="history_page_delete_all_confirmation">Delete all conversations in the current space? This cannot be undone.</string>
   <string name="history_page_delete_all_conversations">Delete All Conversations</string>
   <string name="history_page_new_conversation">New Conversation</string>
   <string name="history_page_pin">Pin</string>
@@ -2143,4 +2143,22 @@
   <string name="mcp_readiness_on_demand">%1$d selected · connects when used</string>
   <string name="about_page_platform_contract">Platform contract: %1$d</string>
   <string name="about_page_core_baseline">Baseline Core: %1$s</string>
+  <string name="chat_page_export_include_reasoning">Include reasoning</string>
+  <string name="setting_tts_page_provider_volcengine">Volcengine TTS</string>
+  <string name="setting_tts_page_resource_id">Resource ID</string>
+  <string name="setting_tts_page_volcengine_resource_description">Use the resource ID enabled for your voice service, such as seed-tts-2.0.</string>
+  <string name="setting_tts_page_volcengine_rate_description">Synthesis speed from -50 to 100. 0 uses normal speed.</string>
+  <string name="conversation_sort_title">Conversation order</string>
+  <string name="conversation_sort_created">Newest created</string>
+  <string name="conversation_sort_updated">Recently updated</string>
+  <string name="history_page_current_space">History in this space</string>
+  <string name="assistant_page_local_tools_chart_title">Charts</string>
+  <string name="assistant_page_local_tools_chart_desc">Display line, bar and scatter charts with a data table, entirely on device.</string>
+  <string name="chart_mode_chart">Chart</string>
+  <string name="chart_mode_table">Table</string>
+  <string name="chart_series_name">Series %1$d</string>
+  <string name="chart_previous_page">Previous</string>
+  <string name="chart_next_page">Next</string>
+  <string name="reasoning_opus55_hint">This model always uses thinking. Choose Auto or an effort level; Off is not supported.</string>
+  <string name="reasoning_sonnet55_hint">Off disables thinking before the first answer. The model may still think between tool calls.</string>
 </resources>

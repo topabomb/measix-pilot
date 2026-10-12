@@ -204,17 +204,23 @@ fun ImagePreviewDialog(
     val currentUrl = viewerImages.getOrNull(state.currentPage)
     var previewLoading by remember(currentUrl) { mutableStateOf(true) }
     var previewFailure by remember(currentUrl) { mutableStateOf<Throwable?>(null) }
-    var imageInfo by remember(currentUrl) { mutableStateOf<ImageInfo?>(null) }
-    var imageInfoError by remember(currentUrl) { mutableStateOf<String?>(null) }
     var infoRevision by remember(currentUrl) { mutableStateOf(0) }
+    var cachedImageInfo by remember(currentUrl, infoRevision) { mutableStateOf<ImageInfo?>(null) }
+    var imageInfo by remember(currentUrl, infoVisible, infoRevision) { mutableStateOf<ImageInfo?>(null) }
+    var imageInfoError by remember(currentUrl, infoVisible, infoRevision) { mutableStateOf<String?>(null) }
     LaunchedEffect(currentUrl, infoVisible, infoRevision) {
         if (!infoVisible) return@LaunchedEffect
         val url = currentUrl ?: return@LaunchedEffect
         imageInfoError = null
         imageInfo = null
         imageInfo = try {
-            if (infoRevision > 0) infoRetryState.value()
-            withContext(Dispatchers.IO) { resolveImageInfo(url) }
+            if (infoRevision > 0 && cachedImageInfo == null) infoRetryState.value()
+            url.requireAccess()
+            val loaded = cachedImageInfo ?: run {
+                withContext(Dispatchers.IO) { resolveImageInfo(url) }.also { cachedImageInfo = it }
+            }
+            url.requireAccess()
+            loaded
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (error: Exception) {

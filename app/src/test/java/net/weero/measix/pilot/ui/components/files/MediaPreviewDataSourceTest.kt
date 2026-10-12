@@ -126,4 +126,51 @@ class MediaPreviewDataSourceTest {
             assertEquals(1, reads)
         } finally { data.close() }
     }
+
+    @Test fun `nonzero seek starts small and sequential windows grow within the existing bound`() {
+        val ranges = mutableListOf<Pair<Long, Int>>()
+        val position = 3L * 1024 * 1024 * 1024
+        val source = MediaPreviewSource("video", MAX_MEDIA_BYTES, emptyFlow<Unit>(), {}, readRange = { offset, count ->
+            ranges += offset to count
+            ByteArray(count)
+        })
+        val data = MediaPreviewDataSource(source)
+        try {
+            data.open(spec(position))
+            assertEquals(1, data.read(ByteArray(1), 0, 1))
+            assertEquals(position to 256 * 1024, ranges.single())
+            assertEquals(1, data.read(ByteArray(1), 0, 1))
+            assertEquals(1, ranges.size)
+            val target = ByteArray(8 * 1024 * 1024)
+            repeat(8) { assertTrue(data.read(target, 0, target.size) > 0) }
+            assertTrue(ranges.drop(1).any { it.second > ranges.first().second })
+            assertEquals(8 * 1024 * 1024, ranges.maxOf { it.second })
+            assertTrue(ranges.all { it.second <= 8 * 1024 * 1024 })
+            data.close()
+            data.open(spec(position + 1))
+            data.read(ByteArray(1), 0, 1)
+            assertEquals(position + 1 to 256 * 1024, ranges.last())
+        } finally { data.close(); source.close() }
+    }
+
+    @Test fun `explicit length and failed range never advance the requested position`() {
+        val ranges = mutableListOf<Pair<Long, Int>>()
+        var fail = true
+        val source = MediaPreviewSource("video", 100, emptyFlow<Unit>(), {}, readRange = { offset, count ->
+            ranges += offset to count
+            if (fail) { fail = false; throw IOException("interrupted range") }
+            ByteArray(count) { 42 }
+        })
+        val data = MediaPreviewDataSource(source)
+        try {
+            val limited = DataSpec.Builder().setUri(Uri.parse("workspace:/video")).setPosition(50).setLength(3).build()
+            assertEquals(3L, data.open(limited))
+            val target = ByteArray(10) { -1 }
+            assertThrows(IOException::class.java) { data.read(target, 0, target.size) }
+            assertArrayEquals(ByteArray(10) { -1 }, target)
+            assertEquals(3, data.read(target, 0, target.size))
+            assertEquals(listOf(50L to 3, 50L to 3), ranges)
+            assertEquals(C.RESULT_END_OF_INPUT, data.read(target, 0, target.size))
+        } finally { data.close(); source.close() }
+    }
 }

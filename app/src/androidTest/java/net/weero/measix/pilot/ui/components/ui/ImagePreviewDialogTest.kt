@@ -193,7 +193,9 @@ class ImagePreviewDialogTest {
         val fail = java.util.concurrent.atomic.AtomicBoolean(false)
         val retries = java.util.concurrent.atomic.AtomicInteger()
         val source = net.weero.measix.pilot.service.ImageSource("retry-image-info", net.weero.measix.pilot.service.ImageOrigin.NETWORK,
-            displayName = "remote.gif", verifyAccess = {}, readPayload = {
+            displayName = "remote.gif", verifyAccess = {
+                if (fail.get()) throw java.io.IOException("HTTP 503 image information unavailable")
+            }, readPayload = {
                 if (fail.get()) throw java.io.IOException("HTTP 503 image information unavailable")
                 bytes
             })
@@ -211,6 +213,31 @@ class ImagePreviewDialogTest {
         compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasText("remote.gif")).fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("1 × 1").assertExists()
         assertEquals(1, retries.get())
+    }
+
+    @Test fun reopeningImageInformationReusesMetadataAndRechecksAccess() {
+        val bytes = android.util.Base64.decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", android.util.Base64.DEFAULT)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val allowed = java.util.concurrent.atomic.AtomicBoolean(true)
+        val source = net.weero.measix.pilot.service.ImageSource("cached-image-info", net.weero.measix.pilot.service.ImageOrigin.NETWORK,
+            displayName = "cached.gif", verifyAccess = { check(allowed.get()) { "image_test_access_revoked" } },
+            readPayload = { reads.incrementAndGet(); bytes })
+        compose.setContent { MaterialTheme { ImagePreviewDialog(listOf(source), {}) } }
+        val info = compose.activity.getString(R.string.image_viewer_info_content_description)
+        val closeInfo = compose.activity.getString(R.string.image_viewer_info_close_content_description)
+        compose.onNodeWithContentDescription(info).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasText("cached.gif")).fetchSemanticsNodes().isNotEmpty() }
+        val firstReads = reads.get()
+        compose.onNodeWithContentDescription(closeInfo).performClick()
+        compose.onNodeWithContentDescription(info).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasText("cached.gif")).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals(firstReads, reads.get())
+        compose.onNodeWithContentDescription(closeInfo).performClick()
+        allowed.set(false)
+        compose.onNodeWithContentDescription(info).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodes(androidx.compose.ui.test.hasText("image_test_access_revoked", substring = true)).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("cached.gif").assertDoesNotExist()
+        assertEquals(firstReads, reads.get())
     }
 
     @Test

@@ -17,6 +17,7 @@ internal class MediaPreviewDataSource(private val source: MediaPreviewSource) : 
         var buffer = ByteArray(0)
         var bufferOffset = 0
         var started = false
+        var nextWindow = 256 * 1024
     }
     private val lock = Any()
     private var current: ReadSession? = null
@@ -55,8 +56,11 @@ internal class MediaPreviewDataSource(private val source: MediaPreviewSource) : 
                 requireCurrent(session)
                 if (session.remaining == 0L) return C.RESULT_END_OF_INPUT
                 if (session.bufferOffset == session.buffer.size) {
-                    val window = if (session.position == 0L) 256 * 1024 else 8 * 1024 * 1024
-                    session.position to minOf(session.remaining, window.toLong()).toInt()
+                    // Every open, including a nonzero seek, starts small. Release the consumed
+                    // window before IO so the old and incoming payloads do not coexist.
+                    session.buffer = ByteArray(0)
+                    session.bufferOffset = 0
+                    session.position to minOf(session.remaining, session.nextWindow.toLong()).toInt()
                 } else null
             }
             if (range != null) {
@@ -67,6 +71,7 @@ internal class MediaPreviewDataSource(private val source: MediaPreviewSource) : 
                     requireCurrent(session)
                     session.buffer = bytes
                     session.bufferOffset = 0
+                    session.nextWindow = (session.nextWindow * 2).coerceAtMost(8 * 1024 * 1024)
                 }
             }
             return synchronized(lock) {

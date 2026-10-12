@@ -56,7 +56,9 @@ internal class WebDavBrowserService(
         override suspend fun refresh() { dav.refresh(requireNotNull(selection)) }
         override suspend fun open(): FileBrowserSession {
             cleanupBeforeOpen()
-            val handle = dav.open(requireNotNull(selection), _targetId.value)
+            val original = requireNotNull(selection)
+            if (original.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) dav.refresh(original)
+            val handle = dav.open(original, _targetId.value)
             _targetId.value = handle.target.id
             return Session(handle, changes)
         }
@@ -82,12 +84,17 @@ internal class WebDavBrowserService(
         override fun path(value: String) = paths.logical(value)
         override fun child(parent: String, name: String) = paths.child(parent, name)
         override fun relativeImage(document: String, reference: String) = paths.relativeImage(document, reference)
-        override suspend fun refresh() { checkAccess() }
-        override suspend fun isValid() = !closed.get() && dav.isValid(handle)
+        override suspend fun refresh() {
+            check(!closed.get()) { "webdav_access_closed" }
+            // Explicit retry must be able to replace an earlier uncertain status diagnosis.
+            dav.validate(handle)
+            checkAccess()
+        }
+        override suspend fun isValid() = !closed.get() && dav.isValidLocal(handle)
 
         private suspend fun checkAccess() {
             check(!closed.get()) { "webdav_access_closed" }
-            dav.validate(handle)
+            dav.validateLocal(handle)
         }
 
         private suspend fun <T> operation(onFailure: suspend (Throwable) -> Unit = {}, action: suspend () -> T): T {

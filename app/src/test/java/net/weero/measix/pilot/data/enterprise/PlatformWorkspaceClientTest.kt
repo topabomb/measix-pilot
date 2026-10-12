@@ -330,18 +330,28 @@ class PlatformWorkspaceClientTest {
 
     @Test fun `GET recovery does not replay an incomplete response body`() = runBlocking {
         val calls = AtomicInteger()
+        val partialReceived = CountDownLatch(1)
         val server = server {
             calls.incrementAndGet()
             sendResponseHeaders(200, 100)
             responseBody.write("partial".toByteArray())
+            responseBody.flush()
+            // Close the incomplete response only after the client has actually consumed its prefix.
+            // Exchange cleanup may otherwise discard unflushed bytes before they reach the socket.
+            check(partialReceived.await(5, TimeUnit.SECONDS))
         }
         try {
-            val output = ByteArrayOutputStream()
+            val output = object : ByteArrayOutputStream() {
+                override fun write(bytes: ByteArray, offset: Int, count: Int) {
+                    super.write(bytes, offset, count)
+                    if (size() >= 7) partialReceived.countDown()
+                }
+            }
             try { client.download(connection(server), "token", space, "a.txt", output); fail("incomplete download accepted") }
             catch (_: IOException) { }
             assertEquals(1, calls.get())
             assertEquals("partial", output.toString("UTF-8"))
-        } finally { server.stop(0) }
+        } finally { partialReceived.countDown(); server.stop(0) }
     }
 
     @Test fun `writes are not replayed after sending to a connection that closes without confirmation`() = runBlocking {

@@ -30,7 +30,8 @@ class WebDavBrowserServiceTest {
             coEvery { publishDownload<Unit>(handle, any()) } coAnswers { secondArg<suspend () -> Unit>().invoke() }
             coEvery { open(selection, any()) } returns handle
             coEvery { validate(handle) } coAnswers { check(!handle.closed.get()) }
-            coEvery { isValid(handle) } coAnswers { !handle.closed.get() }
+            coEvery { validateLocal(handle) } coAnswers { check(!handle.closed.get()) }
+            coEvery { isValidLocal(handle) } coAnswers { !handle.closed.get() }
             coEvery { close(handle) } coAnswers { handle.closed.set(true) }
         }
         val queries = mockk<ConfigurationQueryService> {
@@ -59,6 +60,20 @@ class WebDavBrowserServiceTest {
         assertTrue(transfer.isCompleted)
         assertTrue(deleted)
         coVerify(exactly = 0) { f.dav.download(any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test fun `explicit refresh can replace an uncertain query diagnosis before local validation`() = runTest {
+        val f = Fixture(backgroundScope)
+        val session = f.source.open()
+        var uncertain = true
+        coEvery { f.dav.validateLocal(f.handle) } coAnswers { if (uncertain) throw IOException("status query offline") }
+        coEvery { f.dav.validate(f.handle) } coAnswers { uncertain = false }
+        try {
+            session.refresh()
+            assertFalse(uncertain)
+            coVerify(exactly = 1) { f.dav.validate(f.handle) }
+            coVerify(exactly = 1) { f.dav.validateLocal(f.handle) }
+        } finally { session.close() }
     }
 
     @Test fun `failed export reports cleanup failure and closes before returning`() = runTest {

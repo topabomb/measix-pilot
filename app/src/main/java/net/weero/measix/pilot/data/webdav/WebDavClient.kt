@@ -4,7 +4,6 @@ import at.bitfire.dav4jvm.ktor.ResponseParser
 import at.bitfire.dav4jvm.property.webdav.*
 import io.ktor.http.Url
 import java.io.FilterInputStream
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -130,9 +129,21 @@ internal class WebDavClient(
             requireIdentityEncoding(response)
             require(response.header("ETag") == metadata.etag &&
                 response.header("Content-Range") == "bytes $position-$end/${metadata.length}") { "webdav_media_changed" }
-            val output = ByteArrayOutputStream(length.toInt())
-            response.body.byteStream().use { copy(it, output, length, { _, _ -> }, length) }
-            output.toByteArray()
+            response.header("Content-Length")?.let {
+                if (it.toLongOrNull() != length) throw IOException("webdav_content_length_mismatch")
+            }
+            val bytes = ByteArray(length.toInt())
+            response.body.byteStream().use { input ->
+                var offset = 0
+                while (offset < bytes.size) {
+                    currentCoroutineContext().ensureActive()
+                    val read = input.read(bytes, offset, bytes.size - offset)
+                    if (read < 0) throw IOException("webdav_content_length_mismatch")
+                    offset += read
+                }
+                if (input.read() != -1) throw IOException("webdav_content_length_mismatch")
+            }
+            bytes
         }
     }
 

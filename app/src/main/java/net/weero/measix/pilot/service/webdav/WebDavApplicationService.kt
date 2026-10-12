@@ -185,7 +185,10 @@ internal class WebDavApplicationService(
         request(handle) { transport, auth -> transport.mediaRange(handle.target.root, auth, path, metadata, position, count) }
     }
 
-    suspend fun isValid(handle: WebDavHandle): Boolean = try { validate(handle); true }
+    suspend fun isValid(handle: WebDavHandle): Boolean = validity(handle) { validate(handle) }
+    suspend fun isValidLocal(handle: WebDavHandle): Boolean = validity(handle) { validateLocal(handle) }
+
+    private suspend fun validity(handle: WebDavHandle, verify: suspend () -> Unit): Boolean = try { verify(); true }
     catch (cancelled: CancellationException) { throw cancelled }
     catch (failure: EnterpriseConfigurationException) {
         val authorized = try {
@@ -283,7 +286,12 @@ internal class WebDavApplicationService(
         finally { synchronized(monitor) { active -= registration } }
     }
 
-    internal suspend fun validate(handle: WebDavHandle, writing: Boolean = false) {
+    internal suspend fun validate(handle: WebDavHandle, writing: Boolean = false) = validateAccess(handle, writing, local = false)
+
+    /** Cache hits must retain authorization without turning each decoder read into platform IO. */
+    internal suspend fun validateLocal(handle: WebDavHandle) = validateAccess(handle, writing = false, local = true)
+
+    private suspend fun validateAccess(handle: WebDavHandle, writing: Boolean, local: Boolean) {
         synchronized(monitor) { check(handle.access !in changingConnections) { "webdav_connection_change_in_progress" } }
         check(!handle.closed.get()) { "webdav_access_closed" }
         handle.selection?.let { queries.requireSelection(it) }
@@ -296,7 +304,9 @@ internal class WebDavApplicationService(
                 check(configuration.enterpriseConfiguration?.webdav?.any { it.enabled && it.copy(name = target.definition.name) == target.definition } == true) {
                     "webdav_connection_changed"
                 }
-                val current = remoteWorkspace.readDavProjection(target.access)
+                val current = if (local) remoteWorkspace.readPublishedDavProjection(requireNotNull(handle.selection))
+                    else remoteWorkspace.readDavProjection(target.access)
+                current.diagnostic?.let { throw java.io.IOException(it) }
                 val projection = current.projection
                 val binding = projection?.webdav
                 check(current.connection == target.connection && projection?.fileExchangeWebdavResourceId == target.id &&

@@ -297,6 +297,44 @@ class WebDavClientTest {
         }
     }
 
+    @Test fun `media range requires the pinned headers and exact body including chunked replies`() = runBlocking {
+        for (variant in listOf("valid-chunked", "full", "etag", "range", "length", "short", "excess")) {
+            val server = server {
+                responseHeaders.set("ETag", if (variant == "etag") "\"v2\"" else "\"v1\"")
+                responseHeaders.set("Content-Range", if (variant == "range") "bytes 1-4/10" else "bytes 0-3/10")
+                val bytes = when (variant) { "short" -> "abc"; "excess", "length" -> "abcde"; else -> "abcd" }.toByteArray()
+                val chunked = variant in setOf("valid-chunked", "short", "excess")
+                sendResponseHeaders(if (variant == "full") 200 else 206, if (chunked) 0 else bytes.size.toLong())
+                responseBody.write(bytes)
+            }
+            try {
+                val result = runCatching { client.mediaRange(server.root(), "Basic test", "video", DavMediaMetadata(10, "\"v1\""), 0, 4) }
+                if (variant == "valid-chunked") assertArrayEquals("abcd".toByteArray(), result.getOrThrow())
+                else assertTrue("$variant must not produce playable bytes", result.isFailure)
+            } finally { server.stop(0) }
+        }
+    }
+
+    @Test fun `cancelling a media range exits its blocked response body read`() = runBlocking {
+        val entered = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val server = server {
+            responseHeaders.set("ETag", "\"v1\"")
+            responseHeaders.set("Content-Range", "bytes 0-3/4")
+            sendResponseHeaders(206, 4)
+            responseBody.write(42); responseBody.flush()
+            entered.complete(Unit)
+            release.await(20, java.util.concurrent.TimeUnit.SECONDS)
+        }
+        try {
+            val read = launch { client.mediaRange(server.root(), "Basic test", "video", DavMediaMetadata(4, "\"v1\""), 0, 4) }
+            withTimeout(3_000) { entered.await() }
+            withTimeout(3_000) { read.cancelAndJoin() }
+            assertTrue(read.isCompleted)
+            assertTrue(read.isCancelled)
+        } finally { release.countDown(); server.stop(0) }
+    }
+
     @Test fun `stat queries the exact file and only explicit not found means missing`() = runBlocking {
         val server = server {
             assertEquals("0", requestHeaders.getFirst("Depth"))

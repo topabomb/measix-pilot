@@ -259,6 +259,8 @@ TTS 控制条消费 `SpeechApplicationService` 的播放投影，暂停仍可见
 
 查看器内的进度和结果通过 Dialog 自己的 Toaster 呈现，避免被窗口遮挡。
 信息面板打开后才从当前 `ImageSource` 读取有界内容；来源名称由文件服务提供，不扫描路径推断归属。
+当前图片和信息重读版本内复用已解析的 `ImageInfo`，每次打开面板仍先复验访问权，不重复下载正文；
+显式重试重新刷新并读取。只保留小体量元信息，不增加图片 payload 缓存或跨页面资源 owner。
 缩略图、相册、信息、保存共享同一读取能力，URL 不是授权。
 聊天相册如何收集、Markdown 图片和导出来源见 [消息渲染管线](message-rendering-pipeline.md)；
 Gallery、文件管理与生成页面传入各自可见集合。

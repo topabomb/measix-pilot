@@ -120,7 +120,8 @@ class WebDavPageAndroidTest {
                 WebDavHandle(selection.access, selection, WebDavTarget.Personal(chosen))
             }
             coEvery { validate(any(), any()) } returns Unit
-            coEvery { isValid(any()) } returns true
+            coEvery { validateLocal(any()) } returns Unit
+            coEvery { isValidLocal(any()) } returns true
             coEvery { close(any()) } answers { firstArg<WebDavHandle>().closed.set(true) }
             coEvery { refresh(selection) } returns Unit
             coEvery { list(any(), any(), any()) } answers {
@@ -148,7 +149,7 @@ class WebDavPageAndroidTest {
         capture("webdav-personal-server-switch.png")
 
         // A revoked browser target must not disable choosing the remaining authorized server.
-        coEvery { dav.isValid(any()) } answers { firstArg<WebDavHandle>().target.id == first.id.toString() }
+        coEvery { dav.isValidLocal(any()) } answers { firstArg<WebDavHandle>().target.id == first.id.toString() }
         state.value = WebDavConfigurationReadState.Available(selection, listOf(first), first.id)
         compose.waitUntil(5_000) { vm.state.value.revoked }
         compose.onNodeWithText(text(R.string.webdav_no_current), useUnmergedTree = true).performClick()

@@ -27,6 +27,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import android.net.Uri
+import androidx.media3.datasource.DataSpec
+import net.weero.measix.pilot.ui.components.files.MediaPreviewDataSource
+import java.util.concurrent.atomic.AtomicInteger
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -50,6 +54,7 @@ class EnterpriseWebDavServiceTest {
             "1", "dep_12345678-1234-4234-8234-123456789abc", "Core", "/api/client/v1", "/runtime/v1", listOf(5)))
         var definitions = listOf(definition(otherId), definition(id))
         var projection = ready
+        var publishedProjection = ready
         var backupPreferences = WebDavBackupPreferences()
         val configuration = mockk<ResolvedConfiguration> {
             every { enterpriseConfiguration } answers { mockk { every { webdav } answers { definitions } } }
@@ -65,6 +70,8 @@ class EnterpriseWebDavServiceTest {
         }
         val remote = mockk<RemoteWorkspaceService> {
             coEvery { readDavProjection(access) } answers { WorkspaceDavSnapshot(access, connection, projection) }
+            coEvery { readPublishedDavProjection(selection) } answers { WorkspaceDavSnapshot(access, connection, publishedProjection) }
+            coEvery { refresh(selection) } returns Unit
         }
         val lease = mockk<EnterprisePlatformOperationLease> {
             every { this@mockk.access } returns this@EnterpriseWebDavServiceTest.access
@@ -175,6 +182,57 @@ class EnterpriseWebDavServiceTest {
             coVerify(exactly = 1) { f.platform.recoverWorkspaceAccessToken(access, f.connection, f.first) }
             coVerify(exactly = 1) { f.lease.release() }
         } finally { server.stop(0) }
+    }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    @Test fun `buffered video reads do not query the remote workspace again`() = runTest {
+        val rangeRequests = AtomicInteger()
+        val size = 1024 * 1024
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { request -> request.use {
+                it.responseHeaders.set("ETag", "\"media-v1\"")
+                if (it.requestMethod == "HEAD") {
+                    it.responseHeaders.set("Content-Length", size.toString())
+                    it.sendResponseHeaders(200, -1)
+                } else {
+                    rangeRequests.incrementAndGet()
+                    val bounds = it.requestHeaders.getFirst("Range").removePrefix("bytes=").split('-').map(String::toInt)
+                    val count = bounds[1] - bounds[0] + 1
+                    it.responseHeaders.set("Content-Range", "bytes ${bounds[0]}-${bounds[1]}/$size")
+                    it.sendResponseHeaders(206, count.toLong())
+                    it.responseBody.write(ByteArray(count) { 42 })
+                }
+            } }; start()
+        }
+        val root = Files.createTempDirectory("enterprise-dav-preview").toFile()
+        try {
+            val f = Fixture(backgroundScope, "http://127.0.0.1:${server.address.port}")
+            every { f.queries.observeWebDavConfiguration() } returns flowOf(
+                WebDavConfigurationReadState.Available(selection, emptyList(), null))
+            coEvery { f.remote.refresh(selection) } returns Unit
+            val browser = WebDavBrowserService(f.service, f.queries, ApplicationRecoveryGate().apply { ready() }, backgroundScope, root)
+            val session = browser.source(selection).open()
+            val source = session.mediaSource(net.weero.measix.pilot.service.files.BrowserFile("video.mp4", false, size.toLong(), null, "\"media-v1\""))
+            val data = MediaPreviewDataSource(source)
+            try {
+                data.open(DataSpec.Builder().setUri(Uri.parse("workspace-media:/video")).build())
+                assertEquals(1, data.read(ByteArray(1), 0, 1))
+                clearMocks(f.remote, answers = false)
+                repeat(32) {
+                    val bytes = ByteArray(1024)
+                    assertEquals(bytes.size, data.read(bytes, 0, bytes.size))
+                    assertTrue(bytes.all { it == 42.toByte() })
+                }
+                assertEquals(1, rangeRequests.get())
+                coVerify(exactly = 0) { f.remote.readDavProjection(any()) }
+                f.publishedProjection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+                val denied = ByteArray(1) { -1 }
+                org.junit.Assert.assertThrows(IOException::class.java) { data.read(denied, 0, 1) }
+                assertArrayEquals(byteArrayOf(-1), denied)
+                assertEquals(1, rangeRequests.get())
+                coVerify(exactly = 0) { f.remote.readDavProjection(any()) }
+            } finally { data.close(); source.close(); session.close() }
+        } finally { server.stop(0); root.deleteRecursively() }
     }
 
     @Test fun `PUT rejection refreshes credentials without replay and unknown writes block subsequent attempts`() = runTest {

@@ -207,6 +207,78 @@ class MediaPreviewAndroidTest {
         compose.runOnIdle { assertFalse(player.isPlaying) }
     }
 
+    /** Optional controlled DAV benchmark. Timing is evidence, never a CI pass threshold. */
+    @Test fun throttledDavReportsRangeLatencyPlaybackAndSeek() = kotlinx.coroutines.runBlocking<Unit> {
+        val root = InstrumentationRegistry.getArguments().getString("mediaDavBenchmarkRoot")
+        org.junit.Assume.assumeTrue(root != null)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val evidence = org.json.JSONObject()
+        val requests = java.util.concurrent.CopyOnWriteArrayList<Pair<Long, Int>>()
+        val client = net.weero.measix.pilot.data.webdav.WebDavClient()
+        val authorization = okhttp3.Credentials.basic("media", "test")
+        val metadata = client.mediaMetadata(requireNotNull(root), authorization, "video.mp4")
+        val source = MediaPreviewSource("video.mp4", metadata.length, authorized,
+            verifyAccess = { check(authorized.value) }, close = { closed.set(true) },
+            readRange = { position, count ->
+                requests += position to count
+                client.mediaRange(root, authorization, "video.mp4", metadata, position, count)
+            })
+        val data = MediaPreviewDataSource(source)
+        try {
+            val comparisonStart = android.os.SystemClock.elapsedRealtime()
+            client.mediaRange(root, authorization, "video.mp4", metadata, 1024 * 1024L, 8 * 1024 * 1024)
+            evidence.put("fixedEightMiBMs", android.os.SystemClock.elapsedRealtime() - comparisonStart)
+            data.open(androidx.media3.datasource.DataSpec.Builder().setUri(android.net.Uri.parse("workspace-media:/benchmark"))
+                .setPosition(1024 * 1024L).build())
+            val smallStart = android.os.SystemClock.elapsedRealtime()
+            assertEquals(1, data.read(ByteArray(1), 0, 1))
+            evidence.put("initialSeekWindowMs", android.os.SystemClock.elapsedRealtime() - smallStart)
+            assertEquals(256 * 1024, requests.single().second)
+            data.close()
+            val prepareStart = android.os.SystemClock.elapsedRealtime()
+            val view = openSource(source)
+            val player = compose.runOnIdle { requireNotNull(view.player) as androidx.media3.exoplayer.ExoPlayer }
+            evidence.put("prepareMs", android.os.SystemClock.elapsedRealtime() - prepareStart)
+            val frameUs = java.util.concurrent.atomic.AtomicLong(-1)
+            val rebufferings = AtomicInteger()
+            val failure = java.util.concurrent.atomic.AtomicReference<String?>()
+            compose.runOnIdle {
+                player.setVideoFrameMetadataListener { time, _, _, _ -> frameUs.set(time) }
+                player.addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_BUFFERING && player.playWhenReady) rebufferings.incrementAndGet()
+                    }
+                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) { failure.set(error.toString()) }
+                })
+                player.play()
+            }
+            compose.waitUntil(55_000) { compose.runOnIdle { player.currentPosition >= 30_000 || failure.get() != null } }
+            assertNull(failure.get())
+            evidence.put("continuousPlaybackMs", compose.runOnIdle { player.currentPosition })
+                .put("continuousRebufferings", rebufferings.get())
+            captureEvidence("media-dav-throttled-playing")
+            val seekStart = android.os.SystemClock.elapsedRealtime()
+            compose.runOnIdle { player.pause(); frameUs.set(-1); player.seekTo(2_000) }
+            compose.waitUntil(20_000) { compose.runOnIdle {
+                player.playbackState == Player.STATE_READY && frameUs.get() in 1_500_000..4_000_000
+            } }
+            evidence.put("pausedSeekMs", android.os.SystemClock.elapsedRealtime() - seekStart)
+                .put("pausedSeekFrameUs", frameUs.get())
+            captureEvidence("media-dav-throttled-seek")
+            compose.runOnIdle { visible = false }
+            compose.waitUntil(5_000) { closed.get() && compose.runOnIdle { view.player == null } }
+            evidence.put("sourceClosed", true).put("playerViewDetached", true)
+        } finally {
+            compose.runOnIdle { visible = false }
+            compose.waitForIdle()
+            data.close(); source.close()
+            evidence.put("fileBytes", metadata.length).put("ranges", org.json.JSONArray().apply {
+                requests.forEach { put(org.json.JSONObject().put("position", it.first).put("count", it.second)) }
+            })
+            java.io.File(context.getExternalFilesDir(null), "media-dav-performance.json").writeText(evidence.toString(2))
+        }
+    }
+
     @Test fun rotateActionChangesActualDeviceOrientationWithoutRecreatingPlayer() {
         val activity = compose.activity
         val originalOrientation = activity.requestedOrientation

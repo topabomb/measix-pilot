@@ -91,16 +91,30 @@ internal class RemoteWorkspaceService(
             it.identity.connection, it.projection, query?.takeIf { q -> q.selection == it.identity.selection }?.diagnostic) }
     }
 
+    /** Browser reads recheck the original identity against facts already published by this owner. */
+    suspend fun readPublishedDavProjection(selection: RealmSelection): WorkspaceDavSnapshot {
+        recovery.awaitReady()
+        val identity = identity(selection)
+        return sessions.withSelectedRealmSelection(selection) {
+            synchronized(monitor) {
+                check(selection.access !in changingConnections) { "workspace_connection_change_in_progress" }
+                val published = current?.takeIf { it.identity == identity } ?: error("workspace_status_unavailable")
+                WorkspaceDavSnapshot(selection.access as RealmAccess.Enterprise, identity.connection,
+                    published.projection, _queryState.value?.takeIf { it.selection == selection }?.diagnostic)
+            }
+        }
+    }
+
     /** A Turn query retains its original Session and does not require a selected Files page. */
     suspend fun readDavProjection(access: RealmAccess.Enterprise): WorkspaceDavSnapshot = coroutineScope {
         recovery.awaitReady()
         sessions.withRealmAccess(access) {}
         val connection = sessions.platformContext(access.sessionId).platform.connection
         val registration = access to currentCoroutineContext().job
-        val revision = synchronized(monitor) {
+        val (revision, originalGeneration) = synchronized(monitor) {
             check(access !in changingConnections) { "workspace_connection_change_in_progress" }
             davQueries += registration
-            ++davQueryRevision
+            ++davQueryRevision to generation
         }
         try {
             val projection = try {
@@ -111,7 +125,8 @@ internal class RemoteWorkspaceService(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 synchronized(monitor) {
-                    current?.takeIf { davQueryRevision == revision && it.identity.selection.access == access && it.identity.connection == connection }?.let {
+                    current?.takeIf { davQueryRevision == revision && generation == originalGeneration &&
+                        it.identity.selection.access == access && it.identity.connection == connection }?.let {
                         _queryState.value = RemoteWorkspaceQueryState(it.identity.selection, refreshing = false, diagnostic = failure.userVisibleDiagnostic())
                     }
                 }
@@ -120,8 +135,12 @@ internal class RemoteWorkspaceService(
             sessions.withRealmAccess(access) {}
             check(sessions.platformContext(access.sessionId).platform.connection == connection) { "workspace_connection_changed" }
             synchronized(monitor) {
-                current?.takeIf { davQueryRevision == revision && it.identity.selection.access == access && it.identity.connection == connection }?.let {
-                    _queryState.value = RemoteWorkspaceQueryState(it.identity.selection, refreshing = false)
+                current?.takeIf { davQueryRevision == revision && generation == originalGeneration &&
+                    it.identity.selection.access == access && it.identity.connection == connection }?.let {
+                    // A newer DAV observation supersedes a refresh started before this query.
+                    // Non-selected Turn queries never create or replace the selected page's identity.
+                    generation++
+                    publishProjectionLocked(it.identity, projection)
                 }
             }
             WorkspaceDavSnapshot(access, connection, projection)
@@ -200,13 +219,7 @@ internal class RemoteWorkspaceService(
                             validate(identity)
                             synchronized(monitor) {
                                 if (generation == stamp) {
-                                    if (old?.projection?.let { it.agentSpaceId != projection.agentSpaceId ||
-                                            it.bindingRevision != projection.bindingRevision } == true || !projection.filesAvailable) {
-                                        handles.filter { it.selection == selection }.toList().forEach(::revokeHandleLocked)
-                                    }
-                                    current = State(identity, projection, current?.takeIf { it.identity == identity }?.readError)
-                                    _summary.value = project(requireNotNull(current))
-                                    _queryState.value = RemoteWorkspaceQueryState(selection, refreshing = false)
+                                    publishProjectionLocked(identity, projection)
                                 }
                             }
                         } catch (cancelled: CancellationException) { throw cancelled }
@@ -253,6 +266,17 @@ internal class RemoteWorkspaceService(
             }
         }
         task.await()
+    }
+
+    private fun publishProjectionLocked(identity: Identity, projection: PlatformWorkspaceProjection) {
+        val previous = current?.takeIf { it.identity == identity }
+        if (previous?.projection?.let { it.agentSpaceId != projection.agentSpaceId ||
+                it.bindingRevision != projection.bindingRevision } == true || !projection.filesAvailable) {
+            handles.filter { it.selection == identity.selection }.toList().forEach(::revokeHandleLocked)
+        }
+        current = State(identity, projection, previous?.readError)
+        _summary.value = project(requireNotNull(current))
+        _queryState.value = RemoteWorkspaceQueryState(identity.selection, refreshing = false)
     }
 
     suspend fun open(selection: RealmSelection): RemoteWorkspaceHandle {

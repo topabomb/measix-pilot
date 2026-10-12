@@ -324,7 +324,8 @@ FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实�
 也不在 seek 后接纳新版本。401 只按原会话的现有协议恢复 token 后重试一次，范围与版本不变。
 服务端不具备这些条件时显示诊断，用户仍可显式下载或外部打开，不偷偷缓存完整大文件。
 
-`MediaPreviewDataSource` 首段最多 256 KiB，其余读窗口最多 8 MiB；播放器目标缓冲 24 MiB，
+`MediaPreviewDataSource` 每次 open 的首段最多 256 KiB，包括非零 seek 和后台恢复；连续消费完整窗口后逐步扩大，最多 8 MiB。
+耗尽的旧窗口在下一次 IO 前释放；每段完整校验后才交付，不持有跨范围的响应流。播放器目标缓冲 24 MiB，
 这是缓冲目标而非进程总内存上限。每次读取缓存也复验访问权；暂停保留有界缓冲以支持拖动后的画面更新；离页和后台停止播放器读取，
 撤权停止并清空当前媒体。关闭与重开使用独立读取会话，已取消的迟到结果不能进入新会话。
 本地属性与远程 ETag 复验不替代文件系统快照；解码格式仍取决于设备支持的容器与编解码器。
@@ -348,6 +349,15 @@ GET、HEAD、PROPFIND 使用 OkHttp 标准连接恢复，允许响应头返回�
 避免 `503 + Retry-After: 0` 等 HTTP follow-up 自动重放；不因读侧恢复而放宽未知写入的核实要求。
 连接超时为 20 秒，读写空闲超时为 60 秒，正常活动传输没有总时长限制。
 
+浏览器打开先刷新原 `RealmSelection`。缓存命中及页面有效性检查使用 `WebDavApplicationService.validateLocal`，
+核对原 Session、选择版本、已提交定义和 `RemoteWorkspaceService.readPublishedDavProjection` 的原连接、空间及 DAV 绑定；
+不因解码器每次小块读取发送工作区状态请求。刷新进行中保留尚未确认失效的原绑定；查询失败保留诊断和原编辑会话，
+不冒充确定撤权，媒体读取遇到该诊断会停止并清空缓冲。网络操作、工具、备份及 `publishDownload` 仍沿原远端复验。
+已确认的绑定变化阻止旧缓存交付；尚未观察到的远端变化在原状态刷新或下一次网络操作时发现，不承诺离线即时撤权。
+
+`readDavProjection` 将仍匹配原已选身份的成功结果发布到同一投影，较早的刷新或独立查询不能覆盖新结果；
+非选中域 Turn 的查询不创建当前页面投影。文件状态和 DAV 绑定均由原 `RemoteWorkspaceService` 发布，不另建可编辑授权缓存。
+
 上传新文件用 `If-None-Match: *`；覆盖、删除和文本保存要求确认版本的强 ETag。
 XML 属性中的无引号 opaque ETag 仅在无歧义时规范化，弱或非法 ETag 不升级成强版本。
 企业明确 `forwarded=false` 的指定认证拒绝沿原平台刷新协议恢复；PUT 输入可能已消费，刷新后仍不自动重传正文。
@@ -357,6 +367,7 @@ XML 属性中的无引号 opaque ETag 仅在无歧义时规范化，弱或非法
 普通上传下载以 64 KiB 缓冲和 Long 字节数流式传输，不继承原 Files 媒体的 4 GiB 上限。
 DAV 音视频 HEAD 获取长度和强 ETag，Range 严格核对 206、版本、Content-Range、identity 编码和实际字节数，
 复用 `MediaPreviewDataSource` 的有界窗口；无法满足条件时提供原始诊断，不退化为缓存完整视频。
+每段使用定长数组读取，拒绝错误的 Content-Length；无该头的分块响应仍按有界长度和 EOF 完整核验。
 文本、图片与 PDF 沿原预览大小和格式限制。分享只交付只读 FileProvider 副本，不暴露带认证的 URL；
 未交付预览和已交付分享副本分别按浏览器现有生命周期及保留期限清理。
 

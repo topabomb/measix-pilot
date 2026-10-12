@@ -89,6 +89,69 @@ class RemoteWorkspaceServiceTest {
         assertTrue(lookup.isCancelled)
     }
 
+    @Test fun `a newer DAV observation is published and cannot be overwritten by an older refresh`() = runTest {
+        val id = "dav_12345678-1234-4234-8234-123456789abc"
+        val original = ready.copy(fileExchangeWebdavResourceId = id,
+            webdav = PlatformWorkspaceDAVProjection(id, true, "ready", PlatformDAVAccessMode.FULL, 2))
+        val changed = original.copy(webdav = original.webdav!!.copy(bindingRevision = 3))
+        val f = fixture(original)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var requests = 0
+        coEvery { f.client.state(any(), any()) } coAnswers {
+            if (++requests == 1) { entered.complete(Unit); release.await(); original } else changed
+        }
+        val oldRefresh = async { f.service.refresh(f.selection) }
+        entered.await()
+        assertEquals(original, f.service.readPublishedDavProjection(f.selection).projection)
+        f.service.readDavProjection(f.selection.access as RealmAccess.Enterprise)
+        assertEquals(changed, f.service.readPublishedDavProjection(f.selection).projection)
+        release.complete(Unit)
+        oldRefresh.await()
+        assertEquals(changed, f.service.readPublishedDavProjection(f.selection).projection)
+        assertEquals(2, requests)
+        f.service.revoke(f.selection.access).awaitClosed()
+        assertTrue(runCatching { f.service.readPublishedDavProjection(f.selection) }.isFailure)
+    }
+
+    @Test fun `a DAV query superseded by a newer refresh cannot republish its late binding`() = runTest {
+        val id = "dav_12345678-1234-4234-8234-123456789abc"
+        val original = ready.copy(fileExchangeWebdavResourceId = id,
+            webdav = PlatformWorkspaceDAVProjection(id, true, "ready", PlatformDAVAccessMode.FULL, 2))
+        val changed = original.copy(webdav = original.webdav!!.copy(bindingRevision = 3))
+        val f = fixture(original)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var requests = 0
+        coEvery { f.client.state(any(), any()) } coAnswers {
+            if (++requests == 1) { entered.complete(Unit); release.await(); original } else changed
+        }
+        val oldQuery = async { f.service.readDavProjection(f.selection.access as RealmAccess.Enterprise) }
+        entered.await()
+        f.service.refresh(f.selection)
+        release.complete(Unit)
+        oldQuery.await()
+        assertEquals(changed, f.service.readPublishedDavProjection(f.selection).projection)
+    }
+
+    @Test fun `a late DAV query cannot restore a space invalidated by file access`() = runTest {
+        val f = fixture()
+        val handle = f.service.open(f.selection)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { f.client.state(any(), any()) } coAnswers { entered.complete(Unit); release.await(); ready }
+        val oldQuery = async { f.service.readDavProjection(f.selection.access as RealmAccess.Enterprise) }
+        entered.await()
+        coEvery { f.client.list(any(), any(), any(), any()) } throws PlatformHttpException(409,
+            PlatformProblem("about:blank", "Old space", 409, "workspace_space_mismatch"), "old binding replaced")
+        assertTrue(runCatching { f.service.list(handle, "") }.isFailure)
+        assertEquals(RemoteWorkspaceStatus.FAILED, f.service.summary.value!!.status)
+        release.complete(Unit)
+        oldQuery.await()
+        assertNull(f.service.readPublishedDavProjection(f.selection).projection)
+        assertEquals(RemoteWorkspaceStatus.FAILED, f.service.summary.value!!.status)
+    }
+
     @Test fun `media source pins HEAD version and length instead of directory metadata`() = runTest {
         val f = fixture(); val handle = f.service.open(f.selection)
         val metadata = WorkspaceContentMetadata("\"head-version\"", 4294967296L, "video/mp4")

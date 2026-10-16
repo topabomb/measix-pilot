@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600" role="img" aria-labelledby="title desc">
+  <title id="title">Measix Pilot — 把 Agent 带到现场</title>
+  <desc id="desc">品牌与工作流示意。原生 Android Agent Harness 将现场资料、多步执行、人工确认与工作成果连接起来，不是应用截图。</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#edf3ff"/><stop offset="1" stop-color="#f7f5ef"/></linearGradient>
+    <radialGradient id="halo"><stop stop-color="#cbdcff" stop-opacity=".8"/><stop offset="1" stop-color="#cbdcff" stop-opacity="0"/></radialGradient>
+    <style>text{font-family:"Segoe UI","Microsoft YaHei",sans-serif;fill:#203454}.muted{fill:#526781}.label{font-size:18px;letter-spacing:2px}.body{font-size:21px}.title{font-size:27px;font-weight:600}</style>
+  </defs>
+  <rect width="1200" height="600" rx="24" fill="url(#bg)"/>
+  <circle cx="990" cy="150" r="270" fill="url(#halo)"/>
+  <g transform="translate(58 48)" color="#386be2">
+    <path d="m15 48 11-34 28-3-12 32-14-9-13 14Z" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linejoin="round"/>
+    <path d="m28 34 15-13" stroke="currentColor" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+    <path d="M13 16v-6h7M53 48v6h-7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <text x="140" y="77" font-size="28" font-weight="650">MEASIX PILOT</text>
+  <text x="141" y="105" class="label muted">领航 · 小睿助手</text>
+  <text x="60" y="199" font-size="52" font-weight="650">把 Agent 带到现场。</text>
+  <text x="61" y="246" font-size="26" class="muted">在手边开始，把工作推进到结果。</text>
+  <text x="61" y="297" class="label" fill="#386be2">NATIVE ANDROID AGENT HARNESS</text>
+  <g transform="translate(875 65) rotate(12 90 100)" fill="none" stroke="#386be2">
+    <circle cx="96" cy="105" r="113" stroke-opacity=".12"/>
+    <circle cx="96" cy="105" r="82" stroke-opacity=".18"/>
+    <path d="m35 168 38-118 97-10-42 111-48-31-45 48Z" stroke-width="9" stroke-linejoin="round"/>
+    <path d="m80 120 52-45" stroke-width="9" stroke-linecap="round"/>
+  </g>
+  <path d="M345 414H425M770 414H850" stroke="#99b2dc" stroke-width="2"/>
+  <g>
+    <rect x="60" y="348" width="320" height="151" rx="18" fill="#fff" stroke="#d8e2f2"/>
+    <text x="84" y="383" class="label muted">01 / 带入事实</text>
+    <text x="84" y="425" class="title">现场资料</text>
+    <text x="84" y="463" class="body muted">照片 · 文档 · 任务说明</text>
+    <rect x="440" y="348" width="320" height="151" rx="18" fill="#386be2"/>
+    <text x="464" y="383" class="label" style="fill:#e1eaff">02 / 推进工作</text>
+    <text x="464" y="425" class="title" style="fill:#fff">Agent 执行与人工确认</text>
+    <text x="464" y="463" class="body" style="fill:#e1eaff">上下文 · 工具 · 多步任务</text>
+    <rect x="820" y="348" width="320" height="151" rx="18" fill="#fff" stroke="#d8e2f2"/>
+    <text x="844" y="383" class="label muted">03 / 检查成果</text>
+    <text x="844" y="425" class="title">可查看的工作文件</text>
+    <text x="844" y="463" class="body muted">阅读 · 编辑 · 预览 · 带走</text>
+  </g>
+  <text x="60" y="555" class="label muted">手机 / 平板 / 折叠屏</text>
+  <text x="1140" y="555" text-anchor="end" class="label muted">独立使用 · Runcove 协作 · Orchelm 接入</text>
+</svg>

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="820" viewBox="0 0 1120 820" role="img" aria-labelledby="title desc">
+  <title id="title">Measix 七大产品职责图</title>
+  <desc id="desc">Tuck 浏览器工作台与 Pilot Android 应用作为工作入口；Orchelm 管理组织能力；Runcove 提供持久工作空间，Noetral 提供工业领域模型；Metrivon 负责测量与设备协同，Tracelle 负责数据归档与分析。按需组合，实际接入以版本和部署为准。</desc>
+  <defs>
+    <linearGradient id="paper" x2="1" y2="1"><stop stop-color="#eef3fc"/><stop offset="1" stop-color="#f6f3ec"/></linearGradient>
+    <style>
+      text{font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;fill:#233c36}
+      .name{font-size:27px;font-weight:650}.body{font-size:19px;fill:#51675e}.layer{font-size:17px;fill:#6b7e75}.small{font-size:16px;fill:#6b7e75}
+      .card{fill:#fff;stroke:#d8e0d8;stroke-width:1.5}.line{fill:none;stroke:#b5c7b9;stroke-width:2}
+    </style>
+  </defs>
+  <rect width="1120" height="820" rx="20" fill="url(#paper)"/>
+  <text x="44" y="51" font-size="16" letter-spacing="4" fill="#657e6b">MEASIX / PRODUCT FAMILY</text>
+  <text x="44" y="101" font-size="34" font-weight="650">从个人工作，到组织协作</text>
+  <text x="44" y="135" class="body">七个产品，各自承担明确的职责，按需组合。</text>
+  <text x="44" y="196" class="layer">工作入口</text>
+  <rect x="154" y="166" width="446" height="118" rx="14" fill="#e9efff" stroke="#9db6ec" stroke-width="2"/>
+  <text x="179" y="207" class="name">Pilot <tspan font-size="21" font-weight="400">领航</tspan></text>
+  <rect x="496" y="184" width="78" height="27" rx="13" fill="#ceddff"/><text x="535" y="203" font-size="14" text-anchor="middle">本项目</text>
+  <text x="179" y="239" class="body">原生 Android Agent Harness</text>
+  <text x="179" y="265" class="small">移动与现场工作 · 个人与企业空间</text>
+  <rect x="620" y="166" width="456" height="118" rx="14" class="card"/>
+  <text x="645" y="207" class="name">Tuck <tspan font-size="21" font-weight="400">松子</tspan></text>
+  <text x="645" y="239" class="body">浏览器 Agent 工作台</text>
+  <text x="645" y="265" class="small">对话 · 任务 · 文件预览 · 版本交付</text>
+  <path d="M377 284V312H848V284M612 312V330" class="line"/>
+  <text x="44" y="377" class="layer">组织供给</text>
+  <rect x="154" y="330" width="922" height="100" rx="14" fill="#eeedf5" stroke="#d3cee2" stroke-width="1.5"/>
+  <text x="179" y="371" class="name">Orchelm <tspan font-size="21" font-weight="400">枢策</tspan></text>
+  <text x="179" y="407" class="body">模型、助手、工具与工作空间的组织供给 · 授权、发布与用量治理</text>
+  <path d="M612 430V454M377 472V454H848V472" class="line"/>
+  <text x="44" y="513" class="layer">环境与模型</text>
+  <rect x="154" y="472" width="446" height="112" rx="14" class="card"/>
+  <text x="179" y="514" class="name">Runcove <tspan font-size="21" font-weight="400">工舱</tspan></text>
+  <text x="179" y="547" class="body">持久工作空间 · 文件、命令与浏览器</text>
+  <text x="179" y="573" class="small">个人 Standalone / 托管 Server</text>
+  <rect x="620" y="472" width="456" height="112" rx="14" class="card"/>
+  <text x="645" y="514" class="name">Noetral <tspan font-size="21" font-weight="400">知衡</tspan></text>
+  <text x="645" y="547" class="body">工业领域模型与专业任务适配</text>
+  <text x="645" y="573" class="small">领域理解 · 工具使用 · 任务评估</text>
+  <text x="44" y="669" class="layer">专业业务</text>
+  <rect x="154" y="622" width="446" height="112" rx="14" class="card"/>
+  <text x="179" y="664" class="name">Metrivon <tspan font-size="21" font-weight="400">衡准</tspan></text>
+  <text x="179" y="697" class="body">精密测量与设备协同</text>
+  <text x="179" y="723" class="small">采集 · 工步与算法 · 报告</text>
+  <rect x="620" y="622" width="456" height="112" rx="14" class="card"/>
+  <text x="645" y="664" class="name">Tracelle <tspan font-size="21" font-weight="400">溯原</tspan></text>
+  <text x="645" y="697" class="body">测量数据归档、追溯与分析</text>
+  <text x="645" y="723" class="small">原始依据 · 配置与结果 · 跨设备数据</text>
+  <text x="154" y="782" class="small">产品职责示意 · 个人使用可独立连接模型与工具 · 实际接入范围以各项目版本为准</text>
+</svg>

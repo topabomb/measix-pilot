@@ -14,6 +14,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.SdkSuppress
 import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.UiController
+import androidx.test.espresso.ViewAction
 import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.action.ViewActions.closeSoftKeyboard
 import androidx.test.espresso.action.ViewActions.replaceText
@@ -21,6 +23,8 @@ import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.RootMatchers.isDialog
 import androidx.test.espresso.matcher.ViewMatchers.hasFocus
 import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.ViewMatchers.isEnabled
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
@@ -64,6 +68,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.hamcrest.Matchers.allOf
 
 @RunWith(AndroidJUnit4::class)
 class EditorDraftAndroidTest {
@@ -71,7 +76,7 @@ class EditorDraftAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test fun workspaceDraftDoesNotEnterActivityBundle() {
-        val published = "published\n".repeat(50_000)
+        val published = largeBundleBody(paragraphCount = 400)
         val queries = mockk<WorkspaceQueryService>()
         val commands = mockk<WorkspaceApplicationService>()
         val loaded = CompletableDeferred<WorkspaceTextPreviewResult>()
@@ -85,17 +90,17 @@ class EditorDraftAndroidTest {
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).assertDoesNotExist()
         loaded.complete(WorkspaceTextPreviewResult.Success(published))
         enterWorkspaceEditing { reads == 1 }
-        replaceEditorBody(published + "unsaved")
+        replaceBundleEditorBody(published + "unsaved")
         assertSmallActivityBundle()
     }
 
     @Test fun skillEditDraftStaysOutOfBundleAndConfirmationReceivesBody() {
-        val published = largeBundleBody(paragraphCount = 2_200)
+        val published = largeBundleBody(paragraphCount = 400)
         var confirmed: String? = null
         compose.setContent { host {
             EditFileDialog(false, SkillFile("large.md", "large.md", published.length.toLong()), published, {}, { confirmed = it })
         } }
-        replaceEditorBody(published + "unsaved", inDialog = true)
+        replaceBundleEditorBody(published + "unsaved", inDialog = true)
         compose.onNodeWithText(compose.activity.getString(R.string.skill_detail_page_save)).performClick()
         compose.runOnIdle { assertEquals(published + "unsaved", confirmed) }
         assertEditorBody(published + "unsaved")
@@ -104,8 +109,8 @@ class EditorDraftAndroidTest {
 
     @Test fun newSkillBodyStaysOutOfBundle() {
         compose.setContent { host { AddSkillDialog(false, {}, { _, _ -> }) } }
-        val body = "---\nname: draft\ndescription: valid\n---\n" + largeBundleBody(paragraphCount = 2_000)
-        replaceEditorBody(body, inDialog = true)
+        val body = "---\nname: draft\ndescription: valid\n---\n" + largeBundleBody(paragraphCount = 400)
+        replaceBundleEditorBody(body, inDialog = true)
         assertEditorBody(body)
         assertSmallActivityBundle()
     }
@@ -114,9 +119,8 @@ class EditorDraftAndroidTest {
         compose.setContent { host { AddFileDialog(false, {}, { _, _ -> }) } }
         val name = compose.onNode(hasSetTextAction())
         name.performTextReplacement("notes.md")
-        name.performImeAction()
-        val body = largeBundleBody(paragraphCount = 2_000)
-        replaceEditorBody(body, inDialog = true)
+        val body = largeBundleBody(paragraphCount = 400)
+        replaceBundleEditorBody(body, inDialog = true)
         assertEditorBody(body)
         assertSmallActivityBundle()
     }
@@ -474,6 +478,25 @@ class EditorDraftAndroidTest {
         node.config[SemanticsProperties.Text].joinToString { it.text.take(100) }
     }
 
+    // Saved-state coverage needs the real Editable/TextWatcher path, not a second giant IME workload.
+    private fun replaceBundleEditorBody(text: String, inDialog: Boolean = false) {
+        compose.waitForIdle()
+        val editor = onView(isAssignableFrom(EditText::class.java)).let {
+            if (inDialog) it.inRoot(isDialog()) else it
+        }
+        editor.perform(object : ViewAction {
+            override fun getConstraints() = allOf(isAssignableFrom(EditText::class.java), isDisplayed(), isEnabled())
+            override fun getDescription() = "Replace saved-state fixture through the native editable buffer"
+            override fun perform(uiController: UiController, view: View) {
+                val body = view as EditText
+                assertNotNull("The editor must accept edits", body.keyListener)
+                body.text.replace(0, body.length(), text)
+                uiController.loopMainThreadUntilIdle()
+            }
+        })
+        assertEditorBody(text)
+    }
+
     private fun replaceEditorBody(text: String, inDialog: Boolean = false) {
         compose.waitForIdle()
         val editor = onView(isAssignableFrom(EditText::class.java)).let {
@@ -526,10 +549,16 @@ class EditorDraftAndroidTest {
         else -> false
     }
 
-    // Exercise multi-megabyte saved state without making extreme paragraph count a layout benchmark.
+    // Keep the body above the Binder transaction size without making paragraph count a layout benchmark.
     private fun largeBundleBody(paragraphCount: Int): String {
         val paragraph = "Saved state body ".repeat(100).take(1_499) + "\n"
-        return paragraph.repeat(paragraphCount)
+        return paragraph.repeat(paragraphCount).also { body ->
+            val parcel = Parcel.obtain()
+            try {
+                parcel.writeString(body)
+                assertTrue("The fixture must expose oversized saved state", parcel.dataSize() > 1024 * 1024)
+            } finally { parcel.recycle() }
+        }
     }
 
     private fun assertSmallActivityBundle() {

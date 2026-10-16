@@ -87,6 +87,8 @@ Compose 节点消失不能代替系统窗口同步，复制动作仍通过真实
 `ChatInputStateTest` 在 Robolectric 验证提交后编辑与附件身份保全；`SafeRemoteMediaFetcherTest` 在 JVM 验证真实 socket、分块上限及取消，
 不重复放入设备门禁。迁移保留数据、失败及 schema 校验和历史完整升级链，不为每个中间版本复制旧查询计划矩阵。
 功能测试使用小夹具覆盖分页边界与消费者隔离；大规模耗时、进程堆变化和帧指标归性能证据，不能据模拟器速度设成功阈值。
+编辑器保存状态用例保留序列化后超过 1 MiB 的正文，通过真实 Editable 与 TextWatcher 验证正文不进入 Activity Bundle；
+不重复驱动系统键盘处理巨量正文。真实输入连接、IME 查询及 Binder 传输边界由 `EditorInputConnectionAndroidTest` 验证。
 失败后重跑通过只证明该次重跑，不得用自动 retry、扩大等待或放宽断言代替根因分析。
 
 保留能保护数据完整性、wire、授权/路径边界、关键用户行为、并发恢复或真实兼容性的测试，观察稳定结果并给出可定位失败。

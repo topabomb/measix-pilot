@@ -14,3 +14,6 @@ workspace/tools/patches/*.patch text eol=lf -whitespace
 app/src/test/resources/contracts/portal/*.json -text
 app/src/test/resources/contracts/platform/** -text whitespace=cr-at-eol
 app/src/main/enterprisePortal/** -text
+
+# Device verification keeps fail-fast and window restoration in one Bash process.
+tools/verify_android_device.sh text eol=lf

@@ -74,9 +74,15 @@ class ChainOfThoughtRenderingAndroidTest {
             }
             fun assertLine(y: Float) {
                 val row = sampleY(y)
+                val background = pixels[nearbyX, row]
+                val contrast = maxOf(1f - background.red, background.green, background.blue)
                 assertTrue("missing connector: rtl=$rtl alpha=$alpha y=$y", (-1..1).any { dx ->
                     val color = pixels[(x + dx).coerceIn(0, pixels.width - 1), row]
-                    color.red > .7f && color.green < .3f && color.blue < .3f
+                    // A centered 1 px stroke at mdpi covers two pixels by half each.
+                    val difference = maxOf(abs(color.red - background.red),
+                        abs(color.green - background.green), abs(color.blue - background.blue))
+                    difference >= contrast * .4f && color.red >= background.red - .03f &&
+                        color.green <= background.green + .03f && color.blue <= background.blue + .03f
                 })
             }
             for (index in 0..2) {

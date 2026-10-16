@@ -494,8 +494,22 @@ class ChatContextFlowAndroidTest {
             actionMatcher.matches(node) || transcriptTexts.any { it != messageText && hasText(it).matches(node) }
         }
         check(actionMatcher.matches(action)) { "message_regenerate_action_missing: $messageText" }
-        compose.onNode(SemanticsMatcher("regenerate for $messageText") { it.id == action.id }, useUnmergedTree = true)
-            .performScrollTo().assertIsDisplayed().performClick()
+        val regenerate = compose.onNode(
+            SemanticsMatcher("regenerate for $messageText") { it.id == action.id }, useUnmergedTree = true,
+        ).performScrollTo()
+        // The history viewport extends behind the composer. A semantics-visible action may
+        // still be covered by its input field, so bring the real touch target above it.
+        val bounds = regenerate.fetchSemanticsNode().boundsInRoot
+        val composerTop = compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot.top
+        if (bounds.bottom >= composerTop) {
+            compose.onNode(historyMatcher).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.ScrollBy) {
+                it(0f, bounds.bottom - composerTop + bounds.height)
+            }
+        }
+        assertTrue("Regenerate must be above the composer",
+            regenerate.fetchSemanticsNode().boundsInRoot.bottom <
+                compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot.top)
+        regenerate.assertIsDisplayed().performClick()
     }
 
     private fun <T> awaitUi(timeoutMillis: Long, action: suspend () -> T): T {

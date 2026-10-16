@@ -540,9 +540,9 @@ class EnterprisePageAndroidTest {
         ).forEach { resource ->
             compose.onNodeWithText(text(resource)).performScrollTo().assertIsDisplayed()
         }
-        compose.onNodeWithText("Available default").assertIsDisplayed()
-        compose.onAllNodesWithText(text(R.string.enterprise_configuration_unset))[0].assertIsDisplayed()
-        compose.onNodeWithText(text(R.string.enterprise_configuration_reference_unavailable)).assertIsDisplayed()
+        compose.onNodeWithText("Available default").performScrollTo().assertIsDisplayed()
+        compose.onAllNodesWithText(text(R.string.enterprise_configuration_unset))[0].performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_configuration_reference_unavailable)).performScrollTo().assertIsDisplayed()
     }
 
     @Test

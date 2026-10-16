@@ -109,7 +109,7 @@ Provider 覆盖 OpenAI、Gemini、Claude、DeepSeek 及相应兼容接口，包�
 
 ## 开始使用
 
-本文随 **0.0.20** 更新，截图使用该版本源码构建的 Debug 版。安装时请核对对应版本说明；也可以按下方命令自行构建。
+本文随 **0.0.21** 更新；截图和演示使用 0.0.20 源码构建的 Debug 版。安装时请核对对应版本说明；也可以按下方命令自行构建。
 
 1. 从本仓库的 [Releases](https://github.com/topabomb/rikkahub_mcp/releases) 查看可用发行与版本说明，或按下方命令自行构建。支持 **Android 8.0+**，APK 面向 **arm64-v8a / x86_64**。
 2. 个人使用时，启用并配置 Provider、填写自己的 API Key，选择模型与助手。首次启动的预设 Provider 默认禁用。

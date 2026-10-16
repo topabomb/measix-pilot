@@ -114,8 +114,8 @@ android {
         applicationId = "net.weero.measix.pilot"
         minSdk = 26
         targetSdk = 37
-        versionCode = 20
-        versionName = "0.0.20"
+        versionCode = 21
+        versionName = "0.0.21"
 
         buildConfigField("int", "PLATFORM_CONTRACT_VERSION", pinnedBaseline["platformContractVersion"].toString())
         buildConfigField("String", "CORE_BASELINE_VERSION", JsonOutput.toJson(pinnedBaseline["coreBaselineVersion"]))

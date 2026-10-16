@@ -7,6 +7,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -60,6 +61,8 @@ class SearchPickerBackAndroidTest {
         compose.onNodeWithText(select, substring = true).performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText(title).fetchSemanticsNodes().isEmpty() }
         pressBack()
+        // Platform back dispatch and AnimatedContent do not finish in the same frame.
+        compose.waitUntil(5_000) { compose.onNodeWithText(title).isDisplayed() }
         compose.onNodeWithText(title).assertIsDisplayed()
         pressBack()
         compose.waitUntil(5_000) { compose.onAllNodesWithText(title).fetchSemanticsNodes().isEmpty() }

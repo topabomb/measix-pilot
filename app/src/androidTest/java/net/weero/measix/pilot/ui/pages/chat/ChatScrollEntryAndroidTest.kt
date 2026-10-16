@@ -161,26 +161,44 @@ class ChatScrollEntryAndroidTest {
             compose.onNodeWithContentDescription(next).assertIsDisplayed().assertHasClickAction()
         }
 
+        fun readingAnchor(): Pair<Int, Float>? {
+            val listTop = history().fetchSemanticsNode().boundsInRoot.top
+            val composerTop = compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot.top
+            return first.texts.mapIndexedNotNull { index, text ->
+                val node = compose.onNodeWithText(text)
+                if (!node.isDisplayed()) return@mapIndexedNotNull null
+                val bounds = node.fetchSemanticsNode().boundsInRoot
+                val visibleHeight = minOf(bounds.bottom, composerTop) - maxOf(bounds.top, listTop)
+                if (visibleHeight > 0f) Triple(index, bounds.top, visibleHeight) else null
+            }.maxByOrNull { it.third }?.let { it.first to it.second }
+        }
+        fun moved(anchor: Pair<Int, Float>, forward: Boolean): Boolean {
+            val current = readingAnchor() ?: return false
+            return if (forward) current.first > anchor.first ||
+                (current.first == anchor.first && current.second < anchor.second)
+            else current.first < anchor.first ||
+                (current.first == anchor.first && current.second > anchor.second)
+        }
+
         revealJumpers()
-        val previousAnchor = compose.onNodeWithText(first.texts[6]).assertIsDisplayed()
-        val beforePrevious = previousAnchor.fetchSemanticsNode().boundsInRoot.top
+        val previousAnchor = requireNotNull(readingAnchor())
         observe("before previous")
         compose.onNodeWithContentDescription(previous).performClick()
-        compose.waitUntil(30_000) { previousAnchor.fetchSemanticsNode().boundsInRoot.top > beforePrevious }
+        // Short windows can retire the old text node entirely. Check the actual reading
+        // position by message order and offset instead of requiring that node to survive.
+        compose.waitUntil(30_000) { moved(previousAnchor, forward = false) }
         compose.waitForIdle()
-        assertTrue("Previous must move the same visible message downward",
-            previousAnchor.fetchSemanticsNode().boundsInRoot.top > beforePrevious)
+        assertTrue("Previous must move toward earlier history", moved(previousAnchor, forward = false))
         assertTrue("Previous must leave the page reading history", position() < maximum())
         observe("after previous")
 
         revealJumpers()
-        val nextAnchor = compose.onNodeWithText(first.texts[5]).assertIsDisplayed()
-        val beforeNext = nextAnchor.fetchSemanticsNode().boundsInRoot.top
+        val nextAnchor = requireNotNull(readingAnchor())
         observe("before next")
         compose.onNodeWithContentDescription(next).performClick()
         observe("after next click")
         try {
-            compose.waitUntil(30_000) { nextAnchor.fetchSemanticsNode().boundsInRoot.top < beforeNext }
+            compose.waitUntil(30_000) { moved(nextAnchor, forward = true) }
         } catch (failure: Throwable) {
             try {
                 observe("next timeout")
@@ -195,8 +213,7 @@ class ChatScrollEntryAndroidTest {
             throw failure
         }
         compose.waitForIdle()
-        assertTrue("Next must move the same visible message upward",
-            nextAnchor.fetchSemanticsNode().boundsInRoot.top < beforeNext)
+        assertTrue("Next must move toward later history", moved(nextAnchor, forward = true))
         assertTrue("Next from the middle must not jump directly to the tail", position() < maximum())
 
         revealJumpers()

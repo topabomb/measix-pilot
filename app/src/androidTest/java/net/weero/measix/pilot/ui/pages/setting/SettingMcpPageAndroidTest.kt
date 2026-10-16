@@ -189,7 +189,6 @@ class SettingMcpPageAndroidTest {
         compose.onNode(hasText(diagnostic) and hasAnyAncestor(isDialog())).assertIsDisplayed()
         compose.mainClock.advanceTimeBy(1_000)
         compose.waitForIdle()
-        android.os.SystemClock.sleep(750)
         val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
         instrumentation.uiAutomation.waitForIdle(250, 5_000)
         val image = instrumentation.uiAutomation.takeScreenshot()

@@ -51,17 +51,18 @@ class WorkspaceFileEditorAndroidTest {
         showPage("large.json", application, query)
         val label = compose.activity.getString(R.string.file_line_numbers)
         compose.onNodeWithText(compose.activity.getString(R.string.file_large_plain_text)).assertIsDisplayed()
+        var originalPadding = 0
         onView(isAssignableFrom(EditText::class.java)).check { view, error ->
             if (error != null) throw error
             val editor = view as EditText
-            assertEquals(0, editor.paddingLeft)
+            originalPadding = editor.paddingLeft
             editor.setSelection(12, 20)
         }
         compose.onNodeWithText(label).performClick()
         onView(isAssignableFrom(EditText::class.java)).check { view, error ->
             if (error != null) throw error
             val editor = view as EditText
-            assertTrue(editor.paddingLeft > 0)
+            assertTrue(editor.paddingLeft > originalPadding)
             assertEquals(body, editor.text.toString())
             assertEquals(12, editor.selectionStart)
             assertEquals(20, editor.selectionEnd)
@@ -70,7 +71,7 @@ class WorkspaceFileEditorAndroidTest {
         compose.onNodeWithText(label).performClick()
         onView(isAssignableFrom(EditText::class.java)).check { view, error ->
             if (error != null) throw error
-            assertEquals(0, (view as EditText).paddingLeft)
+            assertEquals(originalPadding, (view as EditText).paddingLeft)
             assertEquals(body, view.text.toString())
         }
     }

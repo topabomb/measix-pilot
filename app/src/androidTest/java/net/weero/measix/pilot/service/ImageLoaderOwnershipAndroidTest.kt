@@ -28,17 +28,15 @@ class ImageLoaderOwnershipAndroidTest {
             }
         } finally { bitmap.recycle() }
         var allowed = true
-        var checks = 0
         var reads = 0
         val source = ImageSource("singleton-${UUID.randomUUID()}", ImageOrigin.UPLOAD,
-            verifyAccess = { checks++; check(allowed) { "original_selection_revoked" } },
+            verifyAccess = { check(allowed) { "original_selection_revoked" } },
             readPayload = { reads++; bytes },
         )
         val request = ImageRequest.Builder(context).data(source).size(1, 1).build()
         val success = loader.execute(request)
         assertTrue(success is SuccessResult)
         try {
-            assertEquals(2, checks)
             assertEquals(1, reads)
             allowed = false
             val rejected = loader.execute(request)

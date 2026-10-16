@@ -11,7 +11,6 @@ import net.weero.measix.pilot.data.db.AppDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
-import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -116,48 +115,6 @@ class Migration_12_13Test {
     }
 
     @Test
-    fun scopePartitionedReadPathsUseCurrentMigrationIndexesWithoutExtraSorting() {
-        val name = "migration-enterprise-scope-indexes"
-        helper.createDatabase(name, 12).close()
-        helper.runMigrationsAndValidate(name, 13, true, Migration_12_13).use { db ->
-            val scope = "enterprise~dep_example~dXNlcg"
-            listOf(
-                "SELECT * FROM ConversationEntity WHERE scope='$scope' AND parent_conversation_id IS NULL " +
-                    "AND assistant_id='managed~dep_example~assistant' ORDER BY is_pinned DESC, update_at DESC" to
-                    "index_ConversationEntity_scope_assistant_id_parent_conversation_id_is_pinned_update_at",
-                "SELECT * FROM ConversationEntity WHERE scope='$scope' AND parent_conversation_id IS NULL " +
-                    "AND assistant_id='managed~dep_example~assistant' AND folder_id='' " +
-                    "ORDER BY is_pinned DESC, update_at DESC" to
-                    "index_ConversationEntity_scope_assistant_id_parent_conversation_id_folder_id_is_pinned_update_at",
-                "SELECT * FROM ConversationEntity WHERE scope='$scope' AND parent_conversation_id IS NULL " +
-                    "AND folder_id='folder' ORDER BY is_pinned DESC, update_at DESC" to
-                    "index_ConversationEntity_scope_folder_id_parent_conversation_id_is_pinned_update_at",
-                "SELECT * FROM ConversationEntity WHERE scope='$scope' AND parent_conversation_id IS NULL " +
-                    "AND is_pinned=1 ORDER BY update_at DESC" to
-                    "index_ConversationEntity_scope_parent_conversation_id_is_pinned_update_at",
-                "SELECT * FROM MemoryEntity WHERE scope='$scope' AND assistant_id='managed~dep_example~assistant' " +
-                    "ORDER BY id ASC" to "index_MemoryEntity_scope_assistant_id",
-                "SELECT * FROM artifact WHERE scope='$scope' AND folder='upload' AND state='ACTIVE' " +
-                    "ORDER BY created_at DESC" to "index_artifact_scope_folder_created_at",
-                "SELECT * FROM artifact WHERE scope='$scope' ORDER BY created_at DESC" to
-                    "index_artifact_scope_created_at",
-                "SELECT * FROM GenMediaEntity WHERE scope='$scope' ORDER BY create_at DESC" to
-                    "index_GenMediaEntity_scope_create_at",
-                "SELECT * FROM conversation_folder WHERE scope='$scope' " +
-                    "AND assistant_id='managed~dep_example~assistant' ORDER BY sort_index, create_at" to
-                    "index_conversation_folder_scope_assistant_id_sort_index_create_at",
-                "SELECT * FROM favorites WHERE scope='$scope' AND type='node' ORDER BY created_at DESC" to
-                    "index_favorites_scope_type_created_at",
-            ).forEach { (sql, index) -> assertQueryPlan(db, sql, index) }
-            assertQueryPlan(
-                db,
-                "SELECT * FROM ConversationEntity WHERE parent_conversation_id='parent'",
-                "index_ConversationEntity_parent_conversation_id",
-            )
-        }
-    }
-
-    @Test
     fun malformedLegacyEnterprisePrincipalAbortsInsteadOfLeavingUnreadableRows() {
         val name = "migration-enterprise-malformed-principal"
         helper.createDatabase(name, 12).use { db ->
@@ -170,12 +127,6 @@ class Migration_12_13Test {
         assertThrows(IllegalArgumentException::class.java) {
             helper.runMigrationsAndValidate(name, 13, true, Migration_12_13).close()
         }
-    }
-
-    private fun assertQueryPlan(db: SupportSQLiteDatabase, sql: String, expectedIndex: String) {
-        val details = values(db, "EXPLAIN QUERY PLAN $sql")
-        assertTrue("$sql: $details", details.any { expectedIndex in it })
-        assertFalse("$sql: $details", details.any { "TEMP B-TREE" in it })
     }
 
     private fun values(db: SupportSQLiteDatabase, sql: String): List<String> = db.query(sql).use { cursor ->

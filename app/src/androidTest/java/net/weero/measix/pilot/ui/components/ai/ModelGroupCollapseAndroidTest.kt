@@ -57,15 +57,22 @@ class ModelGroupCollapseAndroidTest {
                 }
             }
         }
-        compose.waitForIdle()
-        compose.runOnIdle { preferences.tryEmit(Result.success(setOf(groups.first().id))) }
-        compose.onNodeWithText("Provider A").assertIsDisplayed()
-        compose.onNodeWithText("Provider A model 40").assertDoesNotExist()
-        compose.onNode(hasSetTextAction()).performTextReplacement("Provider A model 40")
-        compose.onNode(hasText("Provider A model 40") and !hasSetTextAction()).assertIsDisplayed()
-        compose.onNode(hasSetTextAction()).performTextClearance()
-        compose.onNodeWithText("Provider A").assertIsDisplayed()
-        compose.onNodeWithText("Provider A model 40").assertDoesNotExist()
-        coVerify(exactly = 0) { commands.setModelGroupCollapsed(any(), any(), any()) }
+        try {
+            compose.waitForIdle()
+            compose.runOnIdle { preferences.tryEmit(Result.success(setOf(groups.first().id))) }
+            compose.onNodeWithText("Provider A").assertIsDisplayed()
+            compose.onNodeWithText("Provider A model 40").assertDoesNotExist()
+            compose.onNode(hasSetTextAction()).performTextReplacement("Provider A model 40")
+            compose.onNode(hasText("Provider A model 40") and !hasSetTextAction()).assertIsDisplayed()
+            compose.onNode(hasSetTextAction()).performTextClearance()
+            compose.onNodeWithText("Provider A").assertIsDisplayed()
+            compose.onNodeWithText("Provider A model 40").assertDoesNotExist()
+            coVerify(exactly = 0) { commands.setModelGroupCollapsed(any(), any(), any()) }
+        } finally {
+            // Close the focused native sheet before the Activity rule destroys its window.
+            compose.runOnIdle { state.close() }
+            compose.onAllNodes(isDialog()).assertCountEquals(0)
+            androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(100, 5_000)
+        }
     }
 }

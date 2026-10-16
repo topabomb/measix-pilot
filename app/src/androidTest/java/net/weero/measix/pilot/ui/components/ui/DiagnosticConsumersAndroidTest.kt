@@ -174,7 +174,6 @@ class DiagnosticConsumersAndroidTest {
         compose.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         // Wait for native dialog windows after Compose reaches idle.
-        android.os.SystemClock.sleep(750)
         instrumentation.uiAutomation.waitForIdle(250, 5_000)
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
         val directory = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")

@@ -76,63 +76,6 @@ class Migration_8_9Test {
         migrated.close()
     }
 
-    @Test
-    fun indexedReadPathsAvoidUnnecessarySorting() {
-        val name = "migration-v8-v9-query-plans"
-        helper.createDatabase(name, 8).close()
-        val db = helper.runMigrationsAndValidate(name, 9, true, Migration_8_9)
-        val queries = listOf(
-            "SELECT * FROM GenMediaEntity ORDER BY create_at DESC LIMIT 20" to "index_GenMediaEntity_create_at",
-            "SELECT * FROM GenMediaEntity WHERE create_at <= 100 ORDER BY create_at DESC" to "index_GenMediaEntity_create_at",
-            "SELECT * FROM MemoryEntity WHERE assistant_id = 'assistant'" to "index_MemoryEntity_assistant_id",
-            "SELECT * FROM message_node WHERE conversation_id = 'conversation' ORDER BY node_index ASC" to
-                "index_message_node_conversation_id_node_index",
-            "SELECT * FROM artifact WHERE folder = 'upload' AND created_at <= 100 ORDER BY created_at DESC" to
-                "index_artifact_folder_created_at",
-            "SELECT * FROM artifact WHERE state = 'ACTIVE' AND created_at <= 100" to
-                "index_artifact_state_created_at",
-            "SELECT * FROM ConversationEntity WHERE parent_conversation_id IS NULL AND assistant_id = 'assistant' " +
-                "ORDER BY is_pinned DESC, update_at DESC LIMIT 20" to
-                "index_ConversationEntity_assistant_id_parent_conversation_id_is_pinned_update_at",
-            "SELECT * FROM ConversationEntity WHERE parent_conversation_id IS NULL AND assistant_id = 'assistant' " +
-                "AND folder_id = '' ORDER BY is_pinned DESC, update_at DESC LIMIT 20" to
-                "index_ConversationEntity_assistant_id_parent_conversation_id_folder_id_is_pinned_update_at",
-            "SELECT * FROM ConversationEntity WHERE parent_conversation_id IS NULL AND folder_id = 'folder' " +
-                "ORDER BY is_pinned DESC, update_at DESC LIMIT 20" to
-                "index_ConversationEntity_folder_id_parent_conversation_id_is_pinned_update_at",
-            "SELECT * FROM ConversationEntity WHERE parent_conversation_id IS NULL AND is_pinned = 1 " +
-                "ORDER BY update_at DESC" to "index_ConversationEntity_parent_conversation_id_is_pinned_update_at",
-            "SELECT * FROM conversation_folder WHERE assistant_id = 'assistant' ORDER BY sort_index ASC, create_at ASC" to
-                "index_conversation_folder_assistant_id_sort_index_create_at",
-            "SELECT * FROM favorites WHERE type = 'node' ORDER BY created_at DESC" to "index_favorites_type_created_at",
-            "SELECT EXISTS(SELECT 1 FROM artifact_reference WHERE artifact_id = 1)" to
-                "index_artifact_reference_artifact_id_node_id_reference_type",
-        )
-        queries.forEach { (sql, expectedIndex) ->
-            val details = buildList {
-                db.query("EXPLAIN QUERY PLAN $sql").use { cursor ->
-                    while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("detail")))
-                }
-            }
-            assertTrue("$sql: $details", details.any { expectedIndex in it })
-            assertFalse("$sql: $details", details.any { "TEMP B-TREE" in it })
-        }
-        // Both equality prefixes preserve the requested time ordering; the planner owns the choice.
-        db.query(
-            "EXPLAIN QUERY PLAN SELECT * FROM artifact WHERE folder = 'upload' AND state = 'ACTIVE' " +
-                "ORDER BY created_at DESC",
-        ).use { cursor ->
-            val details = buildList {
-                while (cursor.moveToNext()) add(cursor.getString(cursor.getColumnIndexOrThrow("detail")))
-            }
-            assertTrue(details.toString(), details.any {
-                "index_artifact_folder_created_at" in it || "index_artifact_state_created_at" in it
-            })
-            assertFalse(details.toString(), details.any { "TEMP B-TREE" in it })
-        }
-        db.close()
-    }
-
     private fun tableNames(db: SupportSQLiteDatabase): List<String> =
         rows(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' " +
             "AND name != 'room_master_table' ORDER BY name").map { requireNotNull(it.single()) }

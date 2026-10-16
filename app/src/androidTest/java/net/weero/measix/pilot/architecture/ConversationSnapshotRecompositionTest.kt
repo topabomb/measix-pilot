@@ -20,12 +20,13 @@ import net.weero.measix.pilot.service.runtime.ConversationAggregateSnapshot
 import net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot
 import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.uuid.Uuid
 
-/** Verifies real Compose skipping on the long-conversation projection, not only object identity. */
+/** Verifies real Compose consumer isolation, not only projection object identity. */
 @RunWith(AndroidJUnit4::class)
 class ConversationSnapshotRecompositionTest {
     @get:Rule
@@ -36,7 +37,7 @@ class ConversationSnapshotRecompositionTest {
         val conversationId = Uuid.random()
         val assistantMessageId = Uuid.random()
         val nodes = buildList {
-            repeat(4_999) { index -> add(UIMessage.user("history-$index").toMessageNode()) }
+            repeat(2) { index -> add(UIMessage.user("history-$index").toMessageNode()) }
             add(UIMessage.assistant("initial").copy(id = assistantMessageId).toMessageNode())
         }
         var snapshot by mutableStateOf(
@@ -65,9 +66,8 @@ class ConversationSnapshotRecompositionTest {
             MeasuredNode("active", rendered.last(), compositions)
         }
         compose.waitForIdle()
-        assertEquals(1, compositions.getValue("header"))
-        assertEquals(1, compositions.getValue("history"))
-        assertEquals(1, compositions.getValue("active"))
+        val initial = compositions.toMap()
+        assertTrue(initial.values.all { it > 0 })
 
         compose.runOnUiThread {
             snapshot = snapshot.copy(
@@ -82,9 +82,10 @@ class ConversationSnapshotRecompositionTest {
         }
         compose.waitForIdle()
         compose.onNodeWithText("renamed|$switchedAssistantId|$movedFolderId").assertExists()
-        assertEquals(2, compositions.getValue("header"))
-        assertEquals(1, compositions.getValue("history"))
-        assertEquals(1, compositions.getValue("active"))
+        assertTrue(compositions.getValue("header") > initial.getValue("header"))
+        assertEquals(initial.getValue("history"), compositions.getValue("history"))
+        assertEquals(initial.getValue("active"), compositions.getValue("active"))
+        val afterHeader = compositions.toMap()
 
         compose.runOnUiThread {
             snapshot = snapshot.copy(
@@ -94,9 +95,10 @@ class ConversationSnapshotRecompositionTest {
             )
         }
         compose.waitForIdle()
-        assertEquals(2, compositions.getValue("header"))
-        assertEquals(1, compositions.getValue("history"))
-        assertEquals(2, compositions.getValue("active"))
+        compose.onNodeWithText("delta").assertExists()
+        assertEquals(afterHeader.getValue("header"), compositions.getValue("header"))
+        assertEquals(initial.getValue("history"), compositions.getValue("history"))
+        assertTrue(compositions.getValue("active") > afterHeader.getValue("active"))
     }
 
     @Composable

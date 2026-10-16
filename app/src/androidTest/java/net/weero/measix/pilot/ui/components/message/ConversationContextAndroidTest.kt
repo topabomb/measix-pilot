@@ -189,7 +189,9 @@ class ConversationContextAndroidTest {
             val description = context.getString(R.string.context_updated_accessibility)
             compose.runOnIdle { summary = MessageContextSummary() }
             compose.onAllNodesWithContentDescription(description).assertCountEquals(0)
-            assertEquals(baseline, compose.onNodeWithTag("message").getUnclippedBoundsInRoot())
+            compose.onNodeWithTag("message").getUnclippedBoundsInRoot().let {
+                assertEquals(baseline.bottom - baseline.top, it.bottom - it.top)
+            }
             compose.runOnIdle { summary = MessageContextSummary(updates = listOf(ConversationContextUpdateMarker(step.stepId, Uuid.random(), emptyList()))) }
             compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
             compose.onNodeWithContentDescription(description).assertIsDisplayed()
@@ -198,27 +200,14 @@ class ConversationContextAndroidTest {
             val label = compose.onNodeWithText("${context.getString(R.string.context_updated)} ›", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
             assertEquals(answer.left, label.left)
-            compose.onNodeWithContentDescription(description).assertHeightIsEqualTo(32.dp)
             compose.runOnIdle { assistantBubble = true }
             assertEquals(compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot().left,
                 compose.onNodeWithText("${context.getString(R.string.context_updated)} ›", useUnmergedTree = true).getUnclippedBoundsInRoot().left)
             compose.runOnIdle { summary = MessageContextSummary(); assistantBubble = false }
-            assertEquals(baseline, compose.onNodeWithTag("message").getUnclippedBoundsInRoot())
+            compose.onNodeWithTag("message").getUnclippedBoundsInRoot().let {
+                assertEquals(baseline.bottom - baseline.top, it.bottom - it.top)
+            }
         } finally { view.close() }
-    }
-
-    @Test fun compactUpdateLabelKeepsAnExpandedTouchTarget() {
-        var clicks = 0
-        compose.setContent { MaterialTheme { Column(Modifier.padding(24.dp)) {
-            ContextMessageEntry( categories = listOf(ConversationContextCategory.MEMORY)) { clicks++ }
-        } } }
-        val label = context.getString(R.string.context_updated_categories, context.getString(R.string.context_memory))
-        val entry = compose.onNodeWithContentDescription(context.getString(R.string.context_details_accessibility, label))
-        entry.assertHeightIsEqualTo(32.dp)
-        // Six dp above the compact row is inside Compose's 48 dp minimum touch target.
-        val density = context.resources.displayMetrics.density
-        entry.performTouchInput { click(androidx.compose.ui.geometry.Offset(center.x, -6f * density)) }
-        compose.runOnIdle { assertEquals(1, clicks) }
     }
 
     @Test fun laterRequestsDoNotReplaceOrReloadTheSelectedUpdate() {

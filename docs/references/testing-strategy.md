@@ -80,7 +80,13 @@ JVM 竞态测试用 `runTest`、`CompletableDeferred`、`Channel`、`Mutex` barr
 跨原生弹窗的选择菜单测试在弹窗移除和剪贴板清空后等待 `UiAutomation` 事件空闲，再执行单次长按；
 Compose 节点消失不能代替系统窗口同步，复制动作仍通过真实系统触摸和剪贴板结果验证。
 滚动断言先把目标带入实际视口，不假设不同窗口同时显示相同数量的消息；覆盖在列表上的输入区也属于触摸遮挡。
-像素断言按背景对比度检查线条覆盖，包含 mdpi 下 1 px 描边的抗锯齿混色，不要求所有密度都出现纯色中心像素。
+装饰连线、背景混色和框架自动镜像不使用逐像素比色矩阵作为发布门禁；保留审批可达、导航目标和布局遮挡等用户行为。
+截图供人工呈现检查，不以固定 sleep 等待；Compose 与原生窗口分别等待其空闲事件。
+窗口级返回、IME、剪贴板与焦点场景使用真实窗口尺寸；修改布局参数只能覆盖布局分支，不能声称验证了系统宽屏窗口。
+`SearchPickerBackAndroidTest` 在当前真实窗口验证逐级返回、关闭与重新打开；窄屏和宽屏验收分别配置设备窗口后运行同一用例。
+`ChatInputStateTest` 在 Robolectric 验证提交后编辑与附件身份保全；`SafeRemoteMediaFetcherTest` 在 JVM 验证真实 socket、分块上限及取消，
+不重复放入设备门禁。迁移保留数据、失败及 schema 校验和历史完整升级链，不为每个中间版本复制旧查询计划矩阵。
+功能测试使用小夹具覆盖分页边界与消费者隔离；大规模耗时、进程堆变化和帧指标归性能证据，不能据模拟器速度设成功阈值。
 失败后重跑通过只证明该次重跑，不得用自动 retry、扩大等待或放宽断言代替根因分析。
 
 保留能保护数据完整性、wire、授权/路径边界、关键用户行为、并发恢复或真实兼容性的测试，观察稳定结果并给出可定位失败。
@@ -113,7 +119,8 @@ Windows PowerShell 使用以下命令，macOS/Linux 将入口换为 `./gradlew`�
 
 `.github/workflows/verify.yml` 在 PR、主分支 push、手动或复用调用时运行全模块 JVM、Debug/Release 构建、lint、diff
 和 Room schema 生成一致性检查，再运行模拟器 `connectedDebugAndroidTest`，失败仍上传报告。
-`release.yml` 复用该门禁，通过后才签名与发布。CI 关闭模拟器硬键盘；普通 CI 不提供下述 opt-in live 环境。
+`release.yml` 复用该门禁，通过后才签名与发布。CI 关闭模拟器硬键盘；完整设备套件后保留原报告，再将专用模拟器改为真实 1000×800 / 160dpi 窗口，
+单独运行搜索弹层逐级返回用例并断言进入宽屏分支，最后还原窗口。普通 CI 不提供下述 opt-in live 环境。
 
 ## 5. 设备与显式集成场景
 
@@ -128,7 +135,7 @@ Windows PowerShell 使用以下命令，macOS/Linux 将入口换为 `./gradlew`�
 | Starter v5 Core | `starterV5CoreLive=true` 与 `coreStarterInput` | 真实 Snapshot/Starter/临时接入资料，输入读取后删除；区分确定性 adapter 和实际 Provider |
 | 已接入平台上下文 | `platformContextLive=true`；可选 `platformContextModelSwitch=true` | 记录发布身份、实际版本与 Provider 结果；v4 不证明 v5 opening |
 | 远程文件 | `remoteWorkspaceInput`；未接入专用设备和独立 Core/Agent Space | 配置文件与主机配合步骤见下文，普通门禁无输入时跳过 |
-| 个人 DAV 大文件 | `WebDavLargeTransferLiveAndroidTest`；`webdavLargeLive=true`、`webdavLiveRoot`、`webdavLiveUser`、`webdavLivePassword`、`webdavServerVersion`；专用标准 DAV 与至少 5 GiB 空闲设备空间 | 4 GiB / 4 GiB + 1 MiB 完整上传下载摘要、已知/未知长度、尾部 Range、临时文件流与 Java 堆增长；不代替播放器 seek 或 Core 验收 |
+| 个人 DAV 大文件 | `WebDavLargeTransferLiveAndroidTest`；`webdavLargeLive=true`、`webdavLiveRoot`、`webdavLiveUser`、`webdavLivePassword`、`webdavServerVersion`；专用标准 DAV 与至少 5 GiB 空闲设备空间 | 4 GiB / 4 GiB + 1 MiB 完整上传下载摘要、已知/未知长度、尾部 Range 与临时文件流；进程 Java 堆增长只记录诊断，不设功能门槛；不代替播放器 seek 或 Core 验收 |
 | 个人 DAV 视频与取消 | `WebDavPreviewLiveAndroidTest`；`webdavPreviewLive=true`、同上连接参数、根目录下的 `webdavPreviewPath` 视频，至少 4 GiB | 正式管理器播放/近尾解码/关闭；取消下载不发布附件并回滚本次 Artifact 创建；临时连接清理，恢复原当前项并核验备份选择未改 |
 | 企业 DAV Core | `EnterpriseWebDavLiveAndroidTest`；`coreWebDavInput` 指向未接入专用设备 app cache 内的一次性接入文件，含 enrollment、resourceId、agentSpaceId、server；隔离 Core 使用 15 秒 access token | 正式接入/同步/当前绑定、特殊文件名、分块上传/摘要、覆盖冲突、跨短 token 到期的已准入长流、令牌刷新、实时只读切换与正式退出；管理 adapter 为 fixture 时不声称真实 Agent Space 验收 |
 | 已接入企业 DAV 托管附件 | `WebDavManagedTransferLiveAndroidTest`；`webDavManagedTransfersLive=true`；专用且已接入企业设备、当前 DAV 可写，保留数据安装与直接 instrumentation | 正式工具定义/执行、真实 DAV、任意二进制/PNG/文本摘要、重复下载独立身份、先提交引用后发布、下载后再次上传；不包含 Provider 自主调用，清理仅本次目录和测试会话 |

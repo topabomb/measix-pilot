@@ -983,7 +983,7 @@ class EnterprisePageAndroidTest {
         val instrumentation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
         instrumentation.waitForIdleSync()
         // Window transitions are rendered outside Compose's idle tracking.
-        android.os.SystemClock.sleep(1_000)
+        instrumentation.uiAutomation.waitForIdle(100, 5_000)
         val screenshot = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
         val directory = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")?.let { java.io.File(it) }
             ?: compose.activity.cacheDir

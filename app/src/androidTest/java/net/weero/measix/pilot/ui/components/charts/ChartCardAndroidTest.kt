@@ -65,13 +65,14 @@ class ChartCardAndroidTest {
     }
 
     @Test fun narrowTableKeepsLargeFontPageCountAndControlsSeparate() {
-        val spec = ChartSpec.parse(Json.parseToJsonElement(
-            """{"style":"line","series":[{"values":[${(1..1000).joinToString(",")}]}]}"""))
+        fun spec(rows: Int) = ChartSpec.parse(Json.parseToJsonElement(
+            """{"style":"line","series":[{"values":[${(1..rows).joinToString(",")}]}]}"""))
+        val sample = mutableStateOf(spec(1000))
         compose.setContent {
             MaterialTheme {
                 val density = LocalDensity.current
                 CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale = 1.5f)) {
-                    ChartTable(spec, listOf("Series"), Modifier.width(240.dp))
+                    ChartTable(sample.value, listOf("Series"), Modifier.width(240.dp))
                 }
             }
         }
@@ -79,12 +80,18 @@ class ChartCardAndroidTest {
         val next = compose.onNodeWithContentDescription(compose.activity.getString(R.string.chart_next_page))
         previous.assertIsNotEnabled().assertWidthIsAtLeast(48.dp)
         next.assertWidthIsAtLeast(48.dp)
-        repeat(166) { next.performClick() }
-        val count = compose.onNodeWithText("167 / 167").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val count = compose.onNodeWithText("1 / 167").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         assertTrue(previous.fetchSemanticsNode().boundsInRoot.right <= count.left)
         assertTrue(count.right <= next.fetchSemanticsNode().boundsInRoot.left)
+        next.performClick()
+        compose.onNodeWithText("2 / 167").assertIsDisplayed()
+        // The same controls reach the final page without replaying 166 identical transitions.
+        compose.runOnIdle { sample.value = spec(13) }
+        compose.onNodeWithText("1 / 3").assertIsDisplayed()
+        repeat(2) { next.performClick() }
+        compose.onNodeWithText("3 / 3").assertIsDisplayed()
         next.assertIsNotEnabled()
         previous.performClick()
-        compose.onNodeWithText("166 / 167").assertIsDisplayed()
+        compose.onNodeWithText("2 / 3").assertIsDisplayed()
     }
 }

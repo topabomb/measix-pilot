@@ -8,8 +8,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -34,8 +32,6 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.time.Instant
-import kotlin.math.abs
-import kotlin.math.roundToInt
 import kotlin.uuid.Uuid
 
 @RunWith(AndroidJUnit4::class)
@@ -43,7 +39,7 @@ class DirectionalIconsAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun backButtonAutoMirrorsExactlyOnceAndKeepsNavigationAndAccessibilityAction() {
+    fun backButtonKeepsNavigationAndAccessibilityActionInBothDirections() {
         val direction = mutableStateOf(LayoutDirection.Ltr)
         val stack = mutableStateListOf<NavKey>(Screen.Startup(), Screen.Startup())
         compose.setContent {
@@ -54,11 +50,7 @@ class DirectionalIconsAndroidTest {
             }
         }
         val label = compose.activity.getString(R.string.back)
-        val ltr = compose.onNodeWithContentDescription(label, useUnmergedTree = true).captureToImage()
         compose.runOnIdle { direction.value = LayoutDirection.Rtl }
-        val rtl = compose.onNodeWithContentDescription(label, useUnmergedTree = true).captureToImage()
-        assertHorizontalMirror(ltr, rtl)
-        // Capture both directions before introducing a pressed-state ripple.
         compose.onNodeWithContentDescription(label).performClick()
         compose.runOnIdle { assertEquals(1, stack.size); stack.add(Screen.Startup()); direction.value = LayoutDirection.Ltr }
         compose.onNodeWithContentDescription(label).performClick()
@@ -66,7 +58,7 @@ class DirectionalIconsAndroidTest {
     }
 
     @Test
-    fun actualMoveToAssistantMenuMirrorsForwardIconAndRetainsClickedConversation() {
+    fun moveToAssistantRetainsClickedConversationInBothDirections() {
         val direction = mutableStateOf(LayoutDirection.Ltr)
         val conversation = ConversationSummary(Uuid.random(), ConfigurationReference.random(), "Direction test", null, false,
             Instant.EPOCH, Instant.EPOCH, null)
@@ -84,37 +76,15 @@ class DirectionalIconsAndroidTest {
             }
         }
         val label = compose.activity.getString(R.string.chat_page_move_to_assistant)
-        fun openAndCapture(): ImageBitmap {
+        fun openMenu() {
             compose.onNodeWithText(conversation.title).performTouchInput { longClick() }
-            return compose.onNodeWithText(label).assertHasClickAction().captureToImage()
+            compose.onNodeWithText(label).assertHasClickAction()
         }
-        val ltrRow = openAndCapture()
+        openMenu()
         compose.onNodeWithText(label).performClick()
         compose.runOnIdle { assertEquals(listOf(conversation), moved); direction.value = LayoutDirection.Rtl }
-        val rtlRow = openAndCapture()
-        // Only the leading icon region is compared; text uses the normal RTL layout and is not mirrored.
-        val width = with(compose.density) { 40.dp.toPx() }.roundToInt()
-        assertHorizontalMirror(ltrRow, rtlRow, width)
+        openMenu()
         compose.onNodeWithText(label).performClick()
         compose.runOnIdle { assertEquals(listOf(conversation, conversation), moved) }
-    }
-
-    private fun assertHorizontalMirror(ltr: ImageBitmap, rtl: ImageBitmap, leadingWidth: Int = ltr.width) {
-        assertEquals(ltr.width, rtl.width)
-        assertEquals(ltr.height, rtl.height)
-        val left = ltr.toPixelMap()
-        val right = rtl.toPixelMap()
-        var mirroredError = 0.0
-        var unchangedError = 0.0
-        for (y in 0 until ltr.height) for (x in 0 until leadingWidth) {
-            val expected = left[x, y]
-            val mirrored = right[rtl.width - 1 - x, y]
-            val unchanged = right[rtl.width - leadingWidth + x, y]
-            mirroredError += abs(expected.red - mirrored.red) + abs(expected.green - mirrored.green) + abs(expected.blue - mirrored.blue)
-            unchangedError += abs(expected.red - unchanged.red) + abs(expected.green - unchanged.green) + abs(expected.blue - unchanged.blue)
-        }
-        val count = leadingWidth * ltr.height * 3.0
-        assertTrue("fixture must contain asymmetric pixels", unchangedError / count > .008)
-        assertTrue("directional icon must mirror exactly once: mirror=$mirroredError unchanged=$unchangedError", mirroredError < unchangedError * .35)
     }
 }

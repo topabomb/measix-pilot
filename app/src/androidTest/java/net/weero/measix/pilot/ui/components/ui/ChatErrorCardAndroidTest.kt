@@ -160,7 +160,6 @@ class ChatErrorCardAndroidTest {
         compose.mainClock.advanceTimeBy(1_000)
         compose.waitForIdle()
         // Native dialog windows and Compose semantics reach idle independently.
-        android.os.SystemClock.sleep(750)
         androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(250, 5_000)
         val screenshot = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
         val arguments = androidx.test.platform.app.InstrumentationRegistry.getArguments()

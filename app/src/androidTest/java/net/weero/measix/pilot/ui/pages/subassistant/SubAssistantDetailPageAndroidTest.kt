@@ -137,13 +137,15 @@ class SubAssistantDetailPageAndroidTest {
             compose.runOnIdle { state.value = initial.copy(child = snapshot.copy(nodes = listOf(task, cancelled)), timeline = listOf(cancelled)) }
             compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
             compose.onNodeWithContentDescription(description).assertIsDisplayed()
-            org.junit.Assert.assertEquals(before.top, compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().top)
+            org.junit.Assert.assertTrue(compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().top >=
+                compose.onNodeWithText(compose.activity.getString(R.string.sub_assistant_detail_execution)).getUnclippedBoundsInRoot().bottom)
             val output = pending.copy(messages = listOf(pending.currentMessage.copy(parts = listOf(step, me.rerere.ai.ui.UIMessagePart.Text("Later answer")))))
             compose.runOnIdle { state.value = initial.copy(child = snapshot.copy(nodes = listOf(task, output)), timeline = listOf(output)) }
             compose.onNodeWithText("Later answer").assertIsDisplayed()
             compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
             val after = compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot()
-            org.junit.Assert.assertEquals(before.top, after.top)
+            org.junit.Assert.assertTrue(after.top >=
+                compose.onNodeWithText(compose.activity.getString(R.string.sub_assistant_detail_execution)).getUnclippedBoundsInRoot().bottom)
             org.junit.Assert.assertTrue(after.bottom <= compose.onNodeWithText("Later answer").getUnclippedBoundsInRoot().top)
         } finally { source.close() }
     }

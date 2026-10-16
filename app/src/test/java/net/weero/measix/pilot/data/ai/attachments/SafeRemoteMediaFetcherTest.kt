@@ -221,4 +221,27 @@ class SafeRemoteMediaFetcherTest {
             assertTrue(call.isCancelled)
         }
     }
+    @Test fun `real transport decodes Basic credentials and bounds chunked bodies`() = kotlinx.coroutines.runBlocking {
+        ServerSocket(0, 1, InetAddress.getByName("127.0.0.1")).use { server ->
+            val request = kotlinx.coroutines.CompletableDeferred<String>()
+            kotlin.concurrent.thread(isDaemon = true) {
+                server.accept().use { socket ->
+                    val reader = socket.getInputStream().bufferedReader()
+                    request.complete(generateSequence { reader.readLine()?.takeIf { it.isNotEmpty() } }.joinToString("\n"))
+                    socket.getOutputStream().apply {
+                        write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n800\r\n".toByteArray())
+                        write(ByteArray(2048)); write("\r\n0\r\n\r\n".toByteArray()); flush()
+                    }
+                }
+            }
+            val result = kotlinx.coroutines.withTimeout(5000) {
+                SafeRemoteMediaFetcher.defaultTransport(URL("http://u%2B:p%40ss@attachment.test:${server.localPort}/image"),
+                    listOf(InetAddress.getByName("127.0.0.1")), 1000, 2000, 1024)
+            }
+            assertEquals(413, result.code)
+            assertTrue(request.await().contains("Authorization: ${okhttp3.Credentials.basic("u+", "p@ss")}"))
+            assertTrue(request.await().contains("Host: attachment.test:"))
+        }
+    }
+
 }

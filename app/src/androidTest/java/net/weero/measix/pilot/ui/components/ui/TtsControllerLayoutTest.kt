@@ -8,7 +8,6 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
@@ -25,8 +24,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableIntStateOf
@@ -34,16 +31,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
-import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
-import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -60,8 +53,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import dev.chrisbanes.haze.hazeSource
-import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.flow.MutableStateFlow
 import me.rerere.tts.model.PlaybackState
 import me.rerere.tts.model.PlaybackStatus
@@ -95,83 +86,6 @@ class TtsControllerLayoutTest {
     private var hideKeyboard: () -> Unit = {}
     private var currentImeBottom: () -> Int = { 0 }
     private var backgroundClicks = 0
-
-    @Test
-    fun toolbarMatchesInputSurfaceAcrossBlurBackgroundAndThemeChanges() {
-        val blur = mutableStateOf(false)
-        val visibleBackground = mutableStateOf(true)
-        val dark = mutableStateOf(false)
-        val backdrop = Color(0xFF2050A0)
-        val baseSettings = Settings()
-        compose.setContent {
-            CompositionLocalProvider(
-                LocalTTSState provides tts,
-                LocalSettings provides baseSettings.copy(
-                    displaySetting = baseSettings.displaySetting.copy(enableBlurEffect = blur.value),
-                ),
-            ) {
-                MaterialTheme(colorScheme = if (dark.value) darkColorScheme() else lightColorScheme()) {
-                    val hazeState = rememberHazeState()
-                    Box(Modifier.requiredSize(320.dp, 400.dp).testTag("surface_window")) {
-                        Box(Modifier.fillMaxSize().hazeSource(hazeState).background(backdrop))
-                        ChatOverlaySurface(
-                            modifier = Modifier.padding(8.dp).fillMaxWidth().height(72.dp).testTag("input_surface"),
-                            shape = MaterialTheme.shapes.large,
-                            enableBlurEffect = blur.value,
-                            hasVisibleBackground = visibleBackground.value,
-                            hazeState = hazeState,
-                        ) {}
-                        TTSController(
-                            windowInsets = WindowInsets(0),
-                            hazeState = hazeState,
-                            hasVisibleBackground = visibleBackground.value,
-                        )
-                    }
-                }
-            }
-        }
-        for (isDark in listOf(false, true)) {
-            for (hasBackground in listOf(true, false)) {
-                for (enableBlur in listOf(false, true)) {
-                    compose.runOnIdle {
-                        dark.value = isDark
-                        visibleBackground.value = hasBackground
-                        blur.value = enableBlur
-                    }
-                    compose.waitForIdle()
-                    val window = compose.onNodeWithTag("surface_window")
-                    val root = window.fetchSemanticsNode().boundsInRoot
-                    val pixels = window.captureToImage().toPixelMap()
-                    fun sampleSurface(tag: String): Color {
-                        val bounds = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
-                        val x = (bounds.center.x - root.left).toInt()
-                        val y = (bounds.top - root.top + with(compose.density) { 2.dp.toPx() }).toInt()
-                        val samples = (-8..8).map { pixels[x + it, y] }
-                        return Color(
-                            samples.map { it.red }.average().toFloat(),
-                            samples.map { it.green }.average().toFloat(),
-                            samples.map { it.blue }.average().toFloat(),
-                        )
-                    }
-                    val toolbar = sampleSurface("tts_controller")
-                    val input = sampleSurface("input_surface")
-                    fun assertColor(expected: Color, actual: Color) {
-                        assertEquals(expected.red, actual.red, 0.03f)
-                        assertEquals(expected.green, actual.green, 0.03f)
-                        assertEquals(expected.blue, actual.blue, 0.03f)
-                    }
-                    assertColor(input, toolbar)
-                    if (!enableBlur) {
-                        val scheme = if (isDark) darkColorScheme() else lightColorScheme()
-                        val expected = scheme.surfaceContainerLow.copy(
-                            alpha = if (hasBackground) 0.82f else 1f,
-                        ).compositeOver(backdrop)
-                        assertColor(expected, toolbar)
-                    }
-                }
-            }
-        }
-    }
 
     @Test
     fun toolbarTracksMeasuredInputPanelThroughHeightAndImeChanges() {

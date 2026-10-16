@@ -85,12 +85,19 @@ jobs:
           arch: x86_64
           enable-hw-keyboard: false
           disable-animations: true
-          script: bash gradlew connectedDebugAndroidTest --no-parallel --max-workers=1
+          script: |
+            bash gradlew connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.searchPickerWindow=compact' --no-parallel --max-workers=1
+            mv app/build/reports/androidTests app/build/reports/androidTests-compact
+            mv app/build/outputs/androidTest-results app/build/outputs/androidTest-results-compact
+            trap 'adb shell wm size reset; adb shell wm density reset' EXIT
+            adb shell wm size 1000x800
+            adb shell wm density 160
+            bash gradlew :app:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=net.weero.measix.pilot.ui.components.ai.SearchPickerBackAndroidTest' '-Pandroid.testInstrumentationRunnerArguments.searchPickerWindow=expanded' --no-parallel --max-workers=1
       - name: Upload Android reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-verification
           path: |
-            **/build/reports/androidTests/
-            **/build/outputs/androidTest-results/
+            **/build/reports/androidTests*/
+            **/build/outputs/androidTest-results*/

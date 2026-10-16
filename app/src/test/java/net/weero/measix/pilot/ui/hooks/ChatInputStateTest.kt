@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.ui.hooks
 
-import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,8 +10,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import kotlin.uuid.Uuid
 
-@RunWith(AndroidJUnit4::class)
-class ChatInputStateAndroidTest {
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class ChatInputStateTest {
     @Test
     fun committedSubmissionClearsCapturedInputButPreservesEditsAndNewAttachments() {
         val oldAttachment = UIMessagePart.Image("file:///managed/old.png")

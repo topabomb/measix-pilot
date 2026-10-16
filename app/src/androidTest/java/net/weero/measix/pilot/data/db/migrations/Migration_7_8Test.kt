@@ -14,7 +14,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Verifies every supported pre-v8 database path against the current schema. */
+/** Verifies the payload-token migration; historical full-chain coverage lives in Migration_10_11Test. */
 @RunWith(AndroidJUnit4::class)
 class Migration_7_8Test {
     @get:Rule
@@ -34,82 +34,6 @@ class Migration_7_8Test {
         val migrated = helper.runMigrationsAndValidate("migration-v7-v8", 8, true, Migration_7_8)
         assertArtifact(migrated, "upload/v7.png", "GENERATED")
         assertTrue(columns(migrated, "artifact").contains("payload_token"))
-        assertNoForeignKeyViolations(migrated)
-        migrated.close()
-    }
-
-    @Test
-    fun v6ToV8PreservesDataAcrossBothMigrations() {
-        val db = helper.createDatabase("migration-v6-v8", 6)
-        seedArtifact(db, "upload/v6.png", "USER")
-        db.close()
-
-        val migrated = helper.runMigrationsAndValidate(
-            "migration-v6-v8",
-            8,
-            true,
-            Migration_6_7,
-            Migration_7_8,
-        )
-        assertArtifact(migrated, "upload/v6.png", "USER")
-        assertNoForeignKeyViolations(migrated)
-        migrated.close()
-    }
-
-    @Test
-    fun v5ToV8PreservesManagedFileAcrossFullMigrationChain() {
-        val db = helper.createDatabase("migration-v5-v8", 5)
-        db.execSQL(
-            "INSERT INTO managed_files " +
-                "(folder, relative_path, display_name, mime_type, size_bytes, created_at, updated_at) " +
-                "VALUES ('upload', 'upload/v5.png', 'asset.png', 'image/png', 17, 100, 200)"
-        )
-        db.close()
-
-        val migrated = helper.runMigrationsAndValidate(
-            "migration-v5-v8",
-            8,
-            true,
-            Migration_5_6,
-            Migration_6_7,
-            Migration_7_8,
-        )
-        assertArtifact(migrated, "upload/v5.png", "USER")
-        assertNoForeignKeyViolations(migrated)
-        migrated.close()
-    }
-
-    @Test
-    fun v1ToV8ExecutesCompleteHistoricalChainAndPreservesConversation() {
-        val id = "conversation-v1-v8"
-        val db = helper.createDatabase("migration-v1-v8", 1)
-        db.execSQL(
-            "INSERT INTO ConversationEntity " +
-                "(id, assistant_id, title, nodes, create_at, update_at, suggestions, is_pinned, " +
-                "custom_system_prompt, mode_injection_ids, workspace_cwd) " +
-                "VALUES (?, ?, ?, '[]', 10, 20, '[]', 1, '', '[]', '')",
-            arrayOf<Any?>(id, "0950e2dc-9bd5-4801-afa3-aa887aa36b4e", "from-v1"),
-        )
-        db.close()
-
-        val migrated = helper.runMigrationsAndValidate(
-            "migration-v1-v8",
-            8,
-            true,
-            Migration_1_2,
-            Migration_2_3,
-            Migration_3_4,
-            Migration_4_5,
-            Migration_5_6,
-            Migration_6_7,
-            Migration_7_8,
-        )
-        query(migrated, "SELECT title, is_pinned FROM ConversationEntity WHERE id = '$id'").use { cursor ->
-            assertTrue(cursor.moveToFirst())
-            assertEquals("from-v1", cursor.getString(0))
-            assertEquals(1, cursor.getInt(1))
-            assertFalse(cursor.moveToNext())
-        }
         assertNoForeignKeyViolations(migrated)
         migrated.close()
     }

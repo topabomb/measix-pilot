@@ -111,7 +111,7 @@ Provider 覆盖 OpenAI、Gemini、Claude、DeepSeek 及相应兼容接口，包�
 
 本文随 **0.0.20** 更新，截图使用该版本源码构建的 Debug 版。安装时请核对对应版本说明；也可以按下方命令自行构建。
 
-1. 从本仓库的 [Releases](https://github.com/topabomb/rikkahub_mcp/releases) 查看可用发行与版本说明，或按下方命令自行构建。支持 **Android 8.0+**，APK 面向 **arm64-v8a / x86_64**。
+1. 从本仓库的 [Releases](https://github.com/topabomb/measix-pilot/releases) 查看可用发行与版本说明，或按下方命令自行构建。支持 **Android 8.0+**，APK 面向 **arm64-v8a / x86_64**。
 2. 个人使用时，启用并配置 Provider、填写自己的 API Key，选择模型与助手。首次启动的预设 Provider 默认禁用。
 3. 创建会话，输入任务或添加资料；需要更多能力时再配置 MCP、Skills 和 Workspace。本地 Shell 需要先安装并初始化 Linux 环境。
 4. 组织使用时，按管理员提供的材料接入企业空间，确认可用助手、模型与工具后开始工作。

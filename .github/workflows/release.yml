@@ -183,7 +183,7 @@ jobs:
 
           # 用 jq 从 APK 文件列表构建 downloads JSON 数组
           # 每项包含 name、url、size（人类可读）
-          REPO_URL="https://github.com/topabomb/rikkahub_mcp"
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
           DOWNLOADS_JSON=$(jq -n '[]')
           for apk in app/build/outputs/apk/release/*.apk; do
             FILENAME=$(basename "$apk")

@@ -103,7 +103,7 @@ ChatDrawer 组合
 
 正式发布包括 tag 触发和手动 `publish_release=true`。这两种情况必须提供 `KEY_BASE64` 与 `SIGNING_CONFIG`，并且所有 APK 必须通过 `apksigner verify` 后才能上传。手动的非发布 Artifact 构建允许不提供签名，产物不得当作正式版本分发。
 
-Release notes 从 `docs/dev/changelog.md` 提取版本段落，未找到时回退为 `Release <version>`。GitHub Release 发布后，本工作流通过 `repository_dispatch` 向 `measix-pilot-website` 发送 `app-release` 事件，包含版本、changelog 和 APK 列表；这一步需要 `WEBSITE_SYNC_TOKEN`。网站是否成功更新静态 `version.json` 是另一仓库的执行结果，dispatch 成功本身不能证明线上内容已更新。
+Release notes 从 `docs/dev/changelog.md` 提取版本段落，未找到时回退为 `Release <version>`。GitHub Release 发布后，本工作流通过 `repository_dispatch` 向 `measix-pilot-website` 发送 `app-release` 事件，包含版本、changelog 和 APK 列表；下载地址使用当前 `GITHUB_SERVER_URL` 与 `GITHUB_REPOSITORY` 生成，避免仓库改名后继续发布旧地址。这一步需要 `WEBSITE_SYNC_TOKEN`。网站是否成功更新静态 `version.json` 是另一仓库的执行结果，dispatch 成功本身不能证明线上内容已更新。
 
 ### 签名配置形状
 

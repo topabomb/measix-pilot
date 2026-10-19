@@ -14,6 +14,7 @@ import net.weero.measix.pilot.data.enterprise.EnterpriseExecutionLease
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.EnterpriseState
 import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.CapturedModelConfiguration
 import net.weero.measix.pilot.service.runtime.ConversationRuntime
 import kotlin.uuid.Uuid
@@ -517,42 +518,7 @@ class McpRuntimeCoordinator internal constructor(
         val definitions = connectionDefinitions(access, captured.configuration, captured.userSettings, captured.assistant, original, interactionId)
         val targets = definitions.map { definition ->
             val key = McpRuntimeKey(definition.id, access, interactionId)
-            val source = object : McpRuntimeDefinition {
-                override fun requireAuthority() = sessions.requirePublishedRealmAccess(access)
-
-                override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T =
-                    sessions.withAppliedConfiguration(access) { state ->
-                        check(state.manifest.phase == EnterpriseSessionPhase.READY) { "enterprise_session_not_ready" }
-                        settingsStore.withExecutionConfiguration(access.scope, state) { latest ->
-                            requireAuthority()
-                            lease.requireOpen()
-                            val configuration = latest.configuration
-                            val assistant = configuration.assistants[captured.assistant.id]
-                            val gateway = definition.managed?.gatewaySurface != null
-                            val allowed = assistant != null && configuration.access(ConfigurationCategory.ASSISTANT, assistant.id).canExecute &&
-                                if (gateway) configuration.enterpriseConfiguration?.gateways?.any { it.id == (definition.id as ConfigurationReference.Enterprise).id } == true
-                                else definition.id in assistant.mcpServers && configuration.access(ConfigurationCategory.MCP, definition.id).canExecute
-                            val current = when {
-                                !allowed -> null
-                                use == McpDefinitionUse.CATALOG_PUBLICATION && state.manifest.applied != original.version -> null
-                                definition is McpConnectionDefinition.ManagedPlatform -> {
-                                    original.execution
-                                    val resource = configuration.enterpriseConfiguration?.mcpServers?.find { it.id == definition.id.id }
-                                    val managedAssistant = configuration.enterpriseConfiguration?.assistants?.find {
-                                        it.id == (captured.assistant.id as? ConfigurationReference.Enterprise)?.id
-                                    }
-                                    val binding = managedAssistant?.mcpBindings?.find { it.mcpServerId == definition.id.id }
-                                    if (resource == null || (managedAssistant != null && binding == null &&
-                                            !configuration.permitsAdditionalManagedMcp(captured.assistant.id))) null
-                                    else definition.withToolAccess(resource, binding)
-                                }
-                                else -> latest.userSettings.mcpServers.find { it.id == definition.id }
-                                    ?.let { McpConnectionDefinition.User(it) }
-                            }
-                            operation(current)
-                        }
-                    }
-            }
+            val source = enterpriseRuntimeDefinition(access, { definition }, original, lease, captured.assistant.id)
             source.withCurrent(McpDefinitionUse.EXECUTION) { current ->
                 worker.ensureActive()
                 check(current != null) { "mcp_configuration_changed_during_capture" }
@@ -572,12 +538,15 @@ class McpRuntimeCoordinator internal constructor(
         definitions.zip(targets).forEach { (definition, runtime) ->
             catalogStore.catalogs.value[definition.catalogKey]?.let { runtime.hydrateCatalog(it) }
         }
-        val missingCatalogTargets = definitions.zip(targets).filter { (definition, runtime) ->
-            runtimeCapabilities.value[runtime.key]?.catalog?.definitionDigest != definition.mcpDefinitionDigest()
+        val preparationTargets = definitions.zip(targets).filter { (definition, runtime) ->
+            definition is McpConnectionDefinition.ManagedPlatform ||
+                runtimeCapabilities.value[runtime.key]?.catalog?.definitionDigest != definition.mcpDefinitionDigest()
         }.map { it.second }
-        targets.forEach { it.reconcile(refreshTools = false) }
-        val settled = missingCatalogTargets.isEmpty() || withTimeoutOrNull(TURN_CAPABILITY_PREPARE_TIMEOUT_MS) {
-            coroutineScope { missingCatalogTargets.map { async { it.awaitCurrentOperations() } }.forEach { it.await() } }
+        definitions.zip(targets).forEach { (definition, runtime) ->
+            runtime.reconcile(refreshTools = definition is McpConnectionDefinition.ManagedPlatform)
+        }
+        val settled = preparationTargets.isEmpty() || withTimeoutOrNull(TURN_CAPABILITY_PREPARE_TIMEOUT_MS) {
+            coroutineScope { preparationTargets.map { async { it.awaitCurrentOperations() } }.forEach { it.await() } }
             true
         } == true
         val result = captureCapabilities(definitions, access, interactionId, timedOut = !settled).let { capturedCapabilities ->
@@ -598,6 +567,59 @@ class McpRuntimeCoordinator internal constructor(
         return result
     }
 
+    /** Both Turn and explicit discovery retain the original Session → Settings → Runtime gate. */
+    private fun enterpriseRuntimeDefinition(
+        access: RealmAccess.Enterprise,
+        capturedDefinition: () -> McpConnectionDefinition,
+        original: EnterpriseExecutionLease,
+        lease: McpExecutionLease,
+        assistantId: ConfigurationReference? = null,
+        selection: RealmSelection? = null,
+    ) = object : McpRuntimeDefinition {
+        override fun requireAuthority() {
+            sessions.requirePublishedRealmAccess(access)
+            selection?.let(sessions::requirePublishedSelection)
+        }
+
+        override suspend fun <T> withCurrent(use: McpDefinitionUse, operation: suspend (McpConnectionDefinition?) -> T): T =
+            sessions.withAppliedConfiguration(access) { state ->
+                check(state.manifest.phase == EnterpriseSessionPhase.READY) { "enterprise_session_not_ready" }
+                settingsStore.withExecutionConfiguration(access.scope, state) { latest ->
+                    requireAuthority()
+                    lease.requireOpen()
+                    val definition = capturedDefinition()
+                    val configuration = latest.configuration
+                    val assistant = assistantId?.let(configuration.assistants::get)
+                    val gateway = definition.managed?.gatewaySurface != null
+                    val resourceAllowed = if (gateway) {
+                        configuration.enterpriseConfiguration?.gateways?.any {
+                            it.id == (definition.id as ConfigurationReference.Enterprise).id
+                        } == true
+                    } else configuration.access(ConfigurationCategory.MCP, definition.id).canExecute
+                    val assistantAllowed = assistantId == null || assistant != null &&
+                        configuration.access(ConfigurationCategory.ASSISTANT, assistant.id).canExecute &&
+                        (gateway || definition.id in assistant.mcpServers)
+                    val current = when {
+                        !resourceAllowed || !assistantAllowed -> null
+                        use == McpDefinitionUse.CATALOG_PUBLICATION && state.manifest.applied != original.version -> null
+                        definition is McpConnectionDefinition.ManagedPlatform -> {
+                            original.execution
+                            val resource = configuration.enterpriseConfiguration?.mcpServers?.find { it.id == definition.id.id }
+                            val managedAssistant = configuration.enterpriseConfiguration?.assistants?.find {
+                                it.id == (assistantId as? ConfigurationReference.Enterprise)?.id
+                            }
+                            val binding = managedAssistant?.mcpBindings?.find { it.mcpServerId == definition.id.id }
+                            if (resource == null || (managedAssistant != null && binding == null &&
+                                    !configuration.permitsAdditionalManagedMcp(requireNotNull(assistantId)))) null
+                            else definition.withToolAccess(resource, binding)
+                        }
+                        else -> latest.userSettings.mcpServers.find { it.id == definition.id }?.let { McpConnectionDefinition.User(it) }
+                    }
+                    operation(current)
+                }
+            }
+    }
+
     private fun connectionDefinitions(
         access: RealmAccess.Enterprise,
         configuration: ResolvedConfiguration,
@@ -613,20 +635,30 @@ class McpRuntimeCoordinator internal constructor(
             when (id) {
                 is ConfigurationReference.User -> settings.mcpServers.find { it.id == id }?.let { add(McpConnectionDefinition.User(it)) }
                 is ConfigurationReference.Enterprise -> enterprise.mcpServers.find { it.id == id.id }?.let { definition ->
-                    val execution = bindings.execution as EnterpriseExecution.Platform
-                    add(McpConnectionDefinition.ManagedPlatform(access, id, definition.name,
-                        execution, requireNotNull(definition.authOwnership), bindings.version, interactionId,
-                        toolAccess = definition,
-                        assistantBinding = enterprise.assistants.find { it.id == (assistant.id as? ConfigurationReference.Enterprise)?.id }
-                            ?.mcpBindings?.find { it.mcpServerId == id.id }) {
-                        check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
-                        val token = platform.accessToken(access.sessionId, execution.connection)
-                        check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
-                        sessions.requirePublishedRealmAccess(access)
-                        token.value
-                    })
+                    add(managedConnectionDefinition(access, id, definition, bindings, interactionId,
+                        enterprise.assistants.find { it.id == (assistant.id as? ConfigurationReference.Enterprise)?.id }
+                            ?.mcpBindings?.find { it.mcpServerId == id.id }))
                 }
             }
+        }
+    }
+
+    private fun managedConnectionDefinition(
+        access: RealmAccess.Enterprise,
+        id: ConfigurationReference.Enterprise,
+        resource: net.weero.measix.pilot.data.enterprise.EnterpriseMcpResource,
+        bindings: EnterpriseExecutionLease,
+        interactionId: String,
+        assistantBinding: net.weero.measix.pilot.data.enterprise.PlatformAssistantMcpBinding? = null,
+    ): McpConnectionDefinition.ManagedPlatform {
+        val execution = bindings.execution as EnterpriseExecution.Platform
+        return McpConnectionDefinition.ManagedPlatform(access, id, resource.name, execution,
+            requireNotNull(resource.authOwnership), bindings.version, interactionId, resource, assistantBinding) {
+            check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
+            val token = platform.accessToken(access.sessionId, execution.connection)
+            check(bindings.execution == execution) { "enterprise_execution_changed_during_mcp_request" }
+            sessions.requirePublishedRealmAccess(access)
+            token.value
         }
     }
 
@@ -659,7 +691,12 @@ class McpRuntimeCoordinator internal constructor(
                 capability.status is McpStatus.NeedsAuthorization -> McpServerCapabilityState.AUTHORIZATION_REQUIRED
                 capability.catalogRefresh == McpCatalogRefresh.RejectedEmpty -> McpServerCapabilityState.EMPTY_CATALOG
                 else -> McpServerCapabilityState.UNAVAILABLE
-            }, selected.size)
+            }, selected.size, catalogRefreshError = if (catalog != null && definition is McpConnectionDefinition.ManagedPlatform) {
+                (capability.catalogRefresh as? McpCatalogRefresh.Failed)?.error
+                    ?: (capability.status as? McpStatus.Error)
+                    ?: McpStatus.Error("MCP directory refresh timed out; previous directory retained")
+                        .takeIf { timedOut && (!capability.sessionCallable || capability.catalogRefresh == McpCatalogRefresh.Refreshing) }
+            } else null)
         }
         return TurnMcpCapabilitySnapshot(tools, outcomes)
     }
@@ -798,6 +835,97 @@ class McpRuntimeCoordinator internal constructor(
         awaitUserOperationReceipt(desired.map { it.id })
     }
 
+    /** Explicit refresh owns only discovery resources; it never creates a Conversation or Turn. */
+    internal suspend fun refreshManagedServers(
+        selection: RealmSelection,
+        expectedVersion: net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion,
+    ): McpRefreshReceipt = withContext(ioDispatcher) {
+        val access = selection.access as RealmAccess.Enterprise
+        var bindings: EnterpriseExecutionLease? = null
+        val owned = mutableListOf<McpServerRuntime>()
+        val cleanupReady = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val closed = mutableSetOf<McpRuntimeKey>()
+        val cleanupMutex = Mutex()
+        val lease = McpExecutionLease {
+            val failures = owned.mapNotNull { runtime ->
+                try {
+                    runtime.closeAndAwait()
+                    null
+                } catch (cleanup: Throwable) {
+                    cleanup
+                }
+            }
+            failures.firstOrNull()?.let { first ->
+                failures.drop(1).filter { it !== first }.forEach(first::addSuppressed)
+                throw first
+            }
+            bindings?.release()
+        }
+        var failure: Throwable? = null
+        try {
+            sessions.withSelectedRealmSelection(selection) { }
+            runtimeState.activeRuntimes.filter { it.key.access == access }.forEach { it.retryPendingClose() }
+            val resources = sessions.withAppliedConfiguration(access) { state ->
+                settingsStore.withExecutionConfiguration(access.scope, state) { latest ->
+                    sessions.requirePublishedSelection(selection)
+                    check(state.manifest.applied == expectedVersion) { "enterprise_configuration_changed_during_capture" }
+                    latest.configuration.enterpriseConfiguration?.mcpServers.orEmpty().mapNotNull { resource ->
+                        val id = ConfigurationReference.Enterprise(access.scope.authority, resource.id)
+                        if (!latest.configuration.access(ConfigurationCategory.MCP, id).canExecute) null
+                        else id to resource
+                    }
+                }
+            }
+            if (resources.isEmpty()) return@withContext McpRefreshReceipt(0, 0)
+            catalogStore.awaitReady()
+            bindings = sessions.captureExecution(access, expectedVersion)
+            val original = requireNotNull(bindings)
+            val interactionId = "int_${Uuid.random()}"
+            // Register cleanup ownership before suspendable definition admission can fail or be cancelled.
+            resources.forEach { (id, resource) ->
+                val definition by lazy {
+                    managedConnectionDefinition(access, id, resource, original, interactionId)
+                }
+                val source = enterpriseRuntimeDefinition(access, { definition }, original, lease, selection = selection)
+                runtime(McpRuntimeKey(id, access, interactionId), source,
+                    onResourcesClosed = { key ->
+                        cleanupReady.await()
+                        cleanupMutex.withLock {
+                            closed += key
+                            if (closed.size == owned.size) original.release()
+                        }
+                    }).also(owned::add)
+            }
+            cleanupReady.complete(Unit)
+            owned.forEach { it.reconcile(refreshTools = true) }
+            val complete = withTimeoutOrNull(USER_OPERATION_RECEIPT_TIMEOUT_MS) {
+                coroutineScope { owned.map { async { it.awaitCurrentOperations() } }.forEach { it.await() } }
+                true
+            } == true
+            sessions.requirePublishedSelection(selection)
+            val failures = resources.zip(owned).mapNotNull { (resource, runtime) ->
+                val capability = runtimeCapabilities.value[runtime.key] ?: McpRuntimeCapability.EMPTY
+                val error = (capability.catalogRefresh as? McpCatalogRefresh.Failed)?.error
+                    ?: capability.status as? McpStatus.Error
+                    ?: McpStatus.Error("MCP directory discovery did not complete: ${capability.status}")
+                        .takeIf { !complete || !capability.sessionCallable }
+                error?.let { "${resource.second.name}\n${it.detail ?: it.message}" }
+            }
+            check(failures.isEmpty()) { "mcp_catalog_refresh_failed:\n${failures.joinToString("\n\n")}" }
+            McpRefreshReceipt(owned.size, owned.size)
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            cleanupReady.complete(Unit)
+            try { lease.release() }
+            catch (cleanup: Throwable) {
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
     private suspend fun reconcile(
         desiredConfigs: List<McpServerConfig>,
         refreshTools: Boolean,
@@ -826,6 +954,7 @@ class McpRuntimeCoordinator internal constructor(
     private fun runtime(
         key: McpRuntimeKey,
         source: McpRuntimeDefinition,
+        onResourcesClosed: suspend (McpRuntimeKey) -> Unit = {},
         onManagedSnapshotRequired: (ManagedSnapshotRequired) -> Unit = {},
     ): McpServerRuntime =
         runtimeState.getOrCreate(key) {
@@ -836,6 +965,7 @@ class McpRuntimeCoordinator internal constructor(
                 oauthCoordinator = oauthCoordinator, lifecycleOperationSemaphore = lifecycleOperationSemaphore,
                 ioDispatcher = ioDispatcher, foregroundState = foregroundState,
                 policy = runtimePolicy, logger = ::logMcp,
+                onResourcesClosed = { onResourcesClosed(key) },
                 onManagedSnapshotRequired = onManagedSnapshotRequired,
                 onManagedRuntimeProblem = { access, error ->
                     platform.acceptManagedRuntimeProblem(access, error)

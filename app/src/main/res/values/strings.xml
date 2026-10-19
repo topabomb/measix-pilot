@@ -2136,7 +2136,6 @@
   <string name="mcp_notification_unavailable">Tool connection available; automatic updates unavailable</string>
   <string name="mcp_catalog_refresh_failed">Refresh failed; previous directory retained</string>
   <string name="mcp_catalog_refreshing">Refreshing tools; previous directory retained</string>
-  <string name="mcp_refresh_personal">Refresh my MCPs</string>
   <string name="mcp_readiness_on_demand">%1$d selected · connects when used</string>
   <string name="about_page_platform_contract">Platform contract: %1$d</string>
   <string name="about_page_core_baseline">Baseline Core: %1$s</string>
@@ -2178,4 +2177,6 @@
   <string name="file_browser_result_summary">%1$s: %2$d completed</string>
   <string name="file_browser_open_destination">Open folder</string>
   <string name="webdav_enterprise_not_configured">Your organization has not provided WebDAV file access.</string>
+  <string name="mcp_refresh_tools">Refresh MCP tools</string>
+  <string name="mcp_refresh_failed">Could not update MCP tools</string>
 </resources>

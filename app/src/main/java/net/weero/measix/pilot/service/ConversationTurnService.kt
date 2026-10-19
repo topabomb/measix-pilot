@@ -744,6 +744,18 @@ class ConversationTurnService internal constructor(
                     val policyBlockedMcp = mcpCapabilities.serverOutcomes.filter {
                         it.state == McpServerCapabilityState.POLICY_BLOCKED
                     }
+                    val retainedDirectories = mcpCapabilities.serverOutcomes.filter { it.catalogRefreshError != null }
+                    if (retainedDirectories.isNotEmpty()) {
+                        chatErrorStore.add(ChatError(
+                            title = context.getString(R.string.mcp_catalog_refresh_failed),
+                            detail = retainedDirectories.joinToString("\n\n") { outcome ->
+                                val error = requireNotNull(outcome.catalogRefreshError)
+                                "${outcome.serverName}\n${error.detail ?: error.message}"
+                            },
+                            conversationId = conversationId,
+                            retention = ChatErrorRetention.UNTIL_DISMISSED,
+                        ))
+                    }
                     if (policyBlockedMcp.isNotEmpty()) {
                         chatErrorStore.add(
                             IllegalStateException(

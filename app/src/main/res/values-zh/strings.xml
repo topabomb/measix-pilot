@@ -2128,7 +2128,6 @@
   <string name="mcp_notification_unavailable">工具连接可用，自动更新暂不可用</string>
   <string name="mcp_catalog_refresh_failed">刷新失败，保留上次目录</string>
   <string name="mcp_catalog_refreshing">正在刷新工具，保留上次目录</string>
-  <string name="mcp_refresh_personal">刷新我的 MCP</string>
   <string name="mcp_readiness_on_demand">已选择 %1$d 项 · 使用时连接</string>
   <string name="about_page_platform_contract">平台合同：%1$d</string>
   <string name="about_page_core_baseline">基准 Core：%1$s</string>
@@ -2170,4 +2169,6 @@
   <string name="file_browser_result_summary">%1$s：已完成 %2$d 项</string>
   <string name="file_browser_open_destination">打开目录</string>
   <string name="webdav_enterprise_not_configured">企业尚未提供 WebDAV 文件访问。</string>
+  <string name="mcp_refresh_tools">刷新 MCP 工具</string>
+  <string name="mcp_refresh_failed">无法更新 MCP 工具</string>
 </resources>

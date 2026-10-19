@@ -2128,7 +2128,6 @@
   <string name="mcp_notification_unavailable">ツール接続は利用可能ですが、自動更新は利用できません</string>
   <string name="mcp_catalog_refresh_failed">更新に失敗しました。前回の一覧を保持しています</string>
   <string name="mcp_catalog_refreshing">ツールを更新中。前回の一覧を保持しています</string>
-  <string name="mcp_refresh_personal">自分の MCP を更新</string>
   <string name="mcp_readiness_on_demand">%1$d 件選択済み · 使用時に接続</string>
   <string name="about_page_platform_contract">プラットフォーム契約：%1$d</string>
   <string name="about_page_core_baseline">基準 Core：%1$s</string>
@@ -2170,4 +2169,6 @@
   <string name="file_browser_result_summary">%1$s：%2$d 件完了</string>
   <string name="file_browser_open_destination">フォルダーを開く</string>
   <string name="webdav_enterprise_not_configured">組織から WebDAV ファイルへのアクセスが提供されていません。</string>
+  <string name="mcp_refresh_tools">MCP ツールを更新</string>
+  <string name="mcp_refresh_failed">MCP ツールを更新できませんでした</string>
 </resources>

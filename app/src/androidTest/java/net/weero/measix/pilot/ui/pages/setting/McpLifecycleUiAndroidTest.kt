@@ -200,7 +200,7 @@ class McpLifecycleUiAndroidTest {
     }
 
     private fun refreshThroughUi() {
-        compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_refresh_personal)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_refresh_tools)).performClick()
     }
 
     private fun screenshot(name: String) {

@@ -14,8 +14,8 @@ MCP 的“工具能力”和“当前能否连通”是两类正交事实：
 因此：
 
 - timeout、断网、5xx、后台、Doze、连接重建和重试耗尽只改变连接健康，不删除同 definition 的已确认目录；
-- 用户手工刷新和服务端 `notifications/tools/list_changed` 是明确的目录重验请求；只有完整、合法的
-  `tools/list` 结果成功落盘后，才原子替换后续 turn 的 schema；
+- 企业新轮次准备、用户手工刷新和服务端 `notifications/tools/list_changed` 进入同一目录重验流程；只有完整、合法的
+  `tools/list` 结果成功落盘后，才原子提供给尚未冻结工具集合的轮次；
 - 当前运行中的 turn 只使用 run-start 快照。目录刷新、网络变化或 Settings revision 不会改写已经发给 Provider 的工具前缀；
 - 用户禁用/删除 server、修改连接 definition、禁用工具或收紧审批，是本地明确撤销。旧快照在远端副作用前 fail-closed；
 - 工具已经通过不可撤销调用承诺后，不因随后发生的配置或会话变化丢弃成功结果。承诺后 transport failure/timeout 返回
@@ -227,7 +227,8 @@ MCP 编辑器仅忽略本次新增且完全空的草稿行，已存空行仍需�
 启动时先从 `McpCatalogStore` 恢复与当前 `definitionDigest` 匹配的 durable LKG。恢复目录不需要网络，也不会把全部
 已登记 server 排进连接队列。新对话开始时只激活该 Assistant 选择的 server；新建、重新启用或修改 definition 的
 server 会主动建立其自身连接。恢复目录后仍为 `Idle`，表示按需连接，不报告刷新失败。
-用户刷新个人服务显式激活全部 enabled 用户 server。
+工具栏和下拉刷新显式激活全部 enabled 用户 server；企业空间同时重验当前获准的企业 MCP。
+单纯浏览页面或展开详情仍只读，不建立连接。
 
 每个 `McpRuntimeKey` 只有一个 `McpServerRuntime`。它持有 mutex、generation、client、已接受连接请求的 fingerprint 和各 operation Job；
 其子 scope 保留所有已接受的生命周期任务，取消或替换 Job 引用不会丢失尚未完成的清理。
@@ -262,7 +263,8 @@ Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进�
 | 触发 | 行为 | 是否改变 Agent schema |
 | --- | --- | --- |
 | 首次无 LKG 的新对话 | 连接并完整发现，最多等待 20 秒 | 成功提交合法目录后供本轮捕获；个人空目录拒绝，受管 Direct 空目录不装配工具 |
-| 工具栏刷新或列表下拉 | 全部 enabled 用户 slot 执行同一真实 operation receipt；补建退化的通知订阅 | 成功提交后影响后续 run |
+| 企业新一轮发送或重新生成 | 所选企业 MCP 即使已有 LKG 也完整重验，等待发现与提交后冻结；共享 20 秒上限 | 成功供本轮使用；失败或超时保留目录并报告沿用旧目录 |
+| 工具栏刷新或列表下拉 | 原选择下刷新用户服务及获准企业 MCP；企业发现使用短期租约，完成后关闭真实连接 | 更新页面目录和后续 run；不创建聊天或调用工具 |
 | 用户点击单 server 重试 | 强制重建该 slot 并等待真实 operation receipt | 成功提交后影响后续 run |
 | `notifications/tools/list_changed` | 350ms 去抖，同 slot single-flight，运行中通知合并为一次 follow-up | 成功提交后影响后续 run |
 | timeout、断网、5xx、transport close | 保留 LKG，进入同 slot 恢复调度；恢复后重验目录 | 失败不改变；恢复提交影响后续 run |
@@ -273,8 +275,19 @@ Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进�
 
 手工刷新与 `list_changed` 的共同点是“重新发现并提交”，不是直接清空 cache。刷新期间继续发布旧目录；分页中断、个人空目录、
 超时、取消、校验或 DataStore 提交失败均保留 LKG。用户 command 等待其接受的 connection/catalog Job 及合并的 follow-up，
-不能通过观察一个共享 status 猜测完成。前台 receipt 最多等待 20 秒；超时只结束 spinner 并提示剩余 server 在后台继续，
+不能通过观察一个共享 status 猜测完成。个人服务的前台 receipt 最多等待 20 秒；超时只结束 spinner 并提示剩余 server 在后台继续，
 不会取消 AppScope owner 的连接或发现操作。
+
+企业手动刷新由 `McpApplicationService.refreshAll` 复验原 `RealmSelection`，经已有企业执行 preflight 后调用
+`McpRuntimeCoordinator.refreshManagedServers`，不下载配置 Snapshot。临时连接复用 `McpServerRuntime`、完整分页和
+Catalog 提交；目录未变为 no-op，ALL 接纳新定义，ALLOWLIST 仍核对发布许可。
+没有获准服务时不取得执行租约；目录初始化成功后才捕获租约，并在任何可挂起准入前登记全部清理 owner。
+企业发现等待最多 20 秒，结束、失败或调用者取消都关闭其连接并释放原租约；超时显示刷新失败，
+不将已停止的企业操作计为后台继续。
+个人连接仍保留原 AppScope receipt 行为，不因企业 preflight 失败停止维护；企业失败仍返回原诊断，不报告整体成功。
+单项清理失败仍继续关闭其余临时连接，并保留全部清理诊断；资源或租约清理失败保留在原 Runtime，
+下次手动刷新或退出可重试，不关闭活动聊天的连接。页面使用原错误卡展示、复制诊断和重试；
+Runtime 自有清理超时作为带原始 cause 的操作失败呈现，不冒充用户取消。切换选择取消旧请求，旧结果不发布到新页面。
 
 ## 6. 连接恢复与移动端策略
 
@@ -306,8 +319,11 @@ Android default network 必须同时具备 `INTERNET + VALIDATED`；前后台和
 
 ## 7. Run 快照与调用结果
 
-Master 和每个 Target 在 run 开始时调用 `prepareTurnCapabilities()`：个人与企业都先等待 Catalog 初始化并恢复匹配目录，已有匹配 LKG 时立即捕获；仅缺目录的已选 server 才等待
-其 AppScope operation，全部缺失项共享 20 秒上限。随后生成 immutable `TurnMcpCapabilitySnapshot`：
+Master 和每个 Target 在 run 开始时调用 `prepareTurnCapabilities()`：先等待 Catalog 初始化并恢复匹配目录。
+所选企业 MCP 每个新轮次都完整重验并等待本次提交，不依赖新 generation 或远端通知；个人服务及企业借用的用户
+服务继续优先捕获匹配 LKG，仅缺目录时等待连接发现。全部需等待项共享 20 秒上限。
+失败或超时保留已确认目录，`McpServerCapabilityOutcome.catalogRefreshError` 携带原诊断，主聊天沿用原错误卡
+提示正在使用上次目录。CONTINUE、Step 和同轮重试不重验、不替换已经冻结的定义。随后生成 immutable `TurnMcpCapabilitySnapshot`：
 
 ```text
 Assistant 选择
@@ -365,8 +381,9 @@ Idle 不显示“使用时连接”或“已保存目录”正文，已确认目
 契约变化提示管理员重新发布，不与“调用前确认”混用。详情与原诊断按需展开。
 
 `userServers` 管理共享用户定义，保留 OAuth、工具策略与原编辑器，并说明跨空间影响。
-工具栏和下拉刷新共用用户刷新命令，spinner 只观察本次 20 秒 receipt；超时后的后台恢复不继续显示刷新动画。
-企业定义只读，浏览或下拉不创建 interaction 或执行连接，不提供编辑、删除、OAuth 或单工具策略入口。
+工具栏和下拉刷新共用携带原 `RealmSelection` 的刷新命令；仅有企业服务时也可刷新，不增加操作按钮。
+spinner 覆盖本次发现及必要清理，个人后台恢复不继续显示刷新动画。企业定义仍只读，浏览不创建执行连接；
+显式刷新只建立短期发现连接，不提供编辑、删除、OAuth 或单工具策略入口。
 
 按域查询携带原 RealmAccess，验证主体、generation、surface 与 binding 摘要；读取失败发布
 `McpCatalogReadState.Unavailable`，外层空间观察仍可恢复。切换选择先清空目录，重开重新授权，

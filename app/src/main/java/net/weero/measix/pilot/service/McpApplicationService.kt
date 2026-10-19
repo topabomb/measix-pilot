@@ -2,6 +2,9 @@ package net.weero.measix.pilot.service
 
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 import net.weero.measix.pilot.data.ai.mcp.McpRefreshReceipt
 import net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator
 import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
@@ -9,13 +12,39 @@ import net.weero.measix.pilot.data.ai.mcp.hasSameOAuthTrustBoundary
 import net.weero.measix.pilot.data.ai.mcp.validateMcpHeaders
 import net.weero.measix.pilot.data.ai.mcp.toolPolicyByName
 import net.weero.measix.pilot.data.datastore.SettingsStore
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 
 /** Typed UI command boundary for MCP configuration and external lifecycle operations. */
-class McpApplicationService(
+class McpApplicationService internal constructor(
     private val coordinator: McpRuntimeCoordinator,
     private val settingsStore: SettingsStore,
+    private val sessions: EnterpriseSessionController,
+    private val synchronization: EnterpriseSynchronizationService,
 ) {
-    suspend fun refreshAll(): McpRefreshReceipt = coordinator.refreshAllRegisteredServers()
+    internal suspend fun refreshAll(selection: RealmSelection): McpRefreshReceipt = coroutineScope {
+        sessions.withSelectedRealmSelection(selection) { }
+        val user = async { coordinator.refreshAllRegisteredServers() }
+        val access = selection.access
+        // Shared user definitions retain their personal maintenance owner even if enterprise preflight fails.
+        val managed = try {
+            Result.success(if (access is RealmAccess.Enterprise) {
+                val version = synchronization.prepareExecution(access)
+                sessions.withSelectedRealmSelection(selection) { }
+                coordinator.refreshManagedServers(selection, version)
+            } else McpRefreshReceipt(0, 0))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+        val personalReceipt = user.await()
+        sessions.withSelectedRealmSelection(selection) { }
+        val managedReceipt = managed.getOrThrow()
+        McpRefreshReceipt(personalReceipt.requestedServerCount + managedReceipt.requestedServerCount,
+            personalReceipt.settledServerCount + managedReceipt.settledServerCount)
+    }
 
     suspend fun restart(serverId: ConfigurationReference): McpRefreshReceipt = coordinator.restartServer(userReference(serverId))
 

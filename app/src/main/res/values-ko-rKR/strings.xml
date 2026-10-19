@@ -2128,7 +2128,6 @@
   <string name="mcp_notification_unavailable">도구 연결은 사용 가능하지만 자동 업데이트는 사용할 수 없습니다</string>
   <string name="mcp_catalog_refresh_failed">새로고침 실패 · 이전 목록 유지</string>
   <string name="mcp_catalog_refreshing">도구 새로고침 중 · 이전 목록 유지</string>
-  <string name="mcp_refresh_personal">내 MCP 새로고침</string>
   <string name="mcp_readiness_on_demand">%1$d개 선택됨 · 사용 시 연결</string>
   <string name="about_page_platform_contract">플랫폼 계약: %1$d</string>
   <string name="about_page_core_baseline">기준 Core: %1$s</string>
@@ -2170,4 +2169,6 @@
   <string name="file_browser_result_summary">%1$s: %2$d개 완료</string>
   <string name="file_browser_open_destination">폴더 열기</string>
   <string name="webdav_enterprise_not_configured">조직에서 WebDAV 파일 접근을 제공하지 않았습니다.</string>
+  <string name="mcp_refresh_tools">MCP 도구 새로고침</string>
+  <string name="mcp_refresh_failed">MCP 도구를 업데이트하지 못했습니다</string>
 </resources>

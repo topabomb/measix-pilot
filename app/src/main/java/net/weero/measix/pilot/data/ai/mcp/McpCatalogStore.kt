@@ -167,6 +167,7 @@ data class McpServerCapabilityOutcome(
     val serverName: String,
     val state: McpServerCapabilityState,
     val toolCount: Int,
+    val catalogRefreshError: McpStatus.Error? = null,
 )
 
 sealed interface McpCatalogCommitResult {

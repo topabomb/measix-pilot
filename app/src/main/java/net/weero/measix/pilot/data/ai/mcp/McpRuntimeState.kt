@@ -5,7 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 
-/** Bounded foreground acknowledgement for AppScope-owned refresh work. */
+/** Foreground acknowledgement for completed discovery and any continuing personal connection work. */
 data class McpRefreshReceipt(
     val requestedServerCount: Int,
     val settledServerCount: Int,

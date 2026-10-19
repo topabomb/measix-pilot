@@ -2128,7 +2128,6 @@
   <string name="mcp_notification_unavailable">Подключение доступно; автоматическое обновление недоступно</string>
   <string name="mcp_catalog_refresh_failed">Не удалось обновить; сохранён предыдущий каталог</string>
   <string name="mcp_catalog_refreshing">Обновление инструментов; сохранён предыдущий каталог</string>
-  <string name="mcp_refresh_personal">Обновить мои MCP</string>
   <string name="mcp_readiness_on_demand">Выбрано: %1$d · подключение при использовании</string>
   <string name="about_page_platform_contract">Контракт платформы: %1$d</string>
   <string name="about_page_core_baseline">Базовая версия Core: %1$s</string>
@@ -2170,4 +2169,6 @@
   <string name="file_browser_result_summary">%1$s: выполнено %2$d</string>
   <string name="file_browser_open_destination">Открыть папку</string>
   <string name="webdav_enterprise_not_configured">Ваша организация не предоставила доступ к файлам по WebDAV.</string>
+  <string name="mcp_refresh_tools">Обновить инструменты MCP</string>
+  <string name="mcp_refresh_failed">Не удалось обновить инструменты MCP</string>
 </resources>

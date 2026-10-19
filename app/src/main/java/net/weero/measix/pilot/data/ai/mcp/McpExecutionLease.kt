@@ -6,7 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-/** Original Turn owner keeps its connections and binding alive across user interaction pauses. */
+/** An operation owns its connections and binding; a Turn retains them across user interaction pauses. */
 internal class McpExecutionLease(private val releaseOwner: suspend () -> Unit) {
     private val closed = AtomicBoolean(false)
     private val mutex = Mutex()

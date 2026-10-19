@@ -45,6 +45,12 @@ Gradle daemon 的堆配置不影响测试进程。超时报告须检查 suppress
 | Android 上下文与首发 | `EnterpriseStarterPersistenceAndroidTest`、`StarterSubmissionOwnershipAndroidTest`；`ChatContextFlowAndroidTest`、`ChatDocumentContextFlowAndroidTest`、`ConversationContextAndroidTest`、`StarterEntryFlowAndroidTest`、`StarterV5ChatFlowAndroidTest` | Keystore/AtomicFile、Room、附件归还、取消和页面重开；分别标明 Mock 的配置、网络与 Provider 边界 |
 
 Artifact、GeneratedMedia、备份、MCP、Workspace 与 Speech 的行为测试随各自 Store、service 或 runtime 定位。
+
+`McpManagedCatalogRefreshTest` 使用真实 SDK/HTTP 与受控配置 owner 验证同一发布下无通知的 8→9 工具更新、
+描述/参数及空目录替换、等待提交、初始化失败与捕获后撤权清理、HTTP 诊断、取消、切换选择、退出并发、
+单项清理失败时关闭其余连接及清理重试；
+不代替真实 Core/上游验收。
+
 Portal 的 JVM/本机 HTTP 测试观察文档及 Session 绑定、迟到请求、一次性兑换和媒体额度；WebView detach、
 媒体采集释放、AndroidKeyStore 与正式权限/后台路径仍需 Android 或显式 live 场景。
 配置提交失败注入不能冒充设备磁盘故障，返回空集合的替身不能掩盖退出、清理或恢复错误。

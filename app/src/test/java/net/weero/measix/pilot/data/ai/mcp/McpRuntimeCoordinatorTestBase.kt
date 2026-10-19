@@ -90,7 +90,9 @@ internal abstract class McpRuntimeCoordinatorTestBase {
         coEvery { catalogStore.commitCandidate(any()) } coAnswers {
             val candidate = firstArg<McpCatalogCandidate>()
             val previous = catalogs.value[candidate.key]
-            if (candidate.tools.isEmpty()) {
+            val acceptsEmptyDirectory = (candidate.serverId as? ConfigurationReference.Enterprise)?.id
+                ?.startsWith("mcp_") == true
+            if (candidate.tools.isEmpty() && !acceptsEmptyDirectory) {
                 McpCatalogCommitResult.RejectedEmpty(
                     previous?.takeIf { it.definitionDigest == candidate.definitionDigest }
                 )

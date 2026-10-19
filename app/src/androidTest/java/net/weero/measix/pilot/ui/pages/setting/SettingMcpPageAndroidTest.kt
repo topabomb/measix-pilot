@@ -46,6 +46,54 @@ class SettingMcpPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test
+    fun managedOnlyPageRefreshRetainsFailureAndRetriesToTheUpdatedCount() {
+        val authority = EnterpriseAuthority("refresh-ui")
+        val access = RealmAccess.Enterprise(ConfigurationScope.Enterprise(authority, "user"), "session")
+        val selection = RealmSelection(access, 1)
+        fun row(count: Int) = McpServerPresentation(ConfigurationReference.Enterprise(authority, "mcp_refresh"),
+            "Enterprise tools", true, null, access, status = McpStatus.Idle, sessionCallable = false,
+            tools = (1..count).map { McpToolPresentation("tool_$it", "description", JsonObject(emptyMap()), true, false) },
+            allowsAllTools = true, directoryConfirmed = true)
+        val catalog = MutableStateFlow<McpCatalogUiModel?>(McpCatalogUiModel(selection,
+            McpCatalogReadState.Available(listOf(row(8)))))
+        val query = mockk<McpQueryService>()
+        every { query.userServers } returns MutableStateFlow(emptyList())
+        every { query.catalog } returns catalog
+        val commands = mockk<McpApplicationService>()
+        val gate = CompletableDeferred<Unit>()
+        var attempts = 0
+        coEvery { commands.refreshAll(selection) } coAnswers {
+            if (++attempts == 1) throw java.io.IOException("fixture MCP directory diagnostic")
+            gate.await()
+            catalog.value = McpCatalogUiModel(selection, McpCatalogReadState.Available(listOf(row(9))))
+            McpRefreshReceipt(1, 1)
+        }
+        compose.setContent {
+            McpTestTheme {
+                CompositionLocalProvider(LocalToaster provides rememberToasterState(),
+                    LocalNavController provides Navigator(mutableListOf<NavKey>(Screen.Startup()))) {
+                    SettingMcpPage(commands, query, mockk())
+                }
+            }
+        }
+        compose.onNodeWithText("8/8").assertIsDisplayed()
+        val refresh = compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_refresh_tools))
+        refresh.assertIsEnabled().performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_refresh_failed)).assertIsDisplayed()
+        compose.onNodeWithText("8/8").assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performClick()
+        compose.onNode(hasText("fixture MCP directory diagnostic", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.application_recovery_retry)).performClick()
+        refresh.assertIsNotEnabled()
+        compose.runOnIdle { gate.complete(Unit) }
+        compose.onNodeWithText("9/9").assertIsDisplayed()
+        refresh.assertIsEnabled()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_refresh_failed)).assertDoesNotExist()
+        coVerify(exactly = 2) { commands.refreshAll(selection) }
+    }
+
+    @Test
     fun toolbarAndPullGestureShareOneRefreshInPersonalAndEnterpriseViews() {
         val config = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "My MCP"), url = "https://example.test/mcp")
         val row = config.toPresentation(McpRuntimeCapability.EMPTY)
@@ -57,7 +105,7 @@ class SettingMcpPageAndroidTest {
         val commands = mockk<McpApplicationService>()
         var calls = 0
         var accepted = CompletableDeferred<McpRefreshReceipt>()
-        coEvery { commands.refreshAll() } coAnswers { calls++; accepted.await() }
+        coEvery { commands.refreshAll(any()) } coAnswers { calls++; accepted.await() }
         compose.setContent {
             McpTestTheme {
                 CompositionLocalProvider(LocalToaster provides rememberToasterState(),
@@ -66,8 +114,8 @@ class SettingMcpPageAndroidTest {
                 }
             }
         }
-        val refresh = compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_refresh_personal))
-        compose.onNodeWithText(compose.activity.getString(R.string.mcp_refresh_personal)).assertDoesNotExist()
+        val refresh = compose.onNodeWithContentDescription(compose.activity.getString(R.string.mcp_refresh_tools))
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_refresh_tools)).assertDoesNotExist()
         refresh.assertIsEnabled().performClick()
         compose.waitUntil { calls == 1 }
         refresh.assertIsNotEnabled()
@@ -92,7 +140,8 @@ class SettingMcpPageAndroidTest {
         compose.runOnIdle { accepted.complete(McpRefreshReceipt(1, 1)) }
         compose.waitForIdle()
         refresh.assertIsEnabled()
-        coVerify(exactly = 3) { commands.refreshAll() }
+        coVerify(exactly = 2) { commands.refreshAll(RealmSelection(RealmAccess.Personal, 1)) }
+        coVerify(exactly = 1) { commands.refreshAll(RealmSelection(access, 2)) }
     }
 
     /** Display evidence uses a controlled query projection; runtime/enterprise authorization is tested separately. */
@@ -251,7 +300,7 @@ class SettingMcpPageAndroidTest {
         compose.onNodeWithText("Recovered enterprise tools").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("retry original detail", substring = true).assertDoesNotExist()
         coVerify(exactly = 3) { query.retryCatalog(selection) }
-        coVerify(exactly = 0) { commands.refreshAll() }
+        coVerify(exactly = 0) { commands.refreshAll(any()) }
     }
 
     @Test fun directToolRangesAndContractFailuresUseExistingReadOnlyCards() {

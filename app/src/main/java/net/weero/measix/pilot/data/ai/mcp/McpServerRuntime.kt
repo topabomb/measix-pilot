@@ -114,6 +114,7 @@ internal class McpServerRuntime(
     private val onClosed: (McpRuntimeKey) -> Unit,
     private val onManagedSnapshotRequired: (ManagedSnapshotRequired) -> Unit,
     private val onManagedRuntimeProblem: suspend (RealmAccess.Enterprise, Throwable) -> Unit = { _, _ -> },
+    private val onResourcesClosed: suspend () -> Unit = {},
 ) {
     val serverId: ConfigurationReference get() = key.serverId
     val mutex = Mutex()
@@ -305,6 +306,16 @@ internal class McpServerRuntime(
         close.await()
     }
 
+    /** An explicit retry may finish failed cleanup without retiring another active interaction. */
+    suspend fun retryPendingClose() {
+        val close = mutex.withLock {
+            if (!closing) return@withLock null
+            beginCloseLocked()
+            closeOperation
+        }
+        close?.await()
+    }
+
     private fun teardownLocked() {
         if (!closing) {
             closing = true
@@ -325,12 +336,15 @@ internal class McpServerRuntime(
             try {
                 withTimeout(policy.clientCloseTimeoutMs) { runtimeJob.join() }
                 connectionOperationMutex.withLock { closeConnectionsBefore(Long.MAX_VALUE) }
+                // A failed binding release keeps this runtime registered so cleanup can be retried.
+                onResourcesClosed()
                 mutex.withLock { stateStore.remove(this@McpServerRuntime) }
                 logger(getServerName(), "Disconnected (resources closed)")
                 onClosed(key)
             } catch (timeout: TimeoutCancellationException) {
-                mutex.withLock { setStatusLocked(McpStatus.Error("MCP resource cleanup timed out; retry required")) }
-                throw timeout
+                val failure = java.io.IOException("MCP resource cleanup timed out; retry required", timeout)
+                mutex.withLock { setStatusLocked(failureStatus(failure)) }
+                throw failure
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -480,16 +494,16 @@ internal class McpServerRuntime(
                 }
             }
         } catch (timeout: TimeoutCancellationException) {
-            if (!catalogAccepted) handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient, timeout)
+            if (!catalogAccepted) handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient, timeout, refreshTools)
         } catch (cancelled: CancellationException) {
             // Transport-owned cancellation can end initialization without cancelling this runtime worker.
             if (currentCoroutineContext().isActive) {
                 handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient,
-                    java.io.IOException("MCP connection interrupted", cancelled))
+                    java.io.IOException("MCP connection interrupted", cancelled), refreshTools)
             }
             throw cancelled
         } catch (error: Throwable) {
-            handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient, error)
+            handleConnectionFailure(requestedConfig, assignedGeneration, retryAfterFailure, newClient, error, refreshTools)
         } finally {
             val operation = currentCoroutineContext()[Job]
             withContext(NonCancellable) {
@@ -524,6 +538,7 @@ internal class McpServerRuntime(
         retryAfterFailure: Boolean,
         failedClient: Client?,
         error: Throwable,
+        refreshTools: Boolean = false,
     ) {
         ManagedSnapshotRequired.find(error)?.let {
             acceptManagedBarrier(assignedGeneration, it)
@@ -533,6 +548,9 @@ internal class McpServerRuntime(
         val authorizationRequired = needsAuthorization(requestedConfig, error)
         mutex.withLock {
             if (generation.get() != assignedGeneration) return@withLock
+            if (refreshTools) {
+                publishHealthLocked(catalogRefresh = McpCatalogRefresh.Failed(failureStatus(error)))
+            }
             if (client === failedClient) {
                 activeConnection = null
                 fingerprint = null
@@ -1375,8 +1393,11 @@ internal class McpServerRuntime(
     private fun failureDetail(error: Throwable): String? =
         error.userVisibleDiagnostic()
 
-    private fun failureStatus(error: Throwable, fallback: String? = null): McpStatus.Error =
-        McpStatus.Error.from(error, fallback)
+    private fun failureStatus(error: Throwable, fallback: String? = null): McpStatus.Error {
+        val diagnostic = McpStatus.Error.from(error, fallback)
+        val http = McpProtocolFailureClassifier.httpCode(error).takeIf { it.isNotEmpty() } ?: return diagnostic
+        return McpStatus.Error("$http: ${diagnostic.message.orEmpty()}", "$http\n${diagnostic.detail.orEmpty()}")
+    }
 
     private fun getServerName(): String = displayName
 }

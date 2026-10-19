@@ -100,6 +100,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -127,6 +128,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -212,7 +214,12 @@ internal fun SettingMcpPage(
     val noPermissionText = stringResource(R.string.setting_provider_page_no_permission)
     val noQrFoundText = stringResource(R.string.setting_provider_page_no_qr_found)
     val conflictOverwriteText = stringResource(R.string.setting_mcp_page_conflict_overwrite)
-    var userRefreshRunning by remember { mutableStateOf(false) }
+    var refreshRunning by remember(catalog?.selection) { mutableStateOf(false) }
+    var refreshFailure by remember(catalog?.selection) { mutableStateOf<Throwable?>(null) }
+    var refreshJob by remember(catalog?.selection) { mutableStateOf<Job?>(null) }
+    DisposableEffect(catalog?.selection) {
+        onDispose { refreshJob?.cancel() }
+    }
     val showRefreshReceipt: (McpRefreshReceipt) -> Unit = { receipt ->
         if (receipt.continuingServerCount > 0) {
             toaster.show(
@@ -224,19 +231,22 @@ internal fun SettingMcpPage(
             )
         }
     }
-    val refreshMcpServers: () -> Unit = {
-        if (!userRefreshRunning) {
-            pageScope.launch {
-                userRefreshRunning = true
+    val refreshMcpServers: () -> Unit = refresh@ {
+        val selection = catalog?.selection ?: return@refresh
+        if (!refreshRunning) {
+            refreshJob = pageScope.launch {
+                refreshRunning = true
+                refreshFailure = null
                 try {
-                    val receipt = mcpApplicationService.refreshAll()
-                    showRefreshReceipt(receipt)
+                    val receipt = mcpApplicationService.refreshAll(selection)
+                    if (catalog?.selection == selection) showRefreshReceipt(receipt)
                 } catch (cancelled: kotlinx.coroutines.CancellationException) {
                     throw cancelled
                 } catch (error: Throwable) {
-                    toaster.show(error.userVisibleDiagnostic(), type = ToastType.Error)
+                    logDiagnosticFailure("SettingMcpPage", "MCP tool refresh failed", error)
+                    if (catalog?.selection == selection) refreshFailure = error
                 } finally {
-                    userRefreshRunning = false
+                    refreshRunning = false
                 }
             }
         }
@@ -283,13 +293,15 @@ internal fun SettingMcpPage(
                     BackButton()
                 },
                 actions = {
-                    val refreshDescription = stringResource(R.string.mcp_refresh_personal)
+                    val refreshDescription = stringResource(R.string.mcp_refresh_tools)
                     IconButton(
                         onClick = refreshMcpServers,
-                        enabled = !userRefreshRunning && mcpConfigs.any { it.commonOptions.enable },
+                        enabled = !refreshRunning && catalog != null &&
+                            (mcpConfigs.any { it.commonOptions.enable } ||
+                                managedServers.any { it.enabled && it.unavailableReason == null }),
                         modifier = Modifier.semantics { contentDescription = refreshDescription },
                     ) {
-                        if (userRefreshRunning) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        if (refreshRunning) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         else Icon(HugeIcons.Refresh, null)
                     }
                     IconButton(
@@ -329,6 +341,16 @@ internal fun SettingMcpPage(
                     bottom = innerPadding.calculateBottomPadding() + 16.dp,
                 )
             ) {
+                refreshFailure?.let { failure ->
+                    item {
+                        val title = stringResource(R.string.mcp_refresh_failed)
+                        ErrorCard(
+                            error = remember(failure, title) { ChatError(title = title,
+                                detail = failure.userVisibleDiagnostic(), retention = ChatErrorRetention.UNTIL_DISMISSED) },
+                            onRetry = if (refreshRunning) null else refreshMcpServers,
+                        )
+                    }
+                }
                 if (catalog?.content == net.weero.measix.pilot.service.McpCatalogReadState.Unavailable) {
                     item { Text(stringResource(R.string.configuration_reason_not_ready), color = MaterialTheme.colorScheme.error) }
                 }
@@ -432,12 +454,12 @@ internal fun SettingMcpPage(
             }
         }
         PullToRefreshBox(
-            isRefreshing = userRefreshRunning,
+            isRefreshing = refreshRunning,
             onRefresh = refreshMcpServers,
             indicator = {
                 PullToRefreshDefaults.Indicator(
                     state = state,
-                    isRefreshing = userRefreshRunning,
+                    isRefreshing = refreshRunning,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .offset(y = innerPadding.calculateTopPadding()),

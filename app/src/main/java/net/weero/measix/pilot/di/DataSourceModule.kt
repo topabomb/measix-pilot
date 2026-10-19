@@ -157,7 +157,7 @@ val dataSourceModule = module {
 
     single { NetworkMonitor(get()) }
 
-    single { McpApplicationService(coordinator = get(), settingsStore = get()) }
+    single { McpApplicationService(coordinator = get(), settingsStore = get(), sessions = get(), synchronization = get()) }
 
     single { McpQueryService(settingsStore = get(), coordinator = get(), configurationQueries = get(), sessions = get(), scope = get()) }
 

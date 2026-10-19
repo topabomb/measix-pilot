@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service
 import me.rerere.common.configuration.ConfigurationReference
 
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,8 @@ import org.junit.Test
 class McpApplicationServiceTest {
     private val manager = mockk<McpRuntimeCoordinator>(relaxed = true)
     private val settingsStore = mockk<SettingsStore>()
+    private val sessions = mockk<net.weero.measix.pilot.data.enterprise.EnterpriseSessionController>()
+    private val synchronization = mockk<EnterpriseSynchronizationService>()
     private lateinit var local: Settings
     private lateinit var effective: MutableStateFlow<net.weero.measix.pilot.data.datastore.Settings>
     private lateinit var service: McpApplicationService
@@ -39,7 +42,10 @@ class McpApplicationServiceTest {
                 effective.value = committed
             }
         }
-        service = McpApplicationService(manager, settingsStore)
+        coEvery { sessions.withSelectedRealmSelection<Any?>(any(), any()) } coAnswers {
+            secondArg<suspend () -> Any?>().invoke()
+        }
+        service = McpApplicationService(manager, settingsStore, sessions, synchronization)
     }
 
     @Test
@@ -134,7 +140,64 @@ class McpApplicationServiceTest {
         val receipt = McpRefreshReceipt(requestedServerCount = 3, settledServerCount = 1)
         coEvery { manager.refreshAllRegisteredServers() } returns receipt
 
-        assertEquals(receipt, service.refreshAll())
+        assertEquals(receipt, service.refreshAll(net.weero.measix.pilot.data.enterprise.RealmSelection(
+            net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 1)))
+    }
+
+    @Test
+    fun `enterprise refresh checks execution version and includes personal and managed servers`() = runTest {
+        val scope = net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise(
+            me.rerere.common.configuration.EnterpriseAuthority("refresh-deployment"), "user")
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(scope, "session")
+        val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(access, 1)
+        val version = net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion("revision", 1, "configuration", "execution")
+        coEvery { synchronization.prepareExecution(access) } returns version
+        coEvery { manager.refreshAllRegisteredServers() } returns McpRefreshReceipt(1, 0)
+        coEvery { manager.refreshManagedServers(selection, version) } returns McpRefreshReceipt(2, 2)
+
+        assertEquals(McpRefreshReceipt(3, 2), service.refreshAll(selection))
+
+        coVerify(exactly = 1) { synchronization.prepareExecution(access) }
+        coVerify(exactly = 1) { manager.refreshManagedServers(selection, version) }
+    }
+
+    @Test
+    fun `switching realm during preflight rejects managed discovery without transferring personal maintenance`() = runTest {
+        val scope = net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise(
+            me.rerere.common.configuration.EnterpriseAuthority("refresh-deployment"), "user")
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(scope, "session")
+        val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(access, 1)
+        val version = net.weero.measix.pilot.data.enterprise.EnterpriseAppliedVersion("revision", 1, "configuration", "execution")
+        var revoked = false
+        coEvery { sessions.withSelectedRealmSelection<Any?>(selection, any()) } coAnswers {
+            check(!revoked) { "enterprise_selection_revoked" }
+            secondArg<suspend () -> Any?>().invoke()
+        }
+        coEvery { synchronization.prepareExecution(access) } answers { revoked = true; version }
+        coEvery { manager.refreshAllRegisteredServers() } returns McpRefreshReceipt(1, 1)
+
+        try { service.refreshAll(selection); org.junit.Assert.fail("Old selection must fail") }
+        catch (error: IllegalStateException) { assertEquals("enterprise_selection_revoked", error.message) }
+
+        coVerify(exactly = 1) { manager.refreshAllRegisteredServers() }
+        coVerify(exactly = 0) { manager.refreshManagedServers(any(), any()) }
+    }
+
+    @Test
+    fun `enterprise preflight failure still completes the existing personal refresh`() = runTest {
+        val scope = net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise(
+            me.rerere.common.configuration.EnterpriseAuthority("refresh-deployment"), "user")
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise(scope, "session")
+        val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(access, 1)
+        val failure = java.io.IOException("fixture enterprise unavailable")
+        coEvery { synchronization.prepareExecution(access) } throws failure
+        coEvery { manager.refreshAllRegisteredServers() } returns McpRefreshReceipt(1, 1)
+
+        try { service.refreshAll(selection); org.junit.Assert.fail("Enterprise failure must remain visible") }
+        catch (error: java.io.IOException) { assertEquals(failure.message, error.message) }
+
+        coVerify(exactly = 1) { manager.refreshAllRegisteredServers() }
+        coVerify(exactly = 0) { manager.refreshManagedServers(any(), any()) }
     }
 
     @Test

@@ -25,39 +25,33 @@ class FileEncoderExifTransformTest {
     }
 
     @Test
-    fun `long screenshots should keep original resolution when under pixel budget`() {
-        val sampleSize = calculateImageInSampleSize(
-            width = 1272,
-            height = 2800,
-            maxDimension = 10_000,
-            maxPixels = 16_000_000L
-        )
-
-        assertEquals(1, sampleSize)
+    fun `decode sampling keeps enough resolution for final resizing within the pixel budget`() {
+        for ((width, height, expected) in listOf(
+            Triple(1272, 2800, 1),
+            Triple(5000, 5000, 2),
+            Triple(1200, 20_000, 4),
+        )) {
+            assertEquals(expected, calculateImageInSampleSize(width, height, 2560, 16_000_000L))
+        }
     }
 
     @Test
-    fun `very large images should still be downsampled by pixel budget`() {
-        val sampleSize = calculateImageInSampleSize(
-            width = 5000,
-            height = 5000,
-            maxDimension = 10_000,
-            maxPixels = 16_000_000L
-        )
-
-        assertEquals(2, sampleSize)
+    fun `target dimensions preserve aspect ratio without upscaling or collapsing thin images`() {
+        for ((source, target) in listOf(
+            (4000 to 3000) to (2560 to 1920),
+            (1272 to 2800) to (1162 to 2560),
+            (2 to 10_002) to (1 to 2560),
+            (2561 to 1) to (2560 to 1),
+            (40 to 20) to (40 to 20),
+        )) assertEquals(target, imageTargetSize(source.first, source.second))
     }
 
     @Test
-    fun `extremely long images should still be downsampled by max dimension`() {
-        val sampleSize = calculateImageInSampleSize(
-            width = 1200,
-            height = 20_000,
-            maxDimension = 10_000,
-            maxPixels = 16_000_000L
-        )
-
-        assertEquals(2, sampleSize)
+    fun `shared signature detection retains HEIC and AVIF support for local file tools`() {
+        for ((brand, mime) in listOf("heic" to "image/heic", "avif" to "image/avif")) {
+            val header = byteArrayOf(0, 0, 0, 24) + "ftyp$brand".toByteArray(Charsets.US_ASCII) + ByteArray(12)
+            assertEquals(mime, detectImageMimeTypeBySignature(header))
+        }
     }
 
     companion object {

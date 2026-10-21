@@ -245,11 +245,13 @@ create 只返回 `id`，edit/delete 返回 `success+id`；正文已在 input，�
 
 `webdav_upload`、`webdav_download` 在 START 捕获本域当前 WebDAV，两个工具成对启用，无单独开关或审批。
 上传参数为 `file_path`（已披露的精确 `/upload/<file>`）、`remote_path`（DAV 根内相对文件路径）和默认 false 的
-`overwrite`，自动创建远端父目录。下载只接收 `remote_path`，由 ArtifactStore 分配独立文件，不覆盖已有附件。
+`overwrite`，自动创建远端父目录。下载接收 `remote_path` 和可选布尔参数 `multimodal`（默认 false），
+由 ArtifactStore 分配独立文件，不覆盖已有附件。
 两者支持任意文件类型，装配和执行都不要求本地 Workspace 或 mount。
-上传成功返回 `status=completed/remote_path/bytes/overwritten`；下载返回 `status=completed/remote_path` 及
-`file.path/name/mime_type/bytes`，附带现有 Image 或 Document part。图片复用既有多模态投影，非图片只披露附件、类型和路径，
-保留查看入口，不自动读取正文。工具结果沿原检查点提交并发布，不能只保存 JSON 路径。
+上传成功返回 `status=completed/remote_path/size/overwritten`；下载返回 `status=completed/remote_path` 及
+`file.path/name/mime_type/size`，大小使用带单位的可读文本。默认附带 Document 文件引用，保留查看入口，不自动读取正文或注入图片。
+仅图片且显式 `multimodal=true` 时附带 Image，沿既有模型能力投影；非图片不受该参数影响。历史回放保留已保存的附件类型，
+不按当前默认值改写旧 Image。工具结果沿原检查点提交并发布，不能只保存 JSON 路径。
 企业当前项仅按 `fileExchangeWebdavResourceId` 指定，不回退个人资源或目录第一项。
 缺省定义不发起 DAV 目标查询；投影查询暂时失败时保留诊断，本 Turn 不装配未能确定目标的 DAV 工具，普通聊天仍可继续。
 已知指定目标只读或暂不可用不隐藏任一工具，执行阶段按实时权限拒绝；取消及 Session 失效继续传播。

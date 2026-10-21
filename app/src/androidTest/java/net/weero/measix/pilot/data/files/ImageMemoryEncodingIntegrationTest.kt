@@ -45,14 +45,14 @@ class ImageMemoryEncodingIntegrationTest {
     }
 
     @Test
-    fun memoryAndFileEncodePngWithSameJpegPolicy() = runBlocking {
+    fun memoryAndFileEncodePngWithSameWebpPolicy() = runBlocking {
         val bytes = bitmapBytes(40, 20, Bitmap.CompressFormat.PNG)
         val file = File(root, "source.png").apply { writeBytes(bytes) }
         val encoded = encodeImageBytes(bytes)
 
         assertEquals(UIMessagePart.Image(android.net.Uri.fromFile(file).toString()).encodeNativeImage(), encoded)
-        assertEquals("image/jpeg", encoded.mimeType)
-        assertTrue(encoded.base64.startsWith("data:image/jpeg;base64,"))
+        assertEquals("image/webp", encoded.mimeType)
+        assertTrue(encoded.base64.startsWith("data:image/webp;base64,"))
         assertDimensions(encoded, 40, 20)
         assertEquals(listOf("source.png"), root.list()!!.toList())
         assertArrayEquals(bytes, file.readBytes())
@@ -95,7 +95,7 @@ class ImageMemoryEncodingIntegrationTest {
         assertEquals(UIMessagePart.Image(android.net.Uri.fromFile(file).toString()).encodeNativeImage(), encoded)
         val bitmap = decode(encoded)
         try {
-            assertTrue(bitmap.width <= 10_000)
+            assertEquals(2560, bitmap.width)
             assertTrue(bitmap.width.toLong() * bitmap.height <= 16_000_000L)
         } finally {
             bitmap.recycle()
@@ -103,13 +103,13 @@ class ImageMemoryEncodingIntegrationTest {
     }
 
     @Test
-    fun webpIsConvertedToJpegByBothEntrypoints() = runBlocking {
+    fun webpIsNormalizedByBothEntrypoints() = runBlocking {
         val bytes = bitmapBytes(40, 20, Bitmap.CompressFormat.WEBP_LOSSLESS)
         val file = File(root, "source.webp").apply { writeBytes(bytes) }
         val encoded = encodeImageBytes(bytes)
 
         assertEquals(UIMessagePart.Image(android.net.Uri.fromFile(file).toString()).encodeNativeImage(), encoded)
-        assertEquals("image/jpeg", encoded.mimeType)
+        assertEquals("image/webp", encoded.mimeType)
         assertDimensions(encoded, 40, 20)
     }
 

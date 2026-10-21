@@ -31,6 +31,12 @@ sealed interface PartMetadata : Metadata
 
 sealed interface MessageMetadata : Metadata
 
+/** External image content keeps the producer's encoding through storage and replay. */
+@Serializable
+data class ImageEncodingMetadata(
+    val preserveOriginal: Boolean? = null,
+) : PartMetadata
+
 /**
  * Claude thinking block 的元数据, 回传时需要携带 signature
  */

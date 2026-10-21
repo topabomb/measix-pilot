@@ -10,6 +10,8 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.util.detectImageMimeTypeBySignature
+import net.weero.measix.pilot.utils.fileSizeToString
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
@@ -229,7 +231,7 @@ private fun createEditFileTool(
                         put("path", entry.path)
                         put("replacements", result.replacements)
                         if (result.strategy != ExactReplacer.name) put("matchStrategy", result.strategy)
-                        put("sizeBytes", entry.sizeBytes)
+                        put("size", entry.sizeBytes.fileSizeToString())
                         put("updatedAt", entry.updatedAt)
                     }.toString(),
                     // diff 存入 metadata 供 UI 渲染 diff view, 不会随工具结果发送给 API
@@ -331,13 +333,15 @@ private suspend fun WorkspaceToolSession.readImageInRootfs(
     onArtifactCreated: (net.weero.measix.pilot.data.files.OwnedArtifact) -> Unit,
 ): List<UIMessagePart> {
     val bytes = readRootfsBytes(path, MAX_READ_FILE_BYTES)
+    val mime = requireNotNull(detectImageMimeTypeBySignature(bytes)) { "Unsupported image file" }
+    val extension = mime.substringAfter('/').let { if (it == "jpeg") "jpg" else it }
 
     // 工具读取沙箱文件产生的副本——系统产物
     val owned = artifactStore.createFromBytes(
         scope = scope,
         bytes = bytes,
-        displayName = "image.png",
-        mimeType = "image/png",
+        displayName = "image.$extension",
+        mimeType = mime,
         origin = ArtifactOrigin.SYSTEM,
     )
     onArtifactCreated(owned)
@@ -346,7 +350,8 @@ private suspend fun WorkspaceToolSession.readImageInRootfs(
         UIMessagePart.Text(
             buildJsonObject {
                 put("path", path)
-                put("description", "Image file read successfully")
+                put("mime_type", mime)
+                put("size", bytes.size.toLong().fileSizeToString())
             }.toString()
         ),
     )
@@ -367,6 +372,6 @@ private fun WorkspaceFileEntry.toJson() = buildJsonObject {
     put("path", path)
     put("name", name)
     put("isDirectory", isDirectory)
-    put("sizeBytes", sizeBytes)
+    put("size", sizeBytes.fileSizeToString())
     put("updatedAt", updatedAt)
 }

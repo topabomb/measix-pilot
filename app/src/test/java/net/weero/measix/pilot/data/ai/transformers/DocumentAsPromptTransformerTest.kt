@@ -9,6 +9,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.RequestImageSupport
+import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -57,13 +59,13 @@ class DocumentAsPromptTransformerTest {
     }
 
     @Test
-    fun `shared request pipeline projects downloaded documents as references and degrades missing files`() = runTest {
+    fun `shared request pipeline keeps downloaded image references out of native context and degrades missing files`() = runTest {
         val rewriter = net.weero.measix.pilot.data.files.ToolArtifactRewriter(File("managed"), mockk())
-        val ref = LocalArtifactRef(relativePath = "upload/doc.txt", mimeType = "text/plain")
-        val doc = UIMessagePart.Document(url = ref.fileUri(File("managed")), fileName = "doc.txt", mime = "text/plain")
+        val ref = LocalArtifactRef(relativePath = "upload/image.png", mimeType = "image/png")
+        val doc = UIMessagePart.Document(url = ref.fileUri(File("managed")), fileName = "image.png", mime = "image/png")
         val tool = UIMessagePart.Tool(localCallId = kotlin.uuid.Uuid.random(), stepId = kotlin.uuid.Uuid.random(),
             providerCallId = "download", toolName = "webdav_download", input = "{}", metadata = rewriter.encodeArtifactRef(null, ref),
-            output = listOf(UIMessagePart.Text("""{"status":"completed","file":{"path":"/upload/doc.txt"}}"""), doc))
+            output = listOf(UIMessagePart.Text("""{"status":"completed","file":{"path":"/upload/image.png"}}"""), doc))
         val factory = net.weero.measix.pilot.service.turn.TurnPipelineFactory(
             TemplateTransformer(PebbleEngine.Builder().autoEscaping(false).build()), ToolArtifactReplayTransformer(rewriter),
             AttachmentProjectionTransformer(), mockk(), DocumentAsPromptTransformer())
@@ -77,9 +79,10 @@ class DocumentAsPromptTransformerTest {
             val result = factory.input().fold(listOf(message)) { messages, transformer -> transformer.transform(ctx, messages) }
             val output = (result.single().parts.single() as UIMessagePart.Tool).output
             assertEquals(available, output.any { it is UIMessagePart.Document })
+            assertTrue(output.none { it is UIMessagePart.Image })
             val text = output.filterIsInstance<UIMessagePart.Text>().joinToString { it.text }
             if (available) {
-                assertTrue(text.contains("[Attachment path=/upload/doc.txt type=document]"))
+                assertTrue(text.contains("[Attachment path=/upload/image.png type=document]"))
                 assertTrue(output.filterIsInstance<UIMessagePart.Text>().any { ctx.requestOrigins.source(it) is RequestPartSource.AttachmentInput })
             } else {
                 assertTrue(text.contains("artifact_missing"))
@@ -94,6 +97,7 @@ class DocumentAsPromptTransformerTest {
         assistant = resolveTurnAssistantSnapshot(Assistant()),
         promptInputs = testPromptInputs(messageTemplate = "PREFIX[{{ message }}]", placeholderValues = mapOf("char" to "REPLACED")),
         requestOrigins = RequestMessageOriginTracker(), artifactReads = reads, registerUnpublishedResource = {},
+        mediaCapabilities = RequestMediaCapabilities(toolOutputImages = RequestImageSupport.STRUCTURED),
     )
 
     private fun document(name: String = "doc.txt") = UIMessagePart.Document(

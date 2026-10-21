@@ -24,6 +24,8 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.ToolExecutionFailure
 import net.weero.measix.pilot.data.ai.tools.ToolRuntimeInfrastructureException
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ImageEncodingMetadata
+import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.ImageMime
 import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -218,7 +220,7 @@ internal class McpToolCallExecutor(
         )
         return try {
             net.weero.measix.pilot.data.ai.attachments.AttachmentRefs.ensureAttachmentRef(
-                UIMessagePart.Image(url = owned.uri.toString()),
+                UIMessagePart.Image(url = owned.uri.toString(), metadata = ImageEncodingMetadata(preserveOriginal = true).toMetadata()),
             ).also { onArtifactCreated(owned) } as UIMessagePart.Image
         } catch (error: Throwable) {
             discardCreatedArtifacts(listOf(owned), "MCP image projection rollback", error)

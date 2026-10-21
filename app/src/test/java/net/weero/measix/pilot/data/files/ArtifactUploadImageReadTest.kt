@@ -101,7 +101,7 @@ class ArtifactUploadImageReadTest {
         val firstConversationRequest = resolver.readImages(ConfigurationScope.Personal, paths) as AttachmentResolveResult.Success
         val anotherConversationRequest = resolver.readImages(ConfigurationScope.Personal, paths) as AttachmentResolveResult.Success
         assertEquals(firstConversationRequest.parts.map { it.url }, anotherConversationRequest.parts.map { it.url })
-        assertTrue(firstConversationRequest.parts.all { it.url.startsWith("data:image/jpeg;base64,") })
+        assertTrue(firstConversationRequest.parts.all { it.url.startsWith("data:image/webp;base64,") })
     }
 
     @Test

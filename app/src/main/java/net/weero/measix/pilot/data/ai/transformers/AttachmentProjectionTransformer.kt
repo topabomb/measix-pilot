@@ -6,6 +6,7 @@ import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.ui.AttachmentProjectionTextMetadata
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ImageEncodingMetadata
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 import net.weero.measix.pilot.data.files.ArtifactReadLease
@@ -35,6 +36,10 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                     onProjection = { original, text, mode ->
                         ctx.requestOrigins.markPart(text, RequestPartSource.AttachmentInput(ctx.requestOrigins.originalPart(original), mode.name))
                     },
+                    onRewritten = { original, rewritten ->
+                        ctx.requestOrigins.rememberOriginalPart(original, rewritten)
+                        ctx.requestOrigins.transferPartSource(original, rewritten)
+                    },
                 ),
             )
         }
@@ -46,7 +51,9 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
         capabilities: RequestMediaCapabilities,
         artifactReads: ArtifactReadLease,
         insideToolOutput: Boolean = false,
+        externalToolOutput: Boolean = false,
         onProjection: (UIMessagePart, UIMessagePart.Text, AttachmentInputMode) -> Unit,
+        onRewritten: (UIMessagePart, UIMessagePart) -> Unit,
     ): List<UIMessagePart> {
         val result = ArrayList<UIMessagePart>(parts.size + 2)
         for (part in parts) {
@@ -58,7 +65,9 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                         capabilities = capabilities,
                         artifactReads = artifactReads,
                         insideToolOutput = true,
+                        externalToolOutput = externalToolOutput || part.toolName.startsWith("mcp__"),
                         onProjection = onProjection,
+                        onRewritten = onRewritten,
                     ),
                 )
 
@@ -81,7 +90,11 @@ class AttachmentProjectionTransformer : InputMessageTransformer {
                         ),
                     ).also { onProjection(part, it, mode) }
                     if (native) {
-                        result += part
+                        result += if (externalToolOutput) part.copy(
+                            metadata = kotlinx.serialization.json.JsonObject(
+                                part.metadata.orEmpty() + ImageEncodingMetadata(preserveOriginal = true).toMetadata(),
+                            ),
+                        ).also { onRewritten(part, it) } else part
                     }
                 }
 

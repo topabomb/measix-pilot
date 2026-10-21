@@ -4,6 +4,7 @@ import android.media.ExifInterface
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.os.Build
 import android.util.Base64
 import android.util.Base64OutputStream
 import androidx.core.net.toUri
@@ -12,6 +13,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ImageEncodingMetadata
+import me.rerere.ai.ui.metadataAs
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -62,8 +65,11 @@ fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<Encoded
                 throw IllegalArgumentException("File does not exist: ${this.url}")
             }
             val mimeType = file.guessMimeType().getOrThrow()
-            // 统一进行压缩处理
-            val (encoded, outputMimeType) = compressAndEncode(mimeType, openStream = file::inputStream)
+            val (encoded, outputMimeType) = if (metadataAs<ImageEncodingMetadata>()?.preserveOriginal == true) {
+                file.encodeToBase64Streaming() to mimeType
+            } else {
+                compressAndEncode(mimeType, openStream = file::inputStream)
+            }
             EncodedImage(
                 base64 = if (withPrefix) "data:$outputMimeType;base64,$encoded" else encoded,
                 mimeType = outputMimeType
@@ -141,9 +147,9 @@ private fun compressAndEncode(
     mimeType: String,
     openStream: () -> InputStream,
     checkActive: () -> Unit = {},
-    maxDimension: Int = 10_000,
+    maxDimension: Int = 2560,
     maxPixels: Long = 16_000_000L,
-    quality: Int = 85
+    quality: Int = 90
 ): Pair<String, String> {
     // GIF 保持原样（可能是动图）
     if (mimeType == "image/gif") {
@@ -156,6 +162,7 @@ private fun compressAndEncode(
     }
     checkActive()
     openStream().use { BitmapFactory.decodeStream(it, null, options) }
+    require(options.outWidth > 0 && options.outHeight > 0) { "Failed to decode image dimensions" }
 
     options.inSampleSize = calculateImageInSampleSize(
         width = options.outWidth,
@@ -169,20 +176,29 @@ private fun compressAndEncode(
     val bitmap = openStream().use { BitmapFactory.decodeStream(it, null, options) }
         ?: throw IllegalArgumentException("Failed to decode image")
     var normalizedBitmap = bitmap
+    var scaledBitmap = bitmap
     return try {
         checkActive()
         normalizedBitmap = normalizeByExif(bitmap, openStream)
         checkActive()
+        val (width, height) = imageTargetSize(normalizedBitmap.width, normalizedBitmap.height, maxDimension)
+        scaledBitmap = if (width == normalizedBitmap.width && height == normalizedBitmap.height) normalizedBitmap
+            else Bitmap.createScaledBitmap(normalizedBitmap, width, height, true)
+        checkActive()
         val byteArrayOutputStream = ByteArrayOutputStream()
-        // 强制使用 JPEG 格式，因为很多提供商不支持 webp
         Base64OutputStream(byteArrayOutputStream, Base64.NO_WRAP).use { base64Stream ->
-            check(normalizedBitmap.compress(Bitmap.CompressFormat.JPEG, quality, base64Stream)) {
+            val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Bitmap.CompressFormat.WEBP_LOSSY
+                else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
+            check(scaledBitmap.compress(format, quality, base64Stream)) {
                 "Failed to compress image"
             }
         }
         checkActive()
-        Pair(byteArrayOutputStream.toString(Charsets.ISO_8859_1.name()), "image/jpeg")
+        Pair(byteArrayOutputStream.toString(Charsets.ISO_8859_1.name()), "image/webp")
     } finally {
+        if (scaledBitmap !== normalizedBitmap && scaledBitmap !== bitmap) {
+            scaledBitmap.recycle()
+        }
         if (normalizedBitmap !== bitmap) {
             normalizedBitmap.recycle()
         }
@@ -257,20 +273,27 @@ internal fun calculateImageInSampleSize(
 
     var inSampleSize = 1
     while (
-        (height / inSampleSize) > maxDimension ||
-        (width / inSampleSize) > maxDimension ||
-        (width.toLong() / inSampleSize) * (height.toLong() / inSampleSize) > maxPixels
+        maxOf(width, height).toLong() / (inSampleSize.toLong() * 2) >= maxDimension ||
+        ((width.toLong() + inSampleSize - 1) / inSampleSize) *
+            ((height.toLong() + inSampleSize - 1) / inSampleSize) > maxPixels
     ) {
         inSampleSize *= 2
     }
     return inSampleSize
 }
 
+internal fun imageTargetSize(width: Int, height: Int, maxDimension: Int = 2560): Pair<Int, Int> {
+    val longest = maxOf(width, height)
+    if (longest <= maxDimension) return width to height
+    return maxOf(1, (width.toLong() * maxDimension / longest).toInt()) to
+        maxOf(1, (height.toLong() * maxDimension / longest).toInt())
+}
+
 private fun File.guessMimeType(): Result<String> = runCatching {
     inputStream().use(::guessImageMimeType)
 }
 
-internal fun detectImageMimeTypeBySignature(bytes: ByteArray): String? = runCatching {
+fun detectImageMimeTypeBySignature(bytes: ByteArray): String? = runCatching {
     bytes.inputStream().use(::guessImageMimeType)
 }.getOrNull()
 

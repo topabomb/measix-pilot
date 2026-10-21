@@ -44,7 +44,9 @@ class WebDavToolsTest {
         assertEquals(ToolInteractionRequirement.None, tools.last().interactionRequirement(download))
         val schema = requireNotNull(tools.last().parameters()).jsonObject
         assertEquals(listOf("remote_path"), schema.getValue("required").jsonArray.map { it.jsonPrimitive.content })
-        assertEquals(setOf("remote_path"), schema.getValue("properties").jsonObject.keys)
+        val properties = schema.getValue("properties").jsonObject
+        assertEquals(setOf("remote_path", "multimodal"), properties.keys)
+        assertFalse(properties.getValue("multimodal").jsonObject.getValue("default").jsonPrimitive.boolean)
         assertTrue(createWebDavTools(RealmAccess.Personal, configuration(null), mockk()).isEmpty())
     }
 
@@ -62,7 +64,13 @@ class WebDavToolsTest {
             """{"remote_path":"file","overwrite":true}""",
             """{"remote_path":"file","local_path":"/workspace/file"}""",
             """{"remote_path":12}""",
+            """{"remote_path":"file","multimodal":"true"}""",
+            """{"remote_path":"file","multimodal":1}""",
+            """{"remote_path":"file","multimodal":null}""",
         )) assertThrows(ToolArgumentsException::class.java) { tools.last().parseArguments(input, Json) }
+        assertThrows(ToolArgumentsException::class.java) {
+            tools.first().parseArguments("""{"file_path":"/upload/file.bin","remote_path":"file","multimodal":true}""", Json)
+        }
         assertFalse(parseWebDavArguments(Json.parseToJsonElement("""{"file_path":"/upload/file.bin","remote_path":"中文 100%.zip"}"""), true).overwrite)
     }
 
@@ -79,15 +87,17 @@ class WebDavToolsTest {
         val output = tool.contextualExecute!!.invoke(mockk(), Json.parseToJsonElement("""{"file_path":"/upload/file.bin","remote_path":"file"}"""))
         val result = Json.parseToJsonElement((output.single() as UIMessagePart.Text).text).jsonObject
         assertEquals("completed", result.getValue("status").jsonPrimitive.content)
-        assertEquals(12L, result.getValue("bytes").jsonPrimitive.long)
+        assertEquals("12 B", result.getValue("size").jsonPrimitive.content)
         assertFalse(result.getValue("overwritten").jsonPrimitive.boolean)
         assertTrue(tool.description.contains("Current WebDAV display name: \"Current\""))
         assertFalse(tool.description.contains(connection.rootUrl))
         coVerify { transfers.upload(RealmAccess.Personal, WebDavTarget.Personal(connection), "/upload/file.bin", "file", false) }
     }
 
-    @Test fun `downloads register ownership before deferred metadata and expose any file as attachment`() = runTest {
-        for (mime in listOf("image/png", "application/zip")) {
+    @Test fun `downloads retain attachments and ownership while image content requires opt in`() = runTest {
+        for ((mime, multimodal) in listOf("image/png", "application/zip").flatMap { mime ->
+            listOf(null, false, true).map { mime to it }
+        }) {
             val owned = OwnedArtifact(
                 ArtifactEntity(id = 1, folder = "upload", relativePath = "upload/abc123.bin", displayName = "source.bin",
                     mimeType = mime, sizeBytes = 12, createdAt = 1, updatedAt = 1),
@@ -113,11 +123,21 @@ class WebDavToolsTest {
                 resolveAttachments = { error("Not an inspection tool") }, reportChildRun = { error("Not a child tool") },
             )
             val tool = createWebDavTools(RealmAccess.Personal, configuration(connection), transfers).last()
-            val output = tool.contextualExecute!!.invoke(execution, Json.parseToJsonElement("""{"remote_path":"source.bin"}"""))
+            val input = buildJsonObject {
+                put("remote_path", "source.bin")
+                multimodal?.let { put("multimodal", it) }
+            }
+            val parsed = tool.parseArguments(input.toString(), Json)
+            assertEquals(multimodal == true, parseWebDavArguments(parsed, false).multimodal)
+            val output = tool.contextualExecute!!.invoke(execution, parsed)
+            val imageIncluded = mime.startsWith("image/") && multimodal == true
             assertNotNull(AttachmentRefs.getStableRef(output.last()))
-            assertEquals(mime.startsWith("image/"), output.last() is UIMessagePart.Image)
-            assertEquals(!mime.startsWith("image/"), output.last() is UIMessagePart.Document)
-            assertEquals("/upload/abc123.bin", Json.parseToJsonElement((output.first() as UIMessagePart.Text).text).jsonObject.getValue("file").jsonObject.getValue("path").jsonPrimitive.content)
+            assertEquals(imageIncluded, output.last() is UIMessagePart.Image)
+            assertEquals(!imageIncluded, output.last() is UIMessagePart.Document)
+            val file = Json.parseToJsonElement((output.first() as UIMessagePart.Text).text).jsonObject.getValue("file").jsonObject
+            assertEquals("/upload/abc123.bin", file.getValue("path").jsonPrimitive.content)
+            assertEquals("12 B", file.getValue("size").jsonPrimitive.content)
+            assertEquals(mime, file.getValue("mime_type").jsonPrimitive.content)
         }
     }
 

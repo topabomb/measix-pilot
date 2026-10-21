@@ -34,7 +34,7 @@
 |------|------|
 | 用户上传 / 编辑消息 | `ConversationApplicationService` / `ConversationTurnService` 提交前 |
 | `generate_image` 产出 | 工具成功时对 Image part 写入附件元数据 |
-| `webdav_download` 产出 | 工具结果保留 Artifact metadata 与 Image/Document 附件，沿同一结果检查点发布 |
+| `webdav_download` 产出 | 工具结果保留 Artifact metadata 与附件，沿同一结果检查点发布；图片开关见 [提示词与工具](prompts-and-tools.md) |
 | MCP 图片内容 | `McpToolCallExecutor` 转本地文件时 |
 | base64 图片 | `Base64ImageToLocalFileTransformer` 经 `ArtifactStore` 终态落盘并写入附件元数据 |
 | `assistant_call` 注入 Child | 为新 Image part 写入附件元数据；原文件身份不变，不复制 payload |
@@ -45,6 +45,9 @@ MCP 图片、生成结果、配置图片及生成预览在各专用入口执行�
 请求媒体投影依据本次授权读视图与协议能力选择输入形态，不承诺读取或验证所有图片字节。各入口的处理包括：
 
 - MCP `ImageContent` 先限制 base64 字符与解码字节，再按文件头与容器结构识别 MIME；声明 MIME 不能覆盖实际格式。
+- 本端图片在 `FileEncoder` 请求编码时修正方向，按平台滤波等比缩小至最长边 2560，不放大小图，输出 WebP Q90 并保留透明通道；GIF 沿用原字节。解码保留像素预算，文件和识图内存快照共用同一处理，不改写原件。
+- 外部 MCP 图片通过 `ImageEncodingMetadata.preserveOriginal` 保留生产端字节，落盘、复制与回放后仍不缩放或重编码；旧 MCP 工具结果在请求投影时补充同样的临时标记。主动调用本端识图工具读取文件是独立输入，使用本端规则。
+- 模型可见的图片说明仅披露路径、文件格式与可读大小，不披露尺寸、透明度、缩放或编码参数；内部校验和 UI metadata 不受此约束。
 - `GeneratedMediaStore` 对 URL/base64 结果使用同一尺寸上限与结构检查，并以检测 MIME 决定扩展名；容器头存在不等于图片完整。Gallery 只通过 `resolveCanonicalFile` 解析根目录内路径。
 - 编辑器导入返回 `ArtifactDraftItem(uri, displayName, mimeType)`；路由、分享、粘贴和裁剪调用方直接使用托管时已经确定的 metadata，不对托管 `file://` URI 再走外部 ContentResolver 分类。裁剪输出扩展名与 PNG 压缩格式一致。
 - 配置编辑器的头像与背景经 `ArtifactUseCase.importSettingsImage` 执行有界复制与结构检查；查看器/生成工具的背景由 `AssistantBackgroundService` 接受原页面、任务或共享定义目标，分别写个人定义或企业主体偏好。两条入口均复用 Artifact 的 Settings root 提交及 pin 移交，失败或取消回滚未发布 artifact，不能直接挂接原始文件路径。
@@ -166,7 +169,7 @@ Fork/Child clone 仅按已取得的文件复制映射重写 `inspect_attachments
 
 `StepRunner` 在每次请求的上下文裁剪完成后，通过 `ArtifactStore.retainForRequest` 取得原 scope 的 `ArtifactReadLease`，覆盖输入转换、请求装配与完整 Provider 流收集。该临时读视图复用既有 retention pin，不新增持久化记录。主、子 Turn 共用此边界；成功、失败或取消后释放，既不保留窗口外历史，也不跨 Step 长期占用文件。
 
-`DocumentAsPromptTransformer`、`ToolArtifactReplayTransformer` 和 `AttachmentProjectionTransformer` 只解析这份读视图。外域 ACTIVE 引用直接拒绝；缺失或不受管路径固定为不可用，同路径迟到出现的新文件不能被本次请求认领。缺失图片保留 unavailable 投影，工具结果保留 artifact_missing 降级；最终装配还会拒绝任何未被本次保留的本地媒体 URL。文件 URL、Provider 图片编码和 durable 消息保持不变；此边界不代表当前 Provider 已实现音视频传输。
+`DocumentAsPromptTransformer`、`ToolArtifactReplayTransformer` 和 `AttachmentProjectionTransformer` 只解析这份读视图。外域 ACTIVE 引用直接拒绝；缺失或不受管路径固定为不可用，同路径迟到出现的新文件不能被本次请求认领。缺失图片保留 unavailable 投影，工具结果保留 artifact_missing 降级；最终装配还会拒绝任何未被本次保留的本地媒体 URL。文件 URL 与 durable 消息保持不变；请求图片编码沿前述规则处理，此边界不代表当前 Provider 已实现音视频传输。
 
 判定输入：本次请求的 `RequestMediaCapabilities`（显式模型 IMAGE 声明 + 用户选择的 Provider 协议 + 已知容器 profile）。未知 OpenAI-compatible host 按所选通用协议处理，不否决 USER 图片能力。`OPAQUE_REPLAY_ONLY` 只允许 Responses raw `response.output` 回放历史媒体，不能让普通 `UIMessagePart.Image` 借消息级 metadata 变成 native。
 
@@ -181,8 +184,8 @@ Fork/Child clone 仅按已取得的文件复制映射重写 `inspect_attachments
 
 | 对象 | STRUCTURED | NONE / OPAQUE_REPLAY_ONLY 的直接媒体 |
 |------|-----------|-------------|
-| Image（有可用 path） | 路径事实 + 原图 | 替换为路径事实 |
-| 非本地 Image（无工具 path） | `input=native` + 原图 | `input=unavailable`，不保留 Image |
+| Image（有可用 path） | 路径事实 + 图片内容 | 替换为路径事实 |
+| 非本地 Image（无工具 path） | `input=native` + 图片内容 | `input=unavailable`，不保留 Image |
 | 本地 Image（本次读租约中不可解析） | `input=unavailable`，不保留 Image | 同左 |
 | Document / Audio / Video | 有可用 path 时前插路径事实；仅非本地或本次读租约中可解析的 part 保留 | 同左 |
 | `Tool.output` 内媒体 | 递归同上（否则模型看不到生图结果上的 ref） | 递归同上 |

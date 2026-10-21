@@ -137,7 +137,7 @@ class ArtifactUploadImageReadIntegrationTest {
         assertEquals(listOf(entity.relativePath), store.list(ConfigurationScope.Personal).map { it.relativePath })
         assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
         result.parts.forEach { part ->
-            assertTrue(part.url.startsWith("data:image/jpeg;base64,"))
+            assertTrue(part.url.startsWith("data:image/webp;base64,"))
             val bytes = java.util.Base64.getDecoder().decode(part.url.substringAfter("base64,"))
             val bitmap = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)!!
             assertEquals(1, bitmap.width)

@@ -30,6 +30,7 @@ import me.rerere.ai.ui.OpenAIResponseSourceProfile
 import me.rerere.ai.ui.OpenAIResponseWireFormat
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.ImageEncodingMetadata
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
@@ -328,6 +329,22 @@ class AttachmentProjectionTransformerTest {
             marker.text,
         )
         assertTrue(marker.isProjectionText())
+    }
+
+    @Test
+    fun `legacy external tool images bypass encoding without changing durable metadata`() = runTest {
+        val image = stampedImage()
+        val tool = UIMessagePart.Tool(
+            localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "external",
+            toolName = "mcp__remote__read", input = "{}", output = listOf(image),
+        )
+        val projected = transformer.transform(
+            ctxFor(visionModel), listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool))),
+        ).single().parts.single() as UIMessagePart.Tool
+        val result = projected.output.filterIsInstance<UIMessagePart.Image>().single()
+        assertEquals(true, result.metadataAs<ImageEncodingMetadata>()?.preserveOriginal)
+        assertEquals(AttachmentRefs.getStableRef(image), AttachmentRefs.getStableRef(result))
+        assertEquals(null, image.metadataAs<ImageEncodingMetadata>()?.preserveOriginal)
     }
 
     @Test

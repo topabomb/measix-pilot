@@ -19,12 +19,18 @@ import net.weero.measix.pilot.data.files.ToolArtifactRewriter
 import net.weero.measix.pilot.service.webdav.WebDavTarget
 import net.weero.measix.pilot.service.webdav.WebDavTransferException
 import net.weero.measix.pilot.service.webdav.WebDavTransferService
+import net.weero.measix.pilot.utils.fileSizeToString
 
-internal data class WebDavTransferArguments(val filePath: String?, val remotePath: String, val overwrite: Boolean)
+internal data class WebDavTransferArguments(
+    val filePath: String?,
+    val remotePath: String,
+    val overwrite: Boolean,
+    val multimodal: Boolean,
+)
 
 internal fun parseWebDavArguments(input: JsonElement, upload: Boolean): WebDavTransferArguments {
     val args = input as? JsonObject ?: throw IllegalArgumentException("Arguments must be an object")
-    val allowed = if (upload) setOf("file_path", "remote_path", "overwrite") else setOf("remote_path")
+    val allowed = if (upload) setOf("file_path", "remote_path", "overwrite") else setOf("remote_path", "multimodal")
     require(args.keys.all { it in allowed }) { "Unexpected file transfer argument" }
     fun text(key: String): String {
         val value = args[key] as? JsonPrimitive
@@ -39,12 +45,13 @@ internal fun parseWebDavArguments(input: JsonElement, upload: Boolean): WebDavTr
         remote.split('/').none { it.isEmpty() || it == "." || it == ".." }) {
         "remote_path must be a file path relative to the WebDAV root"
     }
-    val overwrite = if (!args.containsKey("overwrite")) false else {
-        val value = args["overwrite"] as? JsonPrimitive
-        require(value != null && !value.isString) { "overwrite must be boolean" }
-        requireNotNull(value.booleanOrNull) { "overwrite must be boolean" }
+    fun flag(key: String): Boolean {
+        if (!args.containsKey(key)) return false
+        val value = args[key] as? JsonPrimitive
+        require(value != null && !value.isString) { "$key must be boolean" }
+        return requireNotNull(value.booleanOrNull) { "$key must be boolean" }
     }
-    return WebDavTransferArguments(file, remote, overwrite)
+    return WebDavTransferArguments(file, remote, flag("overwrite"), flag("multimodal"))
 }
 
 internal suspend fun createWebDavTools(access: RealmAccess, configuration: ResolvedConfiguration,
@@ -65,6 +72,12 @@ internal suspend fun createWebDavTools(access: RealmAccess, configuration: Resol
                     if (upload) {
                         put("file_path", buildJsonObject { put("type", "string"); put("description", "Exact disclosed /upload/<file> path of a managed attachment") })
                         put("overwrite", buildJsonObject { put("type", "boolean"); put("description", "Replace an existing remote file; defaults to false") })
+                    } else {
+                        put("multimodal", buildJsonObject {
+                            put("type", "boolean")
+                            put("default", false)
+                            put("description", "Return image content in the tool result; default false. Applies only to images.")
+                        })
                     }
                     put("remote_path", buildJsonObject { put("type", "string"); put("description", "File path relative to the current WebDAV root") })
                 }, required = if (upload) listOf("file_path", "remote_path") else listOf("remote_path"))
@@ -83,7 +96,7 @@ internal suspend fun createWebDavTools(access: RealmAccess, configuration: Resol
                         val result = transfers.upload(access, target, requireNotNull(args.filePath), args.remotePath, args.overwrite)
                         listOf(UIMessagePart.Text(buildJsonObject {
                             put("status", "completed"); put("remote_path", args.remotePath)
-                            put("bytes", result.bytes); put("overwritten", result.overwritten)
+                            put("size", result.bytes.fileSizeToString()); put("overwritten", result.overwritten)
                         }.toString()))
                     } else {
                         val owned = transfers.download(access, target, args.remotePath) { registerUnpublishedResource(transfers.resource(it)) }
@@ -91,13 +104,13 @@ internal suspend fun createWebDavTools(access: RealmAccess, configuration: Resol
                             put(ToolArtifactRewriter.ARTIFACT_KEY, Json.encodeToJsonElement(LocalArtifactRef.serializer(), owned.localRef))
                         }, ToolMetadataDelivery.DEFERRED)
                         val entity = owned.entity
-                        val attachment = if (entity.mimeType.startsWith("image/")) UIMessagePart.Image(url = owned.uri.toString())
+                        val attachment = if (args.multimodal && entity.mimeType.startsWith("image/")) UIMessagePart.Image(url = owned.uri.toString())
                             else UIMessagePart.Document(url = owned.uri.toString(), fileName = entity.displayName, mime = entity.mimeType)
                         listOf(UIMessagePart.Text(buildJsonObject {
                             put("status", "completed"); put("remote_path", args.remotePath)
                             put("file", buildJsonObject {
                                 put("path", requireNotNull(owned.localRef.toolPath())); put("name", entity.displayName)
-                                put("mime_type", entity.mimeType); put("bytes", entity.sizeBytes)
+                                put("mime_type", entity.mimeType); put("size", entity.sizeBytes.fileSizeToString())
                             })
                         }.toString()), AttachmentRefs.ensureAttachmentRef(attachment))
                     }

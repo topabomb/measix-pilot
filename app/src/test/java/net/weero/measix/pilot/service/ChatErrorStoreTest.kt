@@ -18,6 +18,28 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class ChatErrorStoreTest {
+    @Test fun `MCP refresh diagnostics replace per conversation and server and success removes only that warning`() {
+        val store = ChatErrorStore()
+        val conversation = Uuid.random()
+        val otherConversation = Uuid.random()
+        val server = me.rerere.common.configuration.ConfigurationReference.User(Uuid.random())
+        val otherServer = me.rerere.common.configuration.ConfigurationReference.User(Uuid.random())
+        store.add(ChatError(detail = "unrelated", conversationId = conversation))
+        store.updateMcpCatalogRefresh(conversation, server, "Refresh", "first failure")
+        val original = store.errors.value.last().id
+        repeat(3) { store.updateMcpCatalogRefresh(conversation, server, "Refresh", "latest failure") }
+        assertEquals(2, store.errors.value.size)
+        assertEquals(original, store.errors.value.last().id)
+        assertEquals("latest failure", store.errors.value.last().detail)
+        store.updateMcpCatalogRefresh(otherConversation, server, "Refresh", "other conversation")
+        store.updateMcpCatalogRefresh(conversation, otherServer, "Refresh", "other server")
+        store.updateMcpCatalogRefresh(conversation, server, "Refresh", null)
+        assertEquals(listOf("unrelated", "other conversation", "other server"), store.errors.value.map { it.detail })
+        store.dismiss(store.errors.value.last().id)
+        store.updateMcpCatalogRefresh(conversation, otherServer, "Refresh", "returned failure")
+        assertEquals("returned failure", store.errors.value.last().detail)
+    }
+
     @Test fun `read failures deduplicate only within their conversation and can return after dismissal`() {
         val store = ChatErrorStore()
         val error = ChatError(detail = "IOException: favorites unavailable", conversationId = Uuid.random(),

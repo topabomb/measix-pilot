@@ -42,6 +42,7 @@ data class ChatError(
     val retention: ChatErrorRetention = ChatErrorRetention.TRANSIENT,
     val sourceMessageId: Uuid? = null,
     val summary: String? = null,
+    val mcpServerId: me.rerere.common.configuration.ConfigurationReference? = null,
 )
 
 enum class ChatErrorSolution {
@@ -103,6 +104,18 @@ class ChatErrorStore {
 
     fun dismiss(id: Uuid) {
         _errors.update { list -> list.filterNot { it.id == id } }
+    }
+
+    fun updateMcpCatalogRefresh(conversationId: Uuid, serverId: me.rerere.common.configuration.ConfigurationReference,
+        title: String, detail: String?) {
+        _errors.update { current ->
+            val previous = current.find { it.conversationId == conversationId && it.mcpServerId == serverId }
+            val retained = current.filterNot { it.conversationId == conversationId && it.mcpServerId == serverId }
+            if (detail == null) retained else retained + ChatError(
+                id = previous?.id ?: Uuid.random(), title = title, detail = detail, conversationId = conversationId,
+                retention = ChatErrorRetention.UNTIL_DISMISSED, mcpServerId = serverId,
+            )
+        }
     }
 
     fun clear(conversationId: Uuid) {

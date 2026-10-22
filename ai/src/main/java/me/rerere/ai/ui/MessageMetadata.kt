@@ -31,7 +31,7 @@ sealed interface PartMetadata : Metadata
 
 sealed interface MessageMetadata : Metadata
 
-/** External image content keeps the producer's encoding through storage and replay. */
+/** External images retain supported producer encodings; HEIC/AVIF still use native image conversion. */
 @Serializable
 data class ImageEncodingMetadata(
     val preserveOriginal: Boolean? = null,

@@ -33,6 +33,7 @@ Assistant 消息的 `MessageModelInfo` 在 START 提交时从捕获模型保存�
 执行语义见 [子助手架构](sub-assistant-architecture.md)。
 
 工作区产出提示仅从 `workspace_write_file` / `workspace_edit_file` 的成功且结构有效结果提取，
+接受当前可读 `size` 和历史数值 `sizeBytes`，不从可读大小反推字节数；生产输出与 UI 提取由同一行为测试覆盖。
 不能从参数或“存在结果”推断写入成功；统一 diff 来自显示 metadata，不混入 Provider 工具文本。
 工具的本地化名称只用于显示，协议名仍是执行和持久化身份。
 

@@ -283,7 +283,9 @@ private fun successfulWorkspaceFilePath(tool: UIMessagePart.Tool): String? {
     if (!path.startsWith('/') || path.endsWith('/') || '\u0000' in path) return null
     fun number(key: String): Long? =
         (result[key] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
-    if (number("sizeBytes")?.let { it >= 0 } != true || number("updatedAt") == null) return null
+    val hasSize = if ("sizeBytes" in result) number("sizeBytes")?.let { it >= 0 } == true
+        else (result["size"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.isNotBlank() == true
+    if (!hasSize || number("updatedAt") == null) return null
     val succeeded = when (tool.toolName) {
         "workspace_write_file" -> (result["isDirectory"] as? JsonPrimitive)
             ?.takeUnless { it.isString }?.booleanOrNull == false

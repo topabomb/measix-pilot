@@ -38,7 +38,7 @@ import kotlin.uuid.Uuid
 /** Exercises discovery through the real managed HTTP transport without directory notifications. */
 internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
     @Test
-    fun `new enterprise turn refreshes count descriptions and parameters without a new release`() = runBlocking {
+    fun `cached turns reuse definitions and expired background discovery affects only later turns`() = runBlocking {
         withTimeout(30_000) {
             Fixture().use { fixture ->
                 val first = fixture.prepare()
@@ -46,10 +46,17 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                 fixture.tools = tools(9, "new description", "new_parameter")
 
                 val second = fixture.prepare()
-
-                assertEquals(9, second.tools.size)
-                assertEquals("new description", second.tools.first().description)
-                assertTrue(second.tools.first().inputSchema.getValue("properties").jsonObject.containsKey("new_parameter"))
+                assertEquals(8, second.tools.size)
+                assertEquals(1, fixture.lists.get())
+                fixture.now += 5 * 60_000
+                val refreshing = fixture.prepare()
+                assertEquals(8, refreshing.tools.size)
+                catalogs.first { it.values.single().tools.size == 9 }
+                fixture.awaitOperations()
+                val third = fixture.prepare()
+                assertEquals(9, third.tools.size)
+                assertEquals("new description", third.tools.first().description)
+                assertTrue(third.tools.first().inputSchema.getValue("properties").jsonObject.containsKey("new_parameter"))
                 assertEquals(2, fixture.lists.get())
                 assertEquals(8, first.tools.size)
                 assertEquals("old description", first.tools.first().description)
@@ -59,7 +66,7 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
     }
 
     @Test
-    fun `cached turn waits for discovery publication and a successful empty managed catalog replaces old tools`() = runBlocking {
+    fun `slow background discovery does not block cached turns and concurrent turns merge the refresh`() = runBlocking {
         withTimeout(30_000) {
             Fixture().use { fixture ->
                 val first = fixture.prepare()
@@ -67,17 +74,95 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                 val gate = CountDownLatch(1)
                 fixture.beforeList = { started.complete(Unit); check(gate.await(10, TimeUnit.SECONDS)) }
                 fixture.tools = emptyList()
-                val preparing = async { fixture.prepare() }
+                fixture.now += 5 * 60_000
+                val second = withTimeout(5_000) { fixture.prepare() }
                 try {
                     started.await()
-                    assertFalse(preparing.isCompleted)
+                    assertEquals(8, second.tools.size)
+                    assertEquals(8, withTimeout(5_000) { fixture.prepare() }.tools.size)
+                    assertEquals(2, fixture.lists.get())
                     assertEquals(8, catalogs.value.values.single().tools.size)
                     gate.countDown()
-                    val second = preparing.await()
-                    assertTrue(second.tools.isEmpty())
+                    fixture.awaitOperations()
+                    assertTrue(fixture.prepare().tools.isEmpty())
                     assertTrue(catalogs.value.values.single().tools.isEmpty())
                     assertEquals(8, first.tools.size)
                 } finally { gate.countDown() }
+            }
+        }
+    }
+
+    @Test
+    fun `failed background refresh backs off and successful retry clears the original diagnostic`() = runBlocking {
+        withTimeout(30_000) {
+            Fixture().use { fixture ->
+                fixture.prepare()
+                val valid = fixture.tools
+                fixture.tools = valid + valid.first()
+                fixture.now += 5 * 60_000
+                fixture.prepare()
+                fixture.awaitOperations()
+                assertNotNull(fixture.diagnostics.last())
+                fixture.now += 29_999
+                fixture.prepare()
+                fixture.awaitOperations()
+                assertEquals(2, fixture.lists.get())
+                fixture.now++
+                fixture.prepare()
+                fixture.awaitOperations()
+                assertEquals(3, fixture.lists.get())
+                fixture.tools = tools(9, "recovered", "new_parameter")
+                fixture.now += 59_999
+                fixture.prepare()
+                fixture.awaitOperations()
+                assertEquals(3, fixture.lists.get())
+                fixture.now++
+                fixture.prepare()
+                fixture.awaitOperations()
+                assertEquals(4, fixture.lists.get())
+                assertNull(fixture.diagnostics.last())
+                assertEquals(9, fixture.prepare().tools.size)
+            }
+        }
+    }
+
+    @Test
+    fun `cached connection errors are not reported as directory refresh failures`() = runBlocking {
+        withTimeout(30_000) {
+            Fixture().use { fixture ->
+                fixture.prepare()
+                fixture.initializeStatus = 400
+                assertEquals(8, fixture.prepare().tools.size)
+                fixture.awaitOperations()
+                assertTrue(manager.runtimeCapabilities.value.values.any { it.status is McpStatus.Error })
+                assertTrue(fixture.diagnostics.all { it == null })
+                assertEquals(1, fixture.lists.get())
+            }
+        }
+    }
+
+    @Test
+    fun `closing a turn cancels its background discovery and releases the shared refresh claim`() = runBlocking {
+        withTimeout(30_000) {
+            Fixture().use { fixture ->
+                fixture.prepare()
+                fixture.now += 5 * 60_000
+                val started = CompletableDeferred<Unit>()
+                val gate = CountDownLatch(1)
+                fixture.beforeList = { started.complete(Unit); check(gate.await(10, TimeUnit.SECONDS)) }
+                fixture.prepare()
+                try {
+                    started.await()
+                    withTimeout(5_000) { fixture.leases.last().release() }
+                } finally {
+                    gate.countDown()
+                    fixture.beforeList = null
+                }
+                fixture.tools = tools(9, "after cancellation", "new_parameter")
+                assertEquals(8, fixture.prepare().tools.size)
+                fixture.awaitOperations()
+                assertEquals(3, fixture.lists.get())
+                assertEquals(9, fixture.prepare().tools.size)
             }
         }
     }
@@ -108,10 +193,15 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                 fixture.prepare()
                 val previous = catalogs.value.values.single()
                 fixture.tools = fixture.tools + fixture.tools.first()
-
+                fixture.now += 5 * 60_000
                 val fallback = fixture.prepare()
                 assertEquals(8, fallback.tools.size)
-                assertTrue(requireNotNull(fallback.serverOutcomes.single().catalogRefreshError).detail.orEmpty().contains("duplicate tool"))
+                fixture.awaitOperations()
+                assertTrue(requireNotNull(fixture.diagnostics.last()).detail.orEmpty().contains("duplicate tool"))
+                val attempts = fixture.lists.get()
+                fixture.prepare()
+                fixture.awaitOperations()
+                assertEquals(attempts, fixture.lists.get())
                 assertEquals(previous, catalogs.value.values.single())
 
                 val failure = try {
@@ -351,10 +441,13 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
         @Volatile var releaseAction: suspend () -> Unit = {}
         @Volatile var afterCapture: (() -> Unit)? = null
         @Volatile var listStatus = 200
+        @Volatile var initializeStatus = 200
         val http = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val executor = Executors.newCachedThreadPool()
         val scope = AppScope(Dispatchers.IO)
         val leases = mutableListOf<McpExecutionLease>()
+        @Volatile var now = 0L
+        val diagnostics = java.util.concurrent.CopyOnWriteArrayList<McpStatus.Error?>()
 
         init {
             val state = appliedConfiguration(packet).let { it.copy(manifest = it.manifest.copy(applied = version)) }
@@ -391,7 +484,11 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                     if (result == null) it.sendResponseHeaders(202, -1) else {
                         val body = """{"jsonrpc":"2.0","id":${request["id"]},"result":$result}""".toByteArray()
                         it.responseHeaders.set("Content-Type", "application/json")
-                        val status = if (request.getValue("method").jsonPrimitive.content == "tools/list") listStatus else 200
+                        val status = when (request.getValue("method").jsonPrimitive.content) {
+                            "tools/list" -> listStatus
+                            "initialize" -> initializeStatus
+                            else -> 200
+                        }
                         it.sendResponseHeaders(status, body.size.toLong())
                         it.responseBody.write(body)
                     }
@@ -417,7 +514,8 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
             manager = McpRuntimeCoordinator(settingsStore, sessions, catalogStore, scope, mockk(relaxed = true),
                 mockk { every { isOnline } returns MutableStateFlow(true) }, platform,
                 foregroundObserver = ForegroundObserver {}, ioDispatcher = Dispatchers.IO,
-                oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive, foregroundState = MutableStateFlow(true))
+                oauthCallbackKeepAlive = NoOpOAuthCallbackKeepAlive, foregroundState = MutableStateFlow(true),
+                monotonicTimeMs = { now })
             http.start()
         }
 
@@ -427,7 +525,15 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
             every { owner.bindMcpExecution(any(), any(), any(), capture(lease)) } answers { leases += lease.captured }
             val captured = CapturedModelConfiguration(Settings(), configuration, assistant,
                 mockk { every { enterpriseVersion } returns version }, 0, Uuid.random())
-            return manager.prepareTurnCapabilities(access, captured, owner, Uuid.random(), Job()) {}
+            return manager.prepareTurnCapabilities(access, captured, owner, Uuid.random(), Job(),
+                onCatalogRefresh = { _, _, error -> diagnostics += error }) {}
+        }
+
+        suspend fun awaitOperations() {
+            manager.runtimeCapabilities.first { states -> states.values.all {
+                it.status is McpStatus.Ready || it.status is McpStatus.Error || it.status is McpStatus.RetryScheduled ||
+                    it.status == McpStatus.WaitingNetwork || it.status == McpStatus.NeedsAuthorization
+            } }
         }
 
         override fun close() {

@@ -127,6 +127,7 @@ class McpRuntimeCoordinator internal constructor(
     oauthClientOverride: McpOAuthClient? = null,
     oauthCallbackKeepAlive: OAuthCallbackKeepAlive,
     private val foregroundState: StateFlow<Boolean> = ProcessForegroundState,
+    private val monotonicTimeMs: () -> Long = { System.nanoTime() / 1_000_000 },
     private val retryJitter: (Long) -> Long = { upperInclusive ->
         if (upperInclusive <= 0L) 0L else Random.nextLong(upperInclusive + 1L)
     },
@@ -136,6 +137,7 @@ class McpRuntimeCoordinator internal constructor(
         const val TURN_CAPABILITY_PREPARE_TIMEOUT_MS = 20_000L
         const val USER_OPERATION_RECEIPT_TIMEOUT_MS = 20_000L
         const val OAUTH_IO_TIMEOUT_MS = 15_000L
+        private const val MANAGED_CATALOG_REFRESH_INTERVAL_MS = 5 * 60_000L
     }
 
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
@@ -195,6 +197,44 @@ class McpRuntimeCoordinator internal constructor(
     private val lifecycleOperationSemaphore = Semaphore(MAX_PARALLEL_LIFECYCLE_OPERATIONS)
     val runtimeCapabilities: StateFlow<Map<McpRuntimeKey, McpRuntimeCapability>> = runtimeState.capabilities
     private val runtimePolicy = McpServerRuntimePolicy(retryJitter)
+
+    // Scheduling hints are process-local and Session-bound; catalogs and execution authority remain with their owners.
+    private data class ManagedCatalogRefreshState(
+        val digest: String,
+        var nextAttemptAt: Long = Long.MIN_VALUE,
+        var failures: Int = 0,
+        var owner: McpRuntimeKey? = null,
+        var result: McpCatalogRefresh? = null,
+    )
+    private val managedRefreshLock = Any()
+    private val managedRefreshes = mutableMapOf<Pair<RealmAccess.Enterprise, McpCatalogKey>, ManagedCatalogRefreshState>()
+
+    private fun claimManagedRefresh(definition: McpConnectionDefinition.ManagedPlatform, key: McpRuntimeKey): Boolean =
+        synchronized(managedRefreshLock) {
+            val identity = definition.access to definition.catalogKey
+            val state = managedRefreshes[identity]?.takeIf { it.digest == definition.mcpDefinitionDigest() }
+                ?: ManagedCatalogRefreshState(definition.mcpDefinitionDigest()).also { managedRefreshes[identity] = it }
+            if (state.owner != null || monotonicTimeMs() < state.nextAttemptAt) false else {
+                state.owner = key
+                true
+            }
+        }
+
+    private fun recordManagedRefresh(definition: McpConnectionDefinition.ManagedPlatform, key: McpRuntimeKey,
+        error: McpStatus.Error?) = synchronized(managedRefreshLock) {
+        val identity = definition.access to definition.catalogKey
+        val previous = managedRefreshes[identity]
+        if (previous != null && previous.digest != definition.mcpDefinitionDigest()) return@synchronized false
+        val state = previous
+            ?: ManagedCatalogRefreshState(definition.mcpDefinitionDigest()).also { managedRefreshes[identity] = it }
+        if (state.owner == key) state.owner = null
+        state.failures = if (error == null) 0 else (state.failures + 1).coerceAtMost(5)
+        state.result = error?.let(McpCatalogRefresh::Failed) ?: McpCatalogRefresh.Idle
+        val interval = if (error == null) MANAGED_CATALOG_REFRESH_INTERVAL_MS
+            else (30_000L shl (state.failures - 1)).coerceAtMost(MANAGED_CATALOG_REFRESH_INTERVAL_MS)
+        state.nextAttemptAt = monotonicTimeMs() + interval
+        true
+    }
 
     private fun logMcp(serverName: String, message: String) {
         Log.i(TAG, "[$serverName] $message")
@@ -481,6 +521,7 @@ class McpRuntimeCoordinator internal constructor(
         owner: ConversationRuntime,
         turnId: Uuid,
         worker: Job,
+        onCatalogRefresh: (ConfigurationReference, String, McpStatus.Error?) -> Unit = { _, _, _ -> },
         stopInteraction: suspend () -> Unit,
     ): TurnMcpCapabilitySnapshot {
         check(captured.configuration.scope == access.scope && owner.durable.header.scope == access.scope)
@@ -522,7 +563,12 @@ class McpRuntimeCoordinator internal constructor(
             source.withCurrent(McpDefinitionUse.EXECUTION) { current ->
                 worker.ensureActive()
                 check(current != null) { "mcp_configuration_changed_during_capture" }
-                runtime(key, source) {
+                runtime(key, source, onCatalogRefresh = { error ->
+                    if (definition is McpConnectionDefinition.ManagedPlatform && recordManagedRefresh(definition, key, error) &&
+                        (error == null || runtimeCapabilities.value[key]?.catalog != null)) {
+                        onCatalogRefresh(definition.id, definition.name, error)
+                    }
+                }) {
                     owner.requestCancel(turnId, "managed_snapshot_required")
                     appScope.launch {
                         try {
@@ -538,18 +584,30 @@ class McpRuntimeCoordinator internal constructor(
         definitions.zip(targets).forEach { (definition, runtime) ->
             catalogStore.catalogs.value[definition.catalogKey]?.let { runtime.hydrateCatalog(it) }
         }
-        val preparationTargets = definitions.zip(targets).filter { (definition, runtime) ->
-            definition is McpConnectionDefinition.ManagedPlatform ||
-                runtimeCapabilities.value[runtime.key]?.catalog?.definitionDigest != definition.mcpDefinitionDigest()
-        }.map { it.second }
+        val retainedCatalogs = definitions.zip(targets).mapNotNull { (definition, runtime) ->
+            runtimeCapabilities.value[runtime.key]?.catalog?.takeIf { it.definitionDigest == definition.mcpDefinitionDigest() }
+                ?.let { definition.id to it }
+        }.toMap()
+        val preparationTargets = definitions.zip(targets).filter { (definition, _) -> definition.id !in retainedCatalogs }
+            .map { it.second }
         definitions.zip(targets).forEach { (definition, runtime) ->
-            runtime.reconcile(refreshTools = definition is McpConnectionDefinition.ManagedPlatform)
+            val refresh = definition is McpConnectionDefinition.ManagedPlatform && claimManagedRefresh(definition, runtime.key)
+            if (definition is McpConnectionDefinition.ManagedPlatform) {
+                val previous = synchronized(managedRefreshLock) {
+                    managedRefreshes[definition.access to definition.catalogKey]?.result
+                }
+                if (previous != null && definition.id in retainedCatalogs) {
+                    onCatalogRefresh(definition.id, definition.name, (previous as? McpCatalogRefresh.Failed)?.error)
+                }
+            }
+            runtime.reconcile(refreshTools = refresh)
         }
         val settled = preparationTargets.isEmpty() || withTimeoutOrNull(TURN_CAPABILITY_PREPARE_TIMEOUT_MS) {
             coroutineScope { preparationTargets.map { async { it.awaitCurrentOperations() } }.forEach { it.await() } }
             true
         } == true
-        val result = captureCapabilities(definitions, access, interactionId, timedOut = !settled).let { capturedCapabilities ->
+        val result = captureCapabilities(definitions, access, interactionId, timedOut = !settled,
+            retainedCatalogs = retainedCatalogs).let { capturedCapabilities ->
             capturedCapabilities.copy(serverOutcomes = policyBlocked + capturedCapabilities.serverOutcomes)
         }
         val requiredGateways = captured.configuration.catalog.values.filter {
@@ -667,11 +725,13 @@ class McpRuntimeCoordinator internal constructor(
         access: RealmAccess.Enterprise,
         interactionId: String,
         timedOut: Boolean,
+        retainedCatalogs: Map<ConfigurationReference, McpCatalogSnapshot>,
     ): TurnMcpCapabilitySnapshot {
         val tools = mutableListOf<McpAvailableTool>()
         val outcomes = definitions.map { definition ->
             val capability = runtimeCapabilities.value[McpRuntimeKey(definition.id, access, interactionId)] ?: McpRuntimeCapability.EMPTY
-            val catalog = capability.catalog?.takeIf { it.definitionDigest == definition.mcpDefinitionDigest() }
+            val catalog = retainedCatalogs[definition.id]
+                ?: capability.catalog?.takeIf { it.definitionDigest == definition.mcpDefinitionDigest() }
             val permissions = definition.toolAccess(catalog?.tools.orEmpty())
             val selected = permissions.filter { it.enabled }
             selected.forEach { permission ->
@@ -691,20 +751,18 @@ class McpRuntimeCoordinator internal constructor(
                 capability.status is McpStatus.NeedsAuthorization -> McpServerCapabilityState.AUTHORIZATION_REQUIRED
                 capability.catalogRefresh == McpCatalogRefresh.RejectedEmpty -> McpServerCapabilityState.EMPTY_CATALOG
                 else -> McpServerCapabilityState.UNAVAILABLE
-            }, selected.size, catalogRefreshError = if (catalog != null && definition is McpConnectionDefinition.ManagedPlatform) {
-                (capability.catalogRefresh as? McpCatalogRefresh.Failed)?.error
-                    ?: (capability.status as? McpStatus.Error)
-                    ?: McpStatus.Error("MCP directory refresh timed out; previous directory retained")
-                        .takeIf { timedOut && (!capability.sessionCallable || capability.catalogRefresh == McpCatalogRefresh.Refreshing) }
-            } else null)
+            }, selected.size)
         }
         return TurnMcpCapabilitySnapshot(tools, outcomes)
     }
 
     /** Exit seals Session admission first, so this sweep cannot race an accepted new connection. */
-    internal suspend fun closeRealm(access: RealmAccess.Enterprise) = coroutineScope {
-        runtimeState.activeRuntimes.filter { it.key.access == access }
-            .map { async { it.closeAndAwait() } }.forEach { it.await() }
+    internal suspend fun closeRealm(access: RealmAccess.Enterprise) {
+        coroutineScope {
+            runtimeState.activeRuntimes.filter { it.key.access == access }
+                .map { async { it.closeAndAwait() } }.forEach { it.await() }
+        }
+        synchronized(managedRefreshLock) { managedRefreshes.keys.removeAll { it.first == access } }
     }
 
     suspend fun callTool(
@@ -845,6 +903,7 @@ class McpRuntimeCoordinator internal constructor(
         val owned = mutableListOf<McpServerRuntime>()
         val cleanupReady = kotlinx.coroutines.CompletableDeferred<Unit>()
         val closed = mutableSetOf<McpRuntimeKey>()
+        val results = java.util.concurrent.ConcurrentHashMap<McpRuntimeKey, McpCatalogRefresh>()
         val cleanupMutex = Mutex()
         val lease = McpExecutionLease {
             val failures = owned.mapNotNull { runtime ->
@@ -887,7 +946,12 @@ class McpRuntimeCoordinator internal constructor(
                     managedConnectionDefinition(access, id, resource, original, interactionId)
                 }
                 val source = enterpriseRuntimeDefinition(access, { definition }, original, lease, selection = selection)
-                runtime(McpRuntimeKey(id, access, interactionId), source,
+                val key = McpRuntimeKey(id, access, interactionId)
+                runtime(key, source,
+                    onCatalogRefresh = { error ->
+                        recordManagedRefresh(definition, key, error)
+                        results[key] = error?.let(McpCatalogRefresh::Failed) ?: McpCatalogRefresh.Idle
+                    },
                     onResourcesClosed = { key ->
                         cleanupReady.await()
                         cleanupMutex.withLock {
@@ -905,10 +969,12 @@ class McpRuntimeCoordinator internal constructor(
             sessions.requirePublishedSelection(selection)
             val failures = resources.zip(owned).mapNotNull { (resource, runtime) ->
                 val capability = runtimeCapabilities.value[runtime.key] ?: McpRuntimeCapability.EMPTY
-                val error = (capability.catalogRefresh as? McpCatalogRefresh.Failed)?.error
-                    ?: capability.status as? McpStatus.Error
-                    ?: McpStatus.Error("MCP directory discovery did not complete: ${capability.status}")
-                        .takeIf { !complete || !capability.sessionCallable }
+                val result = results[runtime.key]
+                val error = when (result) {
+                    McpCatalogRefresh.Idle -> null
+                    is McpCatalogRefresh.Failed -> result.error
+                    else -> McpStatus.Error("MCP directory discovery ${if (complete) "did not complete" else "timed out"}: ${capability.status}")
+                }
                 error?.let { "${resource.second.name}\n${it.detail ?: it.message}" }
             }
             check(failures.isEmpty()) { "mcp_catalog_refresh_failed:\n${failures.joinToString("\n\n")}" }
@@ -955,6 +1021,7 @@ class McpRuntimeCoordinator internal constructor(
         key: McpRuntimeKey,
         source: McpRuntimeDefinition,
         onResourcesClosed: suspend (McpRuntimeKey) -> Unit = {},
+        onCatalogRefresh: (McpStatus.Error?) -> Unit = {},
         onManagedSnapshotRequired: (ManagedSnapshotRequired) -> Unit = {},
     ): McpServerRuntime =
         runtimeState.getOrCreate(key) {
@@ -966,11 +1033,15 @@ class McpRuntimeCoordinator internal constructor(
                 ioDispatcher = ioDispatcher, foregroundState = foregroundState,
                 policy = runtimePolicy, logger = ::logMcp,
                 onResourcesClosed = { onResourcesClosed(key) },
+                onCatalogRefresh = onCatalogRefresh,
                 onManagedSnapshotRequired = onManagedSnapshotRequired,
                 onManagedRuntimeProblem = { access, error ->
                     platform.acceptManagedRuntimeProblem(access, error)
                 },
                 onClosed = { closed ->
+                    synchronized(managedRefreshLock) {
+                        managedRefreshes.values.filter { it.owner == closed }.forEach { it.owner = null }
+                    }
                     if (closed.access == null) appScope.launch {
                         val enabled = settingsStore.userMcpDefinitions.first()
                             .any { it.id == closed.serverId && it.commonOptions.enable && it.commonOptions.name.isNotBlank() }

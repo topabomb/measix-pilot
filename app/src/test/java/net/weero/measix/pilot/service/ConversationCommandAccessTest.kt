@@ -1079,7 +1079,7 @@ class ConversationCommandAccessTest {
             every { settings.userSettings } returns kotlinx.coroutines.flow.MutableStateFlow(
                 config)
             coEvery { memory.captureExecution(any(), any()) } returns null
-            coEvery { mcp.prepareTurnCapabilities(any(), any(), any(), any(), any(), any()) } returns net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
+            coEvery { mcp.prepareTurnCapabilities(any(), any(), any(), any(), any(), any(), any()) } returns net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
         }
 
         suspend fun initialize() {

@@ -132,12 +132,17 @@ class WebDavManagedTransferLiveAndroidTest {
                         fail("Default upload must refuse overwrite")
                     } catch (expected: ToolExecutionFailure) { assertEquals("webdav_file_exists", expected.message) }
                     val first = invoke("webdav_download", arguments("remote_path" to remote))
-                    val second = invoke("webdav_download", arguments("remote_path" to remote))
+                    val second = invoke("webdav_download", buildJsonObject {
+                        put("remote_path", remote)
+                        put("multimodal", true)
+                    })
                     val firstPath = downloadedPath(first)
                     assertNotEquals(firstPath, downloadedPath(second))
                     assertTrue(firstPath.startsWith("/upload/"))
-                    assertEquals(mime.startsWith("image/"), first.output.any { it is UIMessagePart.Image })
-                    assertEquals(!mime.startsWith("image/"), first.output.any { it is UIMessagePart.Document })
+                    assertFalse(first.output.any { it is UIMessagePart.Image })
+                    assertTrue(first.output.any { it is UIMessagePart.Document })
+                    assertEquals(mime.startsWith("image/"), second.output.any { it is UIMessagePart.Image })
+                    assertEquals(!mime.startsWith("image/"), second.output.any { it is UIMessagePart.Document })
                     val actual = store.withUploadFile(access.scope, firstPath) { input, length ->
                         assertEquals(bytes.size.toLong(), length)
                         input.readBytes()

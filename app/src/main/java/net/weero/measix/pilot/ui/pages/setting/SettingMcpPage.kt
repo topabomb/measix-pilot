@@ -348,6 +348,7 @@ internal fun SettingMcpPage(
                             error = remember(failure, title) { ChatError(title = title,
                                 detail = failure.userVisibleDiagnostic(), retention = ChatErrorRetention.UNTIL_DISMISSED) },
                             onRetry = if (refreshRunning) null else refreshMcpServers,
+                            onDismiss = { refreshFailure = null },
                         )
                     }
                 }

@@ -8,6 +8,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatMessageEditedFilesTest {
+    @Test fun `current production write and edit outputs expose files while legacy results remain readable`() = kotlinx.coroutines.test.runTest {
+        val service = io.mockk.mockk<net.weero.measix.pilot.service.workspace.WorkspaceApplicationService>()
+        val session = io.mockk.mockk<net.weero.measix.pilot.service.workspace.WorkspaceToolSession>()
+        val context = io.mockk.mockk<me.rerere.ai.core.ToolExecutionContext>(relaxed = true)
+        io.mockk.coEvery { service.executeTool<Any?>(any(), any(), any()) } coAnswers {
+            thirdArg<suspend net.weero.measix.pilot.service.workspace.WorkspaceToolSession.() -> Any?>().invoke(session)
+        }
+        io.mockk.coEvery { session.writeRootfsText(any(), any(), any(), any()) } returns
+            me.rerere.workspace.WorkspaceFileEntry("/workspace/write.txt", "write.txt", false, 4, 2)
+        io.mockk.coEvery { session.updateRootfsText(any(), any(), any(), any()) } coAnswers {
+            arg<(String) -> String>(3).invoke("old")
+            me.rerere.workspace.WorkspaceFileEntry("/workspace/edit.txt", "edit.txt", false, 3, 2)
+        }
+        val tools = net.weero.measix.pilot.data.ai.tools.createWorkspaceTools(
+            net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, "workspace", service, emptyMap(), io.mockk.mockk())
+        val outputs = listOf(
+            "workspace_write_file" to """{"path":"/workspace/write.txt","text":"text"}""",
+            "workspace_edit_file" to """{"path":"/workspace/edit.txt","old_text":"old","new_text":"new"}""",
+        ).map { (name, input) ->
+            write(input, "").copy(toolName = name, output = tools.single { it.name == name }
+                .executeWithContext(context, kotlinx.serialization.json.Json.parseToJsonElement(input)))
+        }
+        assertEquals(listOf("/workspace/write.txt", "/workspace/edit.txt"), editedWorkspaceFilePaths(outputs))
+        assertEquals(listOf("/workspace/legacy.txt"), editedWorkspaceFilePaths(listOf(write("{}", writeResult("/workspace/legacy.txt")))))
+    }
+
     @Test
     fun `malformed input with failed result never crashes or advertises requested file`() {
         val parts = listOf(

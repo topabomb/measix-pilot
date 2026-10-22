@@ -46,8 +46,9 @@ Gradle daemon 的堆配置不影响测试进程。超时报告须检查 suppress
 
 Artifact、GeneratedMedia、备份、MCP、Workspace 与 Speech 的行为测试随各自 Store、service 或 runtime 定位。
 
-`McpManagedCatalogRefreshTest` 使用真实 SDK/HTTP 与受控配置 owner 验证同一发布下无通知的 8→9 工具更新、
-描述/参数及空目录替换、等待提交、初始化失败与捕获后撤权清理、HTTP 诊断、取消、切换选择、退出并发、
+`McpManagedCatalogRefreshTest` 使用真实 SDK/HTTP 与受控配置 owner 验证同一发布下无通知的 8→9 后台工具更新、
+描述/参数及空目录替换、缓存轮次不阻塞与快照冻结、刷新合并和失败退避、连接错误与目录错误区分、
+初始化失败与捕获后撤权清理、HTTP 诊断、取消释放后台刷新占用、切换选择、退出并发、
 单项清理失败时关闭其余连接及清理重试；
 不代替真实 Core/上游验收。
 
@@ -136,6 +137,16 @@ Windows PowerShell 使用以下命令，macOS/Linux 将入口换为 `./gradlew`�
 私有数据，测试内 finally 无法保护包级卸载，不能直接用于日常或演示设备。先运行普通门禁；需要已接入状态的 live
 用例采用保留数据的安装与直接 instrumentation。检查设备 loopback Mock 所需的网络条件和系统 HTTP 代理，
 临时设置验证后还原。IME 场景要求实际非零 inset 的停靠软键盘，键盘未出现不能改为跳过或修改生产输入配置。
+
+Windows 验证宿主启用 TUN 代理时，Emulator 37.1.11 使用显式 DNS 并禁用 `WiFiPacketStream`，避免 netsimd
+通过宿主虚拟 DNS 触发高频 TCP 连接与短端口耗尽。复用现有专用设备，当前已验证的启动参数为：
+
+```powershell
+emulator -avd Pilot_Verification_API36 -port 5560 -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader -memory 2560 -dns-server 8.8.8.8 -feature -WiFiPacketStream
+```
+
+DNS 按宿主实际可达性选择；启动后核对 AVD 名称、ADB、Android Wi-Fi 的 `CONNECTED/VALIDATED` 与宿主回环端口分配。
+SDK 或宿主网络变化后重新验证，不额外重复传入 `-netsim-args --host-dns`。
 
 | 场景 | 启用参数与前提 | 证据边界 |
 | --- | --- | --- |

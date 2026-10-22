@@ -12,9 +12,11 @@ import me.rerere.ai.ui.ImageEncodingMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.encodeImageBytes
+import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.encodeNativeImage
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -25,6 +27,20 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ModelImageEncodingTest {
     @Suppress("DEPRECATION")
+    @Test
+    fun `external HEIC headers cannot bypass decoding by requesting original bytes`() {
+        val file = Files.createTempFile("external-image-", ".heic").toFile()
+        try {
+            val source = byteArrayOf(0, 0, 0, 24) + "ftypheic".toByteArray(Charsets.US_ASCII) + ByteArray(12)
+            file.writeBytes(source)
+            val image = UIMessagePart.Image("file://${file.toURI().rawPath}",
+                metadata = ImageEncodingMetadata(preserveOriginal = true).toMetadata())
+            val result = image.encodeBase64()
+            assertTrue("An undecodable HEIC must fail rather than forward its original bytes", result.isFailure)
+            assertArrayEquals(source, file.readBytes())
+        } finally { check(file.delete()) }
+    }
+
     @Test
     fun `local snapshots share bounded WebP encoding while external bytes remain unchanged`() = runBlocking {
         val root = Files.createTempDirectory("model-image-").toFile()

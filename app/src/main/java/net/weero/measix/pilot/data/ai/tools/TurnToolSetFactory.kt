@@ -61,7 +61,8 @@ class TurnToolSetFactory internal constructor(
         turnId: Uuid,
         worker: kotlinx.coroutines.Job,
         stopInteraction: suspend () -> Unit,
-    ): TurnMcpCapabilitySnapshot = mcpManager.prepareTurnCapabilities(access, captured, owner, turnId, worker, stopInteraction)
+    ): TurnMcpCapabilitySnapshot = mcpManager.prepareTurnCapabilities(access, captured, owner, turnId, worker,
+        stopInteraction = stopInteraction)
 
     /**
      * 构建指定 Assistant 的工具集（不含 Memory Tools，那些由 TurnRunner 内部添加）。

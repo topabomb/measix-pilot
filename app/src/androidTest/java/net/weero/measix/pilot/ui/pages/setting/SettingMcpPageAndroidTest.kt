@@ -84,7 +84,9 @@ class SettingMcpPageAndroidTest {
         compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performClick()
         compose.onNode(hasText("fixture MCP directory diagnostic", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
-        compose.onNodeWithText(compose.activity.getString(R.string.application_recovery_retry)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.chat_page_dismiss_error)).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_refresh_failed)).assertDoesNotExist()
+        refresh.performClick()
         refresh.assertIsNotEnabled()
         compose.runOnIdle { gate.complete(Unit) }
         compose.onNodeWithText("9/9").assertIsDisplayed()

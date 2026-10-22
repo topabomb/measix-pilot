@@ -46,7 +46,7 @@ MCP 图片、生成结果、配置图片及生成预览在各专用入口执行�
 
 - MCP `ImageContent` 先限制 base64 字符与解码字节，再按文件头与容器结构识别 MIME；声明 MIME 不能覆盖实际格式。
 - 本端图片在 `FileEncoder` 请求编码时修正方向，按平台滤波等比缩小至最长边 2560，不放大小图，输出 WebP Q90 并保留透明通道；GIF 沿用原字节。解码保留像素预算，文件和识图内存快照共用同一处理，不改写原件。
-- 外部 MCP 图片通过 `ImageEncodingMetadata.preserveOriginal` 保留生产端字节，落盘、复制与回放后仍不缩放或重编码；旧 MCP 工具结果在请求投影时补充同样的临时标记。主动调用本端识图工具读取文件是独立输入，使用本端规则。
+- 外部 MCP 图片通过 `ImageEncodingMetadata.preserveOriginal` 保留 JPEG、PNG、WebP、GIF 的生产端字节，落盘、复制与回放后仍不缩放或重编码；HEIC 等本端接纳但不通用的格式复用原 WebP 编码，不按 Provider 增加格式或限额适配。原件与既有 20 MiB 入站校验保留。旧 MCP 工具结果在请求投影时补充同样的临时标记。主动调用本端识图工具读取文件是独立输入，使用本端规则。
 - 模型可见的图片说明仅披露路径、文件格式与可读大小，不披露尺寸、透明度、缩放或编码参数；内部校验和 UI metadata 不受此约束。
 - `GeneratedMediaStore` 对 URL/base64 结果使用同一尺寸上限与结构检查，并以检测 MIME 决定扩展名；容器头存在不等于图片完整。Gallery 只通过 `resolveCanonicalFile` 解析根目录内路径。
 - 编辑器导入返回 `ArtifactDraftItem(uri, displayName, mimeType)`；路由、分享、粘贴和裁剪调用方直接使用托管时已经确定的 metadata，不对托管 `file://` URI 再走外部 ContentResolver 分类。裁剪输出扩展名与 PNG 压缩格式一致。

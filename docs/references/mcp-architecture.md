@@ -263,7 +263,7 @@ Catalog Store 对成功提交、相同目录的 no-op 和空目录拒绝推进�
 | 触发 | 行为 | 是否改变 Agent schema |
 | --- | --- | --- |
 | 首次无 LKG 的新对话 | 连接并完整发现，最多等待 20 秒 | 成功提交合法目录后供本轮捕获；个人空目录拒绝，受管 Direct 空目录不装配工具 |
-| 企业新一轮发送或重新生成 | 所选企业 MCP 即使已有 LKG 也完整重验，等待发现与提交后冻结；共享 20 秒上限 | 成功供本轮使用；失败或超时保留目录并报告沿用旧目录 |
+| 企业新一轮发送或重新生成 | 匹配 LKG 立即冻结；到期的所选企业 MCP 在原 Turn 租约内后台重验，仅缺目录时共享 20 秒等待窗口 | 后台成功供后续轮次使用；失败保留已确认目录 |
 | 工具栏刷新或列表下拉 | 原选择下刷新用户服务及获准企业 MCP；企业发现使用短期租约，完成后关闭真实连接 | 更新页面目录和后续 run；不创建聊天或调用工具 |
 | 用户点击单 server 重试 | 强制重建该 slot 并等待真实 operation receipt | 成功提交后影响后续 run |
 | `notifications/tools/list_changed` | 350ms 去抖，同 slot single-flight，运行中通知合并为一次 follow-up | 成功提交后影响后续 run |
@@ -320,10 +320,13 @@ Android default network 必须同时具备 `INTERNET + VALIDATED`；前后台和
 ## 7. Run 快照与调用结果
 
 Master 和每个 Target 在 run 开始时调用 `prepareTurnCapabilities()`：先等待 Catalog 初始化并恢复匹配目录。
-所选企业 MCP 每个新轮次都完整重验并等待本次提交，不依赖新 generation 或远端通知；个人服务及企业借用的用户
-服务继续优先捕获匹配 LKG，仅缺目录时等待连接发现。全部需等待项共享 20 秒上限。
-失败或超时保留已确认目录，`McpServerCapabilityOutcome.catalogRefreshError` 携带原诊断，主聊天沿用原错误卡
-提示正在使用上次目录。CONTINUE、Step 和同轮重试不重验、不替换已经冻结的定义。随后生成 immutable `TurnMcpCapabilitySnapshot`：
+已有匹配 LKG 的服务立即冻结目录，不等待连接或发现；仅首次发现或 definition 不匹配的服务共享 20 秒等待窗口。
+所选企业 MCP 在新 Turn 到来时检查后台重验间隔：成功后 5 分钟，失败后从 30 秒指数退避至最多 5 分钟。
+调度提示只在 Coordinator 内存中按原 Session、Catalog key 与 definition digest 保存，同一目录的在途后台重验合并；
+不增加轮询、持久化格式或跨 Session 连接。通知、手动刷新与原 Runtime 恢复仍可立即重验，终态与取消关闭本轮自有资源。
+后台提交只影响后续轮次，不能改变开始准备时已经捕获的目录。失败保留 LKG，主聊天按会话和服务更新原诊断卡，
+本轮成功或后续准备读到成功结果时清除对应告警。连接 Error 不代替目录刷新结果；设置页错误卡可关闭或重试。
+CONTINUE、Step 和同轮重试不重验、不替换已经冻结的定义。随后生成 immutable `TurnMcpCapabilitySnapshot`：
 
 ```text
 Assistant 选择

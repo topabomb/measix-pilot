@@ -115,6 +115,7 @@ internal class McpServerRuntime(
     private val onManagedSnapshotRequired: (ManagedSnapshotRequired) -> Unit,
     private val onManagedRuntimeProblem: suspend (RealmAccess.Enterprise, Throwable) -> Unit = { _, _ -> },
     private val onResourcesClosed: suspend () -> Unit = {},
+    private val onCatalogRefresh: (McpStatus.Error?) -> Unit = {},
 ) {
     val serverId: ConfigurationReference get() = key.serverId
     val mutex = Mutex()
@@ -853,6 +854,7 @@ internal class McpServerRuntime(
                     catalogResult.snapshot,
                     catalogRefresh = McpCatalogRefresh.Idle,
                 )
+                onCatalogRefresh(null)
             }
             is McpCatalogCommitResult.Unchanged -> {
                 setStatusLocked(
@@ -860,9 +862,12 @@ internal class McpServerRuntime(
                     catalogResult.snapshot,
                     catalogRefresh = McpCatalogRefresh.Idle,
                 )
+                onCatalogRefresh(null)
             }
             is McpCatalogCommitResult.RejectedGeneration -> {
-                setStatusLocked(McpStatus.Error("MCP catalog generation is stale; synchronize enterprise configuration"))
+                val error = McpStatus.Error("MCP catalog generation is stale; synchronize enterprise configuration")
+                setStatusLocked(error)
+                onCatalogRefresh(error)
             }
             is McpCatalogCommitResult.RejectedEmpty -> {
                 val catalog = catalogResult.lastKnownGood
@@ -1100,7 +1105,9 @@ internal class McpServerRuntime(
         catalogRefresh: McpCatalogRefresh = capability().catalogRefresh,
         notifications: McpNotificationHealth = capability().notifications,
     ) {
+        val refreshChanged = catalogRefresh !== capability().catalogRefresh
         stateStore.publish(this, capability().copy(catalogRefresh = catalogRefresh, notifications = notifications))
+        if (refreshChanged && catalogRefresh is McpCatalogRefresh.Failed) onCatalogRefresh(catalogRefresh.error)
     }
 
     private fun cancelRecoveryJobsLocked() {
@@ -1222,13 +1229,13 @@ internal class McpServerRuntime(
                     mutex.withLock {
                         if (generation.get() != assignedGeneration || client !== lease.client) return@withLock
                         if (status == McpStatus.NeedsAuthorization || status == McpStatus.Authorizing) return@withLock
+                        publishHealthLocked(catalogRefresh = McpCatalogRefresh.Failed(failureStatus(error)))
                         when {
                             McpProtocolFailureClassifier.isUnauthorized(error) ->
                                 setStatusLocked(McpStatus.NeedsAuthorization)
                             McpProtocolFailureClassifier.isConnectionError(error) ->
                                 scheduleReconnectLocked(assignedGeneration)
                             else -> {
-                                publishHealthLocked(catalogRefresh = McpCatalogRefresh.Failed(failureStatus(error)))
                                 if (status == McpStatus.Discovering) setStatusLocked(lease.previousStatus, lease.previousCatalog)
                             }
                         }

@@ -65,7 +65,8 @@ fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<Encoded
                 throw IllegalArgumentException("File does not exist: ${this.url}")
             }
             val mimeType = file.guessMimeType().getOrThrow()
-            val (encoded, outputMimeType) = if (metadataAs<ImageEncodingMetadata>()?.preserveOriginal == true) {
+            val (encoded, outputMimeType) = if (metadataAs<ImageEncodingMetadata>()?.preserveOriginal == true &&
+                mimeType in setOf("image/jpeg", "image/png", "image/webp", "image/gif")) {
                 file.encodeToBase64Streaming() to mimeType
             } else {
                 compressAndEncode(mimeType, openStream = file::inputStream)

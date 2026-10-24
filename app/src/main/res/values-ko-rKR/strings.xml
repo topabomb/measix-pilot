@@ -1370,7 +1370,7 @@
   <string name="assistant_picker_current">현재 어시스턴트</string>
   <string name="assistant_picker_manage_current">현재 어시스턴트 관리</string>
   <string name="assistant_page_context_message_limit">컨텍스트 자동 정리</string>
-  <string name="assistant_page_context_message_limit_desc">메시지 수가 이 값을 넘으면 오래된 전체 대화 턴을 단계적으로 제거하여 요청 접두사를 안정적으로 유지합니다.</string>
+  <string name="assistant_page_context_message_limit_desc">완전한 대화 턴을 유지하면서 메시지 수로 기록을 제한합니다. 실제 유지되는 메시지 수는 설정값을 초과할 수 있습니다.</string>
   <string name="assistant_page_context_message_limit_count">%d개 메시지 초과 시 정리</string>
   <string name="assistant_page_context_message_limit_unlimited">컨텍스트 자동 정리 안 함</string>
   <string name="assistant_page_context_message_limit_warning">메시지 수는 토큰 한도가 아닙니다. 정리할 때마다 프롬프트 캐시가 무효화될 수 있습니다.</string>

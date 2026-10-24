@@ -130,7 +130,7 @@ class SettingsOcrMigrationTest {
 
     @Test
     fun `modern backup json is unchanged`() {
-        val raw = """{"chatModelId":"${ConfigurationReference.random()}","titlePrompt":"t"}"""
+        val raw = """{"settingsFormatVersion":2,"chatModelId":"${ConfigurationReference.random()}","titlePrompt":"t"}"""
         assertEquals(raw, migrateLegacySettingsJson(raw))
     }
 

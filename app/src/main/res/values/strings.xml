@@ -1380,7 +1380,7 @@
   <string name="assistant_picker_current">Current assistant</string>
   <string name="assistant_picker_manage_current">Manage current assistant</string>
   <string name="assistant_page_context_message_limit">Automatic context trimming</string>
-  <string name="assistant_page_context_message_limit_desc">When the message count exceeds this value, older complete turns are removed in steps so the request prefix stays stable.</string>
+  <string name="assistant_page_context_message_limit_desc">Limits history by message count while keeping complete turns. The actual number retained can exceed this value.</string>
   <string name="assistant_page_context_message_limit_count">Trim after %d messages</string>
   <string name="assistant_page_context_message_limit_unlimited">No automatic context trimming</string>
   <string name="assistant_page_context_message_limit_warning">Message count is not a token limit. Each trim can still invalidate the prompt cache.</string>

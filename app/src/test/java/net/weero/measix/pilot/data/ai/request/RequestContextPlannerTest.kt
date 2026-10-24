@@ -30,6 +30,18 @@ class RequestContextPlannerTest {
     private val planner = RequestContextPlanner()
 
     @Test
+    fun `one message window keeps the complete active user and tool turn`() {
+        val messages = listOf(
+            UIMessage.user("old"), UIMessage.assistant("old answer"), UIMessage.user("current"),
+            UIMessage(role = MessageRole.ASSISTANT, parts = listOf(tool("call", "result"))),
+            UIMessage.assistant("final"),
+        )
+        assertEquals(messages.drop(2), planner.planRequest(messages, messageLimit = 1).messages)
+        val next = messages + UIMessage.user("next")
+        assertEquals(listOf(next.last()), planner.planRequest(next, messageLimit = 1).messages)
+    }
+
+    @Test
     fun `request plan preserves disabled and threshold histories`() {
         val messages = alternating(10)
         assertEquals(messages, planner.planRequest(messages, messageLimit = 0).messages)

@@ -27,7 +27,9 @@ Durable Conversation、Conversation Presentation 和 Model Request Plan 是三�
 ### 条数窗口
 
 `Assistant.contextMessageLimit` 默认 `0`（关闭）。启用后由 `effectiveContextMessageLimit()` 归一化到
-`40..512`，UI 重新打开开关写入默认 `80`。持久化仍保存原始字段；导入或异常备份不会绕过该归一化。
+`1..512`，UI 重新打开开关写入默认 `80`。旧设置与备份中的 1–39 经显式格式迁移保留为原生效值 40；
+新格式保留用户设置的小窗口，迁移规则由[配置架构](android-configuration-architecture.md)维护。
+完整轮次不能拆开，因此实际保留数量可能超过设定值；消息数量与模型 token 容量、工具输出压缩保护窗口分别配置。
 
 超限时 `RequestContextPlanner` 内部 `limitContext` 按 50% 保留比例一次前移较大步幅，再
 `findUserTurnStart()` 回退到完整 USER 轮次。工具调用与结果在同一个 `UIMessagePart.Tool` 里，因此

@@ -82,7 +82,7 @@ internal fun migrateOcrPreferences(
  * `ocrPrompt` 忽略；新字段已存在时以新值为准。损坏 DAV 数据不能被 OCR 兼容回退掩盖。
  */
 fun migrateLegacySettingsJson(source: String): String {
-    val raw = migrateWebDavSettingsJson(source)
+    val raw = migrateWebDavSettingsJson(migrateSettingsFormat(source))
     return runCatching {
         val element = JsonInstant.parseToJsonElement(raw) as? kotlinx.serialization.json.JsonObject
             ?: return raw

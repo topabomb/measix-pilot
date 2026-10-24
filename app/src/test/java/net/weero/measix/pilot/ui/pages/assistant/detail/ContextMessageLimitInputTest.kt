@@ -8,9 +8,11 @@ class ContextMessageLimitInputTest {
     @Test
     fun `only disabled or configured range is accepted`() {
         assertEquals(0, parseContextMessageLimitInput("0"))
+        assertEquals(1, parseContextMessageLimitInput("1"))
+        assertEquals(39, parseContextMessageLimitInput("39"))
         assertEquals(40, parseContextMessageLimitInput("40"))
         assertEquals(512, parseContextMessageLimitInput("512"))
-        listOf("", "-1", "+40", " 40", "39", "513", "1.0", "abc").forEach {
+        listOf("", "-1", "+40", " 40", "513", "1.0", "abc").forEach {
             assertNull(it, parseContextMessageLimitInput(it))
         }
     }

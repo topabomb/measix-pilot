@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.datastore
 import me.rerere.common.configuration.ConfigurationReference
 import androidx.datastore.core.DataMigration
 import androidx.datastore.preferences.core.Preferences
+import kotlinx.serialization.json.*
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_TITLE_PROMPT
@@ -59,15 +60,43 @@ private fun Preferences.uuid(key: Preferences.Key<String>): ConfigurationReferen
     this[key]?.let(ConfigurationReference::parse)
 
 
-/** Atomically adopts the old key set; no runtime reader falls back to it. */
+/** Upgrades the existing document or atomically adopts the old key set, never both. */
 internal class UserSettingsMigration : DataMigration<Preferences> {
     override suspend fun shouldMigrate(currentData: Preferences): Boolean {
         val encoded = currentData[SettingsStore.USER_SETTINGS] ?: return true
+        if (userSettingsSchemaVersion(encoded) < UserSettingsDocument.SCHEMA_VERSION) return true
         JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
         return false
     }
 
     override suspend fun migrate(currentData: Preferences): Preferences {
+        currentData[SettingsStore.USER_SETTINGS]?.let { encoded ->
+            val version = userSettingsSchemaVersion(encoded)
+            val root = JsonInstant.parseToJsonElement(encoded).jsonObject
+            val upgraded = if (version == 1) {
+                val configuration = root.getValue("configuration").jsonObject.migrateLegacyAssistantLimits()
+                val preferences = root.getValue("preferences").jsonObject
+                val scopes = preferences["scopes"]?.jsonArray?.map { scope ->
+                    val fields = scope.jsonObject
+                    val usage = fields["assistantUsage"]?.jsonArray?.map { item ->
+                        val values = item.jsonObject
+                        val limit = values["contextMessageLimit"]
+                        if (limit == null || limit == JsonNull) values else JsonObject(values +
+                            ("contextMessageLimit" to limit.jsonObject.migrateLegacyLimit("value")))
+                    }
+                    if (usage == null) fields else JsonObject(fields + ("assistantUsage" to JsonArray(usage)))
+                }
+                JsonObject(root + mapOf(
+                    "schemaVersion" to JsonPrimitive(UserSettingsDocument.SCHEMA_VERSION),
+                    "configuration" to configuration,
+                    "preferences" to if (scopes == null) preferences else JsonObject(preferences + ("scopes" to JsonArray(scopes))),
+                )).toString()
+            } else encoded
+            JsonInstant.decodeFromString<UserSettingsDocument>(upgraded)
+            return currentData.toMutablePreferences().apply {
+                this[SettingsStore.USER_SETTINGS] = upgraded
+            }.toPreferences()
+        }
         val old = readLegacySettings(currentData)
         val prepared = UserSettingsDocument.empty().withPersonalSettings(old)
         val personal = prepared.preferences.forScope(ConfigurationScope.Personal)
@@ -161,7 +190,9 @@ private fun readLegacySettings(preferences: Preferences): Settings {
             ?: DEFAULT_ASSISTANT_ID,
         assistantTags = preferences.json(ASSISTANT_TAGS, emptyList()),
         providers = preferences.json(PROVIDERS, emptyList()),
-        assistants = preferences.json(ASSISTANTS, emptyList()),
+        assistants = preferences.json<List<net.weero.measix.pilot.data.model.Assistant>>(ASSISTANTS, emptyList()).map {
+            if (it.contextMessageLimit in 1..39) it.copy(contextMessageLimit = 40) else it
+        },
         dynamicColor = preferences[DYNAMIC_COLOR] != false,
         themeId = preferences[THEME_ID] ?: PresetThemes[0].id,
         customThemes = preferences.json(CUSTOM_THEMES, emptyList()),
@@ -187,3 +218,36 @@ private fun readLegacySettings(preferences: Preferences): Settings {
         pendingAssistantDeletions = preferences.json(PENDING_ASSISTANT_DELETIONS, emptyList()),
     )
 }
+
+private fun userSettingsSchemaVersion(source: String): Int {
+    val value = JsonInstant.parseToJsonElement(source).jsonObject["schemaVersion"] as? JsonPrimitive
+    val version = value?.takeUnless { it.isString }?.intOrNull
+    require(version != null && version in 1..UserSettingsDocument.SCHEMA_VERSION) { "unsupported_user_settings_schema: $value" }
+    return version
+}
+
+private fun JsonObject.migrateLegacyLimit(key: String): JsonObject {
+    val value = get(key) as? JsonPrimitive
+    return if (value?.takeUnless { it.isString }?.intOrNull in 1..39) {
+        JsonObject(this + (key to JsonPrimitive(40)))
+    } else this
+}
+
+private fun JsonObject.migrateLegacyAssistantLimits(): JsonObject {
+    val assistants = get("assistants") ?: return this
+    return JsonObject(this + ("assistants" to JsonArray(assistants.jsonArray.map {
+        it.jsonObject.migrateLegacyLimit("contextMessageLimit")
+    })))
+}
+
+/** Settings backups have their own version, independent of the DataStore document. */
+internal fun migrateSettingsFormat(source: String): String {
+    val root = JsonInstant.parseToJsonElement(source).jsonObject
+    val value = root["settingsFormatVersion"]
+    val version = if (value == null) 1 else (value as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
+    require(version != null && version in 1..SETTINGS_FORMAT_VERSION) { "unsupported_settings_format: $value" }
+    if (version == SETTINGS_FORMAT_VERSION) return source
+    return JsonObject(root.migrateLegacyAssistantLimits() + ("settingsFormatVersion" to JsonPrimitive(SETTINGS_FORMAT_VERSION))).toString()
+}
+
+internal const val SETTINGS_FORMAT_VERSION = 2

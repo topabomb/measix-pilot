@@ -27,6 +27,66 @@ import org.junit.Test
 
 class UserSettingsMigrationTest {
     @Test
+    fun `schema one preserves effective limits in shared definitions and scoped overrides without legacy fallback`() = runTest {
+        val assistants = listOf(0, 1, 20, 39, 40, 512).map {
+            net.weero.measix.pilot.data.model.Assistant(contextMessageLimit = it)
+        }
+        val scope = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "usr_one")
+        val usage = assistants.map {
+            net.weero.measix.pilot.data.configuration.AssistantUsagePreferences(it.id,
+                contextMessageLimit = net.weero.measix.pilot.data.configuration.UsageValue(it.contextMessageLimit))
+        } + net.weero.measix.pilot.data.configuration.AssistantUsagePreferences(ConfigurationReference.random())
+        val original = UserSettingsDocument.empty().withPersonalSettings(Settings(assistants = assistants))
+        val document = original.copy(preferences = original.preferences.copy(scopes = original.preferences.scopes +
+            ScopedUserPreferences(scope, assistantUsage = usage)))
+        val raw = JsonInstant.parseToJsonElement(JsonInstant.encodeToString(document)).jsonObject
+        val old = mutablePreferencesOf(SettingsStore.USER_SETTINGS to JsonObject(raw + ("schemaVersion" to JsonPrimitive(1))).toString(),
+            SettingsStore.ASSISTANTS to "not valid legacy JSON")
+        val migration = UserSettingsMigration()
+        assertTrue(migration.shouldMigrate(old))
+        val result = migration.migrate(old)
+        assertFalse(migration.shouldMigrate(result))
+        assertEquals(result, migration.migrate(result))
+        val restored = JsonInstant.decodeFromString<UserSettingsDocument>(result[SettingsStore.USER_SETTINGS]!!)
+        val expected = listOf(0, 40, 40, 40, 40, 512)
+        assertEquals(expected, restored.configuration.assistants.map { it.contextMessageLimit })
+        assertEquals(expected + listOf(null), restored.preferences.scopes.last().assistantUsage.map { it.contextMessageLimit?.value })
+        assertEquals(document.preferences.scopes.last().scope, restored.preferences.scopes.last().scope)
+        assertEquals(document.internalState, restored.internalState)
+        assertEquals(usage.map { it.assistantId }, restored.preferences.scopes.last().assistantUsage.map { it.assistantId })
+        assertEquals(restored.preferences.scopes.single { it.scope == scope },
+            restored.withPersonalSettings(Settings()).preferences.scopes.single { it.scope == scope })
+        val fresh = UserSettingsDocument.empty().withPersonalSettings(Settings(assistants = assistants))
+        val newData = mutablePreferencesOf(SettingsStore.USER_SETTINGS to JsonInstant.encodeToString(fresh))
+        assertFalse(migration.shouldMigrate(newData))
+        assertEquals(newData, migration.migrate(newData))
+    }
+
+    @Test
+    fun `legacy keys and old backups retain forty while new exports retain small limits`() = runTest {
+        val assistant = net.weero.measix.pilot.data.model.Assistant(contextMessageLimit = 7)
+        val migration = UserSettingsMigration()
+        val oldKeys = mutablePreferencesOf(SettingsStore.ASSISTANTS to JsonInstant.encodeToString(listOf(assistant)))
+        val adopted = migration.migrate(oldKeys)
+        assertEquals(40, JsonInstant.decodeFromString<UserSettingsDocument>(adopted[SettingsStore.USER_SETTINGS]!!).configuration.assistants.single().contextMessageLimit)
+        val settings = Settings(assistants = listOf(assistant))
+        val exported = JsonInstant.encodeToString(settings)
+        assertEquals(JsonPrimitive(2), JsonInstant.parseToJsonElement(exported).jsonObject["settingsFormatVersion"])
+        val compact = kotlinx.serialization.json.Json(JsonInstant) { encodeDefaults = false }.encodeToString(settings)
+        assertEquals(JsonPrimitive(2), JsonInstant.parseToJsonElement(compact).jsonObject["settingsFormatVersion"])
+        assertEquals(7, JsonInstant.decodeFromString<Settings>(migrateLegacySettingsJson(exported)).assistants.single().contextMessageLimit)
+        val old = JsonObject(JsonInstant.parseToJsonElement(exported).jsonObject - "settingsFormatVersion").toString()
+        val upgraded = migrateLegacySettingsJson(old)
+        assertEquals(40, JsonInstant.decodeFromString<Settings>(upgraded).assistants.single().contextMessageLimit)
+        assertEquals(upgraded, migrateLegacySettingsJson(upgraded))
+        for (version in listOf("3", "null", "\"2\"", "0", "1.5")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                migrateLegacySettingsJson("""{"settingsFormatVersion":$version}""")
+            }
+        }
+    }
+
+    @Test
     fun `enterprise principal migration removes URL source from scopes and references exactly once`() = runTest {
         val hash = "a".repeat(64)
         val encoded = """{"preferences":{"scopes":[{"scope":{"type":"enterprise","authority":{"sourceNamespace":"platform:$hash","deploymentId":"dep_example"},"userId":"user"},"selections":{"chatModelId":"managed~platform~$hash~dep_example~mdl_example"}}]}}"""

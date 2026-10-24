@@ -497,7 +497,7 @@ internal data class UserSettingsDocument(
     }
 
     companion object {
-        const val SCHEMA_VERSION = 1
+        const val SCHEMA_VERSION = 2
 
         fun empty(preferences: UserPreferences = UserPreferences()): UserSettingsDocument = UserSettingsDocument(
             schemaVersion = SCHEMA_VERSION,

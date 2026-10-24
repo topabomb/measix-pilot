@@ -1370,7 +1370,7 @@
   <string name="assistant_picker_current">当前助手</string>
   <string name="assistant_picker_manage_current">管理当前助手</string>
   <string name="assistant_page_context_message_limit">自动裁剪上下文</string>
-  <string name="assistant_page_context_message_limit_desc">消息数超过阈值后，分段移除较早的完整对话轮次，避免每轮移动请求前缀。</string>
+  <string name="assistant_page_context_message_limit_desc">按消息数量限制历史，同时保留完整对话轮次；实际保留数量可能超过设定值。</string>
   <string name="assistant_page_context_message_limit_count">超过 %d 条消息后裁剪</string>
   <string name="assistant_page_context_message_limit_unlimited">不自动裁剪上下文</string>
   <string name="assistant_page_context_message_limit_warning">消息条数不等于 token 上限；每次裁剪仍可能使提示词缓存失效。</string>

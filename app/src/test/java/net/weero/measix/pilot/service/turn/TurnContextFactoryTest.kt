@@ -54,7 +54,7 @@ class TurnContextFactoryTest {
 
     @Test
     fun `materialize freezes final system and removes system producers from step inputs`() {
-        val assistant = Assistant(systemPrompt = "domain {{user}}")
+        val assistant = Assistant(systemPrompt = "domain {{user}}", contextMessageLimit = 1)
         val systemRule = net.weero.measix.pilot.service.turn.ResolvedPromptInjection(
             ConfigurationReference.random(), 0,
             net.weero.measix.pilot.data.model.InjectionPosition.AFTER_SYSTEM_PROMPT,
@@ -84,6 +84,19 @@ class TurnContextFactoryTest {
         )
         val context = TurnContextFactory(io.mockk.mockk()).materialize(plan)
         assertEquals(1, schemaReads)
+        assertEquals(1, context.assistant.contextMessageLimit)
+        val next = TurnContextFactory(io.mockk.mockk()).materialize(TurnLaunchPlan(
+            realmAccess = plan.realmAccess,
+            assistant = assistant.copy(contextMessageLimit = 7),
+            model = plan.model,
+            mediaCapabilities = plan.mediaCapabilities,
+            promptInputs = plan.promptInputs,
+            tools = plan.tools,
+            disclosure = plan.disclosure,
+        ))
+        assertEquals(7, next.assistant.contextMessageLimit)
+        assertEquals(1, context.assistant.contextMessageLimit)
+        assertEquals(2, schemaReads)
         assertEquals(listOf(historyRule), context.promptInputs.promptInjections)
         assertEquals(null, context.promptInputs.workspaceReminder)
         assertTrue(context.system.text.contains("domain captured"))

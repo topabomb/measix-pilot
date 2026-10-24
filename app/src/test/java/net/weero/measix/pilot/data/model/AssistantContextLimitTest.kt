@@ -10,7 +10,8 @@ class AssistantContextLimitTest {
     fun `effective limit should normalize persisted values`() {
         assertEquals(0, Assistant(contextMessageLimit = 0).effectiveContextMessageLimit())
         assertEquals(0, Assistant(contextMessageLimit = -1).effectiveContextMessageLimit())
-        assertEquals(MIN_CONTEXT_MESSAGE_LIMIT, Assistant(contextMessageLimit = 20).effectiveContextMessageLimit())
+        assertEquals(1, Assistant(contextMessageLimit = 1).effectiveContextMessageLimit())
+        assertEquals(20, Assistant(contextMessageLimit = 20).effectiveContextMessageLimit())
         assertEquals(DEFAULT_CONTEXT_MESSAGE_LIMIT, Assistant(contextMessageLimit = 80).effectiveContextMessageLimit())
         assertEquals(MAX_CONTEXT_MESSAGE_LIMIT, Assistant(contextMessageLimit = 600).effectiveContextMessageLimit())
     }

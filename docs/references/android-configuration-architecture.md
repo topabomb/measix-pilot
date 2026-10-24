@@ -72,6 +72,13 @@ JSON 解码、个人配置物化和按域 Resolver 投影在 SettingsStore 的�
 
 `UserSettingsDocument.configuration` 是用户可编辑配置的持久事实；`Settings` 还包含运行消费所需的投影。
 用户文档模型位于 `UserSettingsDocument.kt`，个人 Settings 投影位于 `SettingsStore.kt`；迁移与读取规范化分别由 `UserSettingsMigration`、`SettingsNormalization` 维护。
+
+`UserSettingsDocument` 当前 schema 为 2。`UserSettingsMigration` 在 typed decode 前检查原始版本，
+将 schema 1 的共享助手定义和各企业域 assistantUsage 中旧 `contextMessageLimit` 1–39 转为原生效值 40；
+缺失 override 保持继承，其余字段、主体与资源身份不变。已有文档不得从旧分散键重建；未知版本拒绝迁移，原数据不变。
+个人备份的 Settings 投影另用显式 `settingsFormatVersion=2`，导出即使省略默认值也写出标记。
+`migrateLegacySettingsJson` 对缺标记／版本 1 的助手值执行同一转换，新格式保留 1–39，未来版本明确拒绝。
+备份仍仅含个人设置，企业 usage 只在本地文档迁移，不进入个人包；恢复沿原 Settings owner 保留企业偏好。
 不在这里复制完整属性清单，但必须区分四种默认语义：Kotlin 构造默认、旧 DataStore key 缺失默认、
 `materializeForRead()` 后的有效默认、企业字段未提供。不能用其中一种推断另一种。
 `Settings()` 的 `modeInjections` 构造默认包含 `DEFAULT_MODE_INJECTIONS`；`UserSettingsMigration` 在旧键缺失时

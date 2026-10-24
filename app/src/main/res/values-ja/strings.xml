@@ -1370,7 +1370,7 @@
   <string name="assistant_picker_current">現在のアシスタント</string>
   <string name="assistant_picker_manage_current">現在のアシスタントを管理</string>
   <string name="assistant_page_context_message_limit">コンテキストの自動整理</string>
-  <string name="assistant_page_context_message_limit_desc">メッセージ数がこの値を超えると、古い会話ターンを段階的に削除し、リクエストのプレフィックスを安定させます。</string>
+  <string name="assistant_page_context_message_limit_desc">会話のターンを分割せずに、メッセージ数で履歴を制限します。実際に保持される数は設定値を超える場合があります。</string>
   <string name="assistant_page_context_message_limit_count">%d 件を超えると整理</string>
   <string name="assistant_page_context_message_limit_unlimited">コンテキストを自動整理しない</string>
   <string name="assistant_page_context_message_limit_warning">メッセージ数はトークン上限ではありません。整理時にはプロンプトキャッシュが無効になる場合があります。</string>

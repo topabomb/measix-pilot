@@ -1370,7 +1370,7 @@
   <string name="assistant_picker_current">Текущий ассистент</string>
   <string name="assistant_picker_manage_current">Управлять текущим ассистентом</string>
   <string name="assistant_page_context_message_limit">Автоматическая очистка контекста</string>
-  <string name="assistant_page_context_message_limit_desc">Когда число сообщений превышает этот порог, старые полные ходы диалога удаляются ступенчато, сохраняя стабильный префикс запроса.</string>
+  <string name="assistant_page_context_message_limit_desc">Ограничивает историю по числу сообщений, сохраняя полные циклы диалога. Фактическое число сохранённых сообщений может превышать заданное значение.</string>
   <string name="assistant_page_context_message_limit_count">Очищать после %d сообщений</string>
   <string name="assistant_page_context_message_limit_unlimited">Не очищать контекст автоматически</string>
   <string name="assistant_page_context_message_limit_warning">Число сообщений не является лимитом токенов. Каждая очистка всё равно может сбросить кеш промпта.</string>

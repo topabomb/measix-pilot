@@ -13,7 +13,7 @@ import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.utils.SimpleCache
 import java.util.concurrent.TimeUnit
 
-internal const val MIN_CONTEXT_MESSAGE_LIMIT = 40
+internal const val MIN_CONTEXT_MESSAGE_LIMIT = 1
 internal const val DEFAULT_CONTEXT_MESSAGE_LIMIT = 80
 internal const val MAX_CONTEXT_MESSAGE_LIMIT = 512
 

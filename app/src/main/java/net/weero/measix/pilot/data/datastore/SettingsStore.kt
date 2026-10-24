@@ -618,6 +618,9 @@ data class PendingAssistantDeletion(
 
 @Serializable
 data class Settings(
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault
+    val settingsFormatVersion: Int = SETTINGS_FORMAT_VERSION,
     @Transient
     val init: Boolean = false,
     val dynamicColor: Boolean = true,

@@ -312,6 +312,12 @@ Responses 仍沿既有无状态原始批次回放和工具结果链，不新增�
 
 ### 响应显示顺序
 
+Responses 内置 `image_generation` 的 model 取自 `Model.responsesImageModel`。用户模型的既有内置工具编辑页可选
+`gpt-image-2`、`gpt-image-2.5-sunburst`、`gpt-image-2.5-flare`；显式保存的其他值原样保留。旧模型缺字段时使用
+原来固定的 `gpt-image-2`，不扫描重写设置；关闭工具不清除所选值，也不向请求发送该工具。
+该选择随原 Model 捕获，返回图片仍经 Base64ImageToLocalFileTransformer、ArtifactStore 与原 Turn 租约提交聊天附件，
+不建立 GeneratedMedia 记录。独立 Images API 页面与 generate_image 继续使用各自已选模型和 GeneratedMediaStore。
+
 `ResponseDisplayState` 只管理当前响应的显示槽，不保存第二份协议回放。item_id 与 output_index 在同一响应内
 绑定且不可改换；元数据事件也接纳晚到别名。正文按内容索引与 text/refusal 类型区分，跨工具或其他显示片段后，
 即使同一 message item 再次输出正文，也开始新显示段。推理、服务端事件和图片沿自身稳定槽更新。

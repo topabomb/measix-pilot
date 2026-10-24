@@ -12,6 +12,10 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
 
 配置分属 DataStore、轻量 UI preferences、Room、资源文件和可重建缓存，不能整体替换为远端 Settings JSON。企业平台接入复用现有 Session、配置发布与按域解析，平台令牌不进入用户配置。企业配置使用独立身份与定义，不通过全局 Settings overlay 覆盖用户配置。
 
+用户模型的 `responsesImageModel` 由原 Provider 模型编辑命令保存并随 Model 捕获；缺失字段兼容默认 `gpt-image-2`，
+与字段加入前的请求行为一致。选择不会改写其他模型或创建新的按域配置。企业发布模型与独立图片资源仍只读，
+本地不向平台合同添加此字段，也不把用户模型的选择套到企业定义上；企业会话使用用户自有模型时沿原共享定义解析。
+
 ## 2. 配置 owner 与读写架构
 
 ### 2.1 Owner 表

@@ -681,6 +681,8 @@ private fun ModelSettingsForm(
                     // 内置工具页面
                     BuiltInToolsSettings(
                         tools = model.tools,
+                        imageModel = model.responsesImageModel,
+                        onUpdateImageModel = { onModelChange(model.copy(responsesImageModel = it)) },
                         onUpdateTools = { tools ->
                             onModelChange(model.copy(tools = tools))
                         }
@@ -1299,6 +1301,8 @@ private fun ModelCard(
 @Composable
 private fun BuiltInToolsSettings(
     tools: Set<BuiltInTools>,
+    imageModel: String,
+    onUpdateImageModel: (String) -> Unit,
     onUpdateTools: (Set<BuiltInTools>) -> Unit
 ) {
     Column(
@@ -1369,6 +1373,18 @@ private fun BuiltInToolsSettings(
                                 onUpdateTools(tools - tool)
                             }
                         }
+                    )
+                }
+            }
+        }
+        if (BuiltInTools.ImageGeneration in tools) {
+            Text(stringResource(R.string.setting_page_built_in_tools_image_generation), style = MaterialTheme.typography.titleSmall)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                (me.rerere.ai.provider.RESPONSE_IMAGE_MODEL_IDS + imageModel).distinct().forEach { id ->
+                    androidx.compose.material3.FilterChip(
+                        selected = id == imageModel,
+                        onClick = { onUpdateImageModel(id) },
+                        label = { Text(id) },
                     )
                 }
             }

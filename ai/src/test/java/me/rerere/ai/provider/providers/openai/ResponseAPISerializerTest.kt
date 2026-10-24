@@ -54,6 +54,25 @@ import org.junit.Test
  * 纯响应解析契约在 `ResponseAPIParserTest`。
  */
 class ResponseAPISerializerTest {
+    @Test
+    fun `image tool model survives serialization with legacy default and explicit choices`() {
+        val legacy = Json.decodeFromString(Model.serializer(), """{"modelId":"chat","tools":[{"type":"image_generation"}]}""")
+        assertEquals("gpt-image-2", legacy.responsesImageModel)
+        for (id in me.rerere.ai.provider.RESPONSE_IMAGE_MODEL_IDS + "explicit-legacy-image-model") {
+            val selected = legacy.copy(responsesImageModel = id)
+            val restored = Json.decodeFromString(Model.serializer(), Json.encodeToString(Model.serializer(), selected))
+            assertEquals(selected, restored)
+            for (stream in listOf(false, true)) {
+                val body = api.buildRequestBody(ProviderSetting.OpenAI(useResponseApi = true),
+                    listOf(UIMessage.user("draw")).toModelRequests(), TextGenerationParams(model = restored), stream)
+                assertEquals(id, body["tools"]!!.jsonArray.single().jsonObject["model"]!!.jsonPrimitive.content)
+            }
+            val disabled = invokeBuildRequestBody(ProviderSetting.OpenAI(useResponseApi = true),
+                TextGenerationParams(model = restored.copy(tools = emptySet())))
+            assertFalse(disabled.containsKey("tools"))
+        }
+    }
+
 
     @Test
     fun `official cache key is stable per conversation opaque and absent from auxiliary requests`() {

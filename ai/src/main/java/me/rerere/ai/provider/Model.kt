@@ -17,7 +17,13 @@ data class Model(
     val abilities: List<ModelAbility> = emptyList(),
     val tools: Set<BuiltInTools> = emptySet(),
     val providerOverwrite: ProviderSetting? = null,
+    // Missing legacy values retain the image model previously fixed by ResponseAPI.
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val responsesImageModel: String = "gpt-image-2",
 )
+
+val RESPONSE_IMAGE_MODEL_IDS = listOf("gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare")
 
 @Serializable
 enum class ModelType {

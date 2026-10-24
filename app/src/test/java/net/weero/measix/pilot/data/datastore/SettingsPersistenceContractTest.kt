@@ -12,6 +12,17 @@ import org.junit.Test
 
 class SettingsPersistenceContractTest {
     @Test
+    fun `Responses image choice survives settings backup without altering model identity or selection`() {
+        val model = me.rerere.ai.provider.Model(modelId = "chat-model",
+            tools = setOf(me.rerere.ai.provider.BuiltInTools.ImageGeneration), responsesImageModel = "gpt-image-2.5-flare")
+        val settings = Settings(providers = listOf(me.rerere.ai.provider.ProviderSetting.OpenAI(models = listOf(model))), chatModelId = model.id)
+        val restored = JsonInstant.decodeFromString<Settings>(JsonInstant.encodeToString(settings))
+        assertEquals(settings.providers, restored.providers)
+        assertEquals(model.id, restored.chatModelId)
+        assertEquals("gpt-image-2.5-flare", restored.providers.single().models.single().responsesImageModel)
+    }
+
+    @Test
     fun `settings json top-level shape remains compatible and excludes disclosure state`() {
         val settings = Settings(
             chatModelId = ConfigurationReference.parse("00000000-0000-0000-0000-000000000101"),

@@ -56,6 +56,8 @@ import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.ui.ResponseFunctionResultMetadata
+import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.KeyRoulette
@@ -127,7 +129,9 @@ class ResponseAPI(
 
         Log.d(TAG, "generateText: model=${params.model.modelId}")
 
+        var resultEndpoint = request.url.resultSource()
         val bodyStr = client.forCredentials(params.credentials).newCall(request).readResponse { response ->
+            resultEndpoint = response.request.url.resultSource()
             if (!response.isSuccessful) {
                 throw Exception("Failed to get response: ${response.code} ${response.body.string()}")
             }
@@ -137,7 +141,7 @@ class ResponseAPI(
         val terminalError = parseResponseObjectError(bodyJson)
         val endpointProfile = resolveResponseEndpointProfile(providerSetting.baseUrl.toHttpUrl().host)
         val output = if (bodyJson["output"]?.jsonArrayOrNull != null) {
-            parseResponseOutput(bodyJson, endpointProfile)
+            parseResponseOutput(bodyJson, endpointProfile, requestBody.sentFunctionNames(), resultEndpoint)
         } else if (terminalError != null) {
             MessageChunk(
                 id = bodyJson["id"]?.jsonPrimitiveOrNull?.contentOrNull.orEmpty(),
@@ -159,7 +163,6 @@ class ResponseAPI(
         params: TextGenerationParams
     ): Flow<MessageChunk> = callbackFlow {
         // Output aliases and argument completion live only for this response, independently of call_id.
-        val streamState = ResponseStreamState()
         val endpointProfile = resolveResponseEndpointProfile(providerSetting.baseUrl.toHttpUrl().host)
         val requestBody = buildRequestBody(
             providerSetting = providerSetting,
@@ -178,7 +181,11 @@ class ResponseAPI(
 
         Log.d(TAG, "streamText: model=${params.model.modelId}")
 
+        val streamState = ResponseStreamState(requestBody.sentFunctionNames(), request.url.resultSource())
         val listener = object : EventSourceListener() {
+            override fun onOpen(eventSource: EventSource, response: Response) {
+                streamState.responseEndpoint = response.request.url.resultSource()
+            }
             override fun onEvent(
                 eventSource: EventSource,
                 id: String?,
@@ -193,6 +200,7 @@ class ResponseAPI(
                             outputItems = streamState.outputItems(),
                             endpointProfile = endpointProfile,
                             finishReason = "done",
+                            streamState = streamState,
                         ).let { chunk ->
                             trySend(chunk).onFailure {
                                 Log.w(TAG, "onEvent: terminal protocol state dropped")
@@ -558,6 +566,8 @@ class ResponseAPI(
             .groupBy { it.providerCallId }
         val consumedToolsByCallId = mutableMapOf<String, Int>()
         outputItemGroups.forEach { outputItems ->
+            val remoteResultIds = outputItems.filter { it["type"]?.jsonPrimitive?.contentOrNull == "function_call_output" }
+                .mapNotNull { it["call_id"]?.jsonPrimitive?.contentOrNull }.toSet()
             outputItems.forEach { item -> add(item) }
             outputItems.forEach { item ->
                 if (item["type"]?.jsonPrimitive?.contentOrNull == "function_call") {
@@ -567,7 +577,9 @@ class ResponseAPI(
                         consumedToolsByCallId[id] = index + 1
                         toolsByCallId[id]?.getOrNull(index)
                     }
-                    if (tool?.hasReplayResult == true) addFunctionCallOutput(tool, endpointProfile, mediaCapabilities)
+                    if (tool?.hasReplayResult == true && callId !in remoteResultIds) {
+                        addFunctionCallOutput(tool, endpointProfile, mediaCapabilities)
+                    }
                 }
             }
         }
@@ -746,6 +758,7 @@ class ResponseAPI(
                 val item = jsonObject["item"]?.jsonObject ?: error("chunk item not found")
                 streamState.recordOutputItem(jsonObject)
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
+                if (type == "function_call_output") return null
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "image_generation_call") {
                     return MessageChunk(
@@ -798,6 +811,7 @@ class ResponseAPI(
                 val item = jsonObject["item"]?.jsonObject ?: error("chunk item not found")
                 streamState.recordOutputItem(jsonObject)
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
+                if (type == "function_call_output") return null
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "reasoning") {
                     val encryptedContent = item["encrypted_content"]?.jsonPrimitive?.content
@@ -884,6 +898,7 @@ class ResponseAPI(
                         outputItems = streamState.outputItems(response?.get("output")?.jsonArray?.map { it.jsonObject }),
                         endpointProfile = endpointProfile,
                         usage = usage,
+                        streamState = streamState,
                     )
                 } else {
                     MessageChunk(id = "", model = "", choices = emptyList(), usage = usage)
@@ -948,7 +963,15 @@ class ResponseAPI(
         endpointProfile: ResponseEndpointProfile,
         usage: ProviderUsageSnapshot? = null,
         finishReason: String = "completed",
+        streamState: ResponseStreamState,
     ): MessageChunk {
+        val results = responseFunctionResults(outputItems, streamState.sentFunctions, streamState.responseEndpoint, endpointProfile)
+        val updates = results.values.map { result -> UIMessagePart.Tool(
+            localCallId = Uuid.NIL, stepId = Uuid.NIL, providerCallId = result.callId,
+            toolName = "", input = "", output = result.output.resultDisplayParts(),
+            resultStatus = ToolResultStatus.COMPLETED,
+            metadata = ResponseFunctionResultMetadata(result).toMetadata(),
+        ) }
         return MessageChunk(
             id = responseId,
             model = "",
@@ -957,7 +980,7 @@ class ResponseAPI(
                     index = 0,
                     delta = UIMessage(
                         role = MessageRole.ASSISTANT,
-                        parts = emptyList(),
+                        parts = updates,
                         providerMetadata = outputItems.takeIf { it.isNotEmpty() }?.let {
                             OpenAIResponseMetadata(
                                 wireFormat = endpointProfile.wireFormat,
@@ -968,6 +991,7 @@ class ResponseAPI(
                     ),
                     message = null,
                     finishReason = finishReason,
+                    toolCallSlots = results.keys.map(streamState::resultTargetSlot),
                 )
             ),
             usage = usage,
@@ -1009,8 +1033,11 @@ class ResponseAPI(
     internal fun parseResponseOutput(
         jsonObject: JsonObject,
         endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
+        sentFunctions: Set<String> = emptySet(),
+        responseEndpoint: String? = null,
     ): MessageChunk {
         val outputs = jsonObject["output"]?.jsonArray ?: error("output not found")
+        val remoteResults = responseFunctionResults(outputs.map { it.jsonObject }, sentFunctions, responseEndpoint, endpointProfile)
         val parts = arrayListOf<UIMessagePart>()
 
         outputs.forEach { outputItem ->
@@ -1071,7 +1098,9 @@ class ResponseAPI(
                             providerCallId = callId,
                             toolName = name,
                             input = arguments,
-                            output = emptyList()
+                            output = remoteResults[callId]?.output?.resultDisplayParts().orEmpty(),
+                            resultStatus = remoteResults[callId]?.let { ToolResultStatus.COMPLETED },
+                            metadata = remoteResults[callId]?.let { ResponseFunctionResultMetadata(it).toMetadata() },
                         )
                     )
                 }
@@ -1207,6 +1236,14 @@ class ResponseAPI(
         }
     }
 }
+
+private fun okhttp3.HttpUrl.resultSource(): String = newBuilder()
+    .username("").password("").query(null).fragment(null).build().toString()
+
+private fun JsonObject.sentFunctionNames(): Set<String> = get("tools")?.jsonArrayOrNull.orEmpty()
+    .mapNotNull { it.jsonObjectOrNull }
+    .filter { it["type"]?.jsonPrimitiveOrNull?.contentOrNull == "function" }
+    .mapNotNull { it["name"]?.jsonPrimitiveOrNull?.contentOrNull }.toSet()
 
 private fun isModelAllowTemperature(
     model: Model,

@@ -274,6 +274,18 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 不新增缓存保留期或设置项。缓存键不保证命中；GPT-5.6 及之后官方将其用于可选的独立缓存归属，
 此前模型还用于路由优化，见 [Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)。
 
+### 兼容网关返回的函数结果
+
+部分兼容网关在 `response.output` 返回 `function_call_output`；这不表示官方 Responses 会执行客户端函数。
+`ResponseAPI` 从本次实际请求体提取函数名，`responseFunctionResults` 仅将结果关联到当前响应中唯一的 call_id，
+要求对应函数在已发送工具集中。未知、歧义、重复、缺失或冲突结果以明确 reason 失败，不按工具名跨响应匹配。
+字符串（包括空字符串）、对象和数组保留原值，其他类型拒绝；只读显示将结构化值转为 JSON 文本，不创建文件资源。
+
+流式结果先缓存在 `ResponseStreamState`，成功终态对账后才按原工具槽发布结果增量；失败、EOF 或取消不提前发布。
+同一结果项的重复事件必须相同，终态不能改写或丢失已见结果。`ResponseFunctionResultMetadata` 保存原值、call_id、
+实际响应端点（去除凭据、query 和 fragment）及来源 profile；`ToolResultStatus` 表示有可回放结果，不创建本地执行记录。
+原 Step 索引据此排除已返回结果的调用，同名本地工具不会再次审批或执行。raw output 已回放该结果时不再追加一份。
+
 ### Endpoint profile
 
 | Profile | Wire format | Reasoning 表示 | 加密状态 | Function output |

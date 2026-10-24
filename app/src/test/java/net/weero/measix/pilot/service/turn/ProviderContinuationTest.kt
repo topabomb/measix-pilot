@@ -133,6 +133,29 @@ class ProviderContinuationTest {
         assertEquals(ProviderContinuation.CONTINUE_ASSISTANT, step.modelResult?.continuation)
     }
 
+    @Test fun `remote result never runs or approves same named local tool`() = runTest {
+        val f = Fixture()
+        var inspected = false
+        var executed = false
+        val tool = me.rerere.ai.core.Tool(name = "lookup", description = "lookup",
+            interactionRequirement = { inspected = true; me.rerere.ai.core.ToolInteractionRequirement.Approval },
+            execute = { executed = true; emptyList() })
+        coEvery { f.provider.generateText(f.setting, any(), any()) } answers {
+            MessageChunk("response", f.model.modelId, listOf(UIMessageChoice(0, null,
+                UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Tool(
+                    Uuid.NIL, Uuid.NIL, "remote", "lookup", "{}", output = listOf(UIMessagePart.Text("")),
+                    resultStatus = ToolResultStatus.COMPLETED,
+                    metadata = ResponseFunctionResultMetadata(ResponseFunctionResult("remote", kotlinx.serialization.json.JsonPrimitive(""),
+                        "https://gateway.example/responses", OpenAIResponseSourceProfile.OPENAI_COMPATIBLE)).toMetadata(),
+                ))), "completed")))
+        }
+        val result = f.runner.run(f.inputs(tools = listOf(tool))) as TurnOutcome.Completed
+        assertFalse(inspected)
+        assertFalse(executed)
+        assertEquals(0, f.checkpoints)
+        assertTrue(result.assistantMessage.getTools().single().hasReplayResult)
+    }
+
     @Test fun `revoked access at next request boundary prevents provider IO`() = runTest {
         val f = Fixture()
         coEvery { f.provider.generateText(f.setting, any(), any()) } answers {

@@ -3,6 +3,7 @@ package me.rerere.ai.ui
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -30,6 +31,20 @@ sealed interface Metadata
 sealed interface PartMetadata : Metadata
 
 sealed interface MessageMetadata : Metadata
+
+/** A gateway-provided result is replay evidence, never a local execution record. */
+@Serializable
+data class ResponseFunctionResultMetadata(
+    val responseFunctionResult: ResponseFunctionResult? = null,
+) : PartMetadata
+
+@Serializable
+data class ResponseFunctionResult(
+    val callId: String,
+    val output: JsonElement,
+    val endpoint: String,
+    val sourceProfile: OpenAIResponseSourceProfile,
+)
 
 @Serializable
 enum class ServerToolProtocol { CLAUDE_MESSAGES }

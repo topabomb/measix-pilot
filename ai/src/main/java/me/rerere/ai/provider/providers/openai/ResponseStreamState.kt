@@ -12,7 +12,10 @@ import me.rerere.ai.util.ProviderTerminalStatus
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Response-local identities never become durable tool ids or fabricated wire item ids. */
-internal class ResponseStreamState {
+internal class ResponseStreamState(
+    val sentFunctions: Set<String> = emptySet(),
+    var responseEndpoint: String? = null,
+) {
     internal class Output(val slot: ProviderToolCallSlot.Index, var item: JsonObject) {
         var itemId: String? = null
         var outputIndex: Int? = null
@@ -74,6 +77,9 @@ internal class ResponseStreamState {
             check(found.item.string("type") == item.string("type")) { "responses_identity_conflict: output type changed" }
             check(found.item.string("name") == null || item.string("name") == null ||
                 found.item.string("name") == item.string("name")) { "responses_identity_conflict: tool name changed" }
+            if (item.string("type") == "function_call_output" && "output" in found.item && "output" in item) {
+                check(found.item["output"] == item["output"]) { "responses_result_conflict: result changed" }
+            }
             found.item = JsonObject(found.item + item)
             if (found.argumentsComplete) {
                 found.item = JsonObject(found.item + ("arguments" to JsonPrimitive(found.arguments)))
@@ -88,10 +94,23 @@ internal class ResponseStreamState {
         output(event, allowNew = true)
     }
 
+    fun resultTargetSlot(callId: String): ProviderToolCallSlot = outputs.single {
+        it.started && it.callId == callId
+    }.slot
+
     /** Successful replay must describe precisely the tool arguments already consumed by the caller. */
     fun outputItems(terminalItems: List<JsonObject>? = null): List<JsonObject> {
         val tools = outputs.filter { it.started }
         if (terminalItems != null) {
+            outputs.filter { it.item.string("type") == "function_call_output" }.forEach { recorded ->
+                val terminal = if (recorded.itemId != null) terminalItems.singleOrNull { it.string("id") == recorded.itemId }
+                    else recorded.outputIndex?.let { terminalItems.getOrNull(it) }
+                check(terminal != null && terminal.string("type") == "function_call_output" &&
+                    terminal.string("call_id") == recorded.callId &&
+                    ("output" !in recorded.item || terminal["output"] == recorded.item["output"])) {
+                    "responses_result_conflict: terminal result differs from streamed result"
+                }
+            }
             val terminalTools = terminalItems.withIndex().filter { it.value.string("type") == "function_call" }
             val resolved = terminalTools.map { (index, item) ->
                 // A complete output array supplies the authoritative output_index, including late item ids.

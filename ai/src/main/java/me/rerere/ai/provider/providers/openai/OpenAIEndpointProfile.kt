@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers.openai
 
+import kotlinx.serialization.json.*
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
@@ -237,6 +238,7 @@ internal fun mapOfficialOpenAIReasoningEffort(
     level: ReasoningLevel,
 ): String? {
     if (level == ReasoningLevel.AUTO) return null
+    if (ModelRegistry.OPENAI_GPT_6_SERIES.match(modelId)) return level.effort
 
     val normalizedModelId = modelId.lowercase()
     val isPointPro = OPENAI_GPT_5_POINT_PRO_PATTERN.matches(normalizedModelId)
@@ -287,6 +289,43 @@ internal fun mapOfficialOpenAIReasoningEffort(
             ReasoningLevel.OFF -> "low"
             ReasoningLevel.XHIGH, ReasoningLevel.MAX -> "high"
             else -> level.effort
+        }
+    }
+}
+
+/** Validate the final wire body so custom fields cannot bypass a known model's contract. */
+internal fun validateGpt6Request(modelId: String, body: JsonObject, responses: Boolean) {
+    if (!ModelRegistry.OPENAI_GPT_6_SERIES.match(modelId)) return
+    val reasoning = body["reasoning"]
+    if (responses) require(reasoning == null || reasoning is JsonObject) {
+        "gpt6_reasoning_invalid: $modelId reasoning must be an object"
+    }
+    val rawEffort = if (responses) (reasoning as? JsonObject)?.get("effort") else body["reasoning_effort"]
+    val effort = if (rawEffort == null) null else (rawEffort as? JsonPrimitive)?.takeIf { it.isString }?.content
+    require(rawEffort == null || effort in setOf("none", "low", "medium", "high", "xhigh", "max")) {
+        "gpt6_reasoning_invalid: $modelId supports low/medium/high/xhigh/max, with none only on gpt-6-sol and gpt-6-luna"
+    }
+    require(effort != "none" || ModelRegistry.GPT_6_OPTIONAL_REASONING.match(modelId)) {
+        "gpt6_reasoning_required: $modelId does not support none; choose LOW or higher"
+    }
+    if (effort != "none") {
+        val forbidden = listOf("temperature", "top_p", "top_logprobs") + if (responses) emptyList() else listOf("logprobs")
+        val present = forbidden.filter { it in body }
+        require(present.isEmpty()) {
+            "gpt6_sampling_unsupported: $modelId with reasoning requires removing ${present.joinToString()}"
+        }
+        require(!responses || (body["include"] as? JsonArray).orEmpty().none { it == JsonPrimitive("message.output_text.logprobs") }) {
+            "gpt6_logprobs_unsupported: $modelId with reasoning cannot include message.output_text.logprobs"
+        }
+    }
+    if (!responses) {
+        val hasTools = (body["tools"] as? JsonArray).orEmpty().isNotEmpty() ||
+            (body["messages"] as? JsonArray).orEmpty().any { raw ->
+                val message = raw as? JsonObject
+                message?.get("role") == JsonPrimitive("tool") || (message?.get("tool_calls") as? JsonArray).orEmpty().isNotEmpty()
+            }
+        require(!hasTools || effort == "none" && ModelRegistry.GPT_6_OPTIONAL_REASONING.match(modelId)) {
+            "gpt6_tools_require_responses: $modelId requires Responses for tools with reasoning; select the Responses protocol"
         }
     }
 }

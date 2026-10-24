@@ -256,6 +256,19 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 
 工具参数分片只合并到当前未完成步骤中定位到的那一个 Tool。后续请求即使复用相同 `providerCallId`，也不能改写前序已完成调用的参数、结果或 metadata。
 
+### GPT-6 型号约束
+
+`ModelRegistry` 精确登记 `gpt-6-astra`、`gpt-6.1-sol`、`gpt-6-sol`、`gpt-6-luna` 的图片输入、文本输出、工具及推理能力，
+不沿用 GPT-5 的降档规则或推断未知后缀。Chat Completions 与 Responses 保留 LOW/MEDIUM/HIGH/XHIGH/MAX；AUTO 省略 effort。
+Astra 与 6.1 Sol 拒绝 OFF/none；Sol 与 Luna 的 OFF 编码为 none。自定义 minimal、auto、ultra 等非法 wire 值明确失败。
+
+`validateGpt6Request` 在 custom body 合并后校验最终请求：非 none 禁止 temperature/top_p/top_logprobs，Chat 另禁 logprobs，
+Responses 不允许请求 output_text logprobs。显式非法采样参数报具体字段，不静默丢弃。
+Chat 的新工具声明及历史工具消息只允许 Sol/Luna + none；其他组合要求用户选择 Responses，不自动切换协议或改写配置。
+内置工具同样要求 Responses。关闭 REASONING 勾选不能绕过模型约束；官方和普通兼容网关保持各自端点身份。
+Responses 仍沿既有无状态原始批次回放和工具结果链，不新增异步工具、WebSocket steering 或 reasoning configuration_update。
+依据：[GPT-6 迁移与限制](https://developers.openai.com/api/docs/guides/latest-model)。
+
 ### GLM-5.3 Chat Completions
 
 `ModelRegistry.GLM_5_3` 精确匹配 `glm-5.3`，默认登记文本输入/输出、工具与推理，不扩展到 Flash 或未知后缀。

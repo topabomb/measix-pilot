@@ -290,6 +290,10 @@ class ChatCompletionsAPI(
         val host = providerSetting.baseUrl.toHttpUrl().host
         val endpointVendor = resolveOpenAIEndpointVendor(host)
         val isOfficialOpenAI = endpointVendor == OpenAIEndpointVendor.OPENAI
+        val isGpt6 = ModelRegistry.OPENAI_GPT_6_SERIES.match(params.model.modelId)
+        require(!isGpt6 || params.model.tools.isEmpty()) {
+            "gpt6_tools_require_responses: ${params.model.modelId} built-in tools require the Responses protocol"
+        }
         val isGlm53 = ModelRegistry.GLM_5_3.match(params.model.modelId)
         if (isGlm53) require(params.reasoningLevel in setOf(ReasoningLevel.AUTO, ReasoningLevel.LOW, ReasoningLevel.HIGH, ReasoningLevel.MAX)) {
             "glm53_reasoning_unsupported: ${params.model.modelId} supports AUTO, LOW, HIGH or MAX; selected ${params.reasoningLevel}"
@@ -312,7 +316,7 @@ class ChatCompletionsAPI(
                     mediaCapabilities = params.mediaCapabilities,
                     useDeveloperRoleForSystemMessages = isOfficialOpenAI &&
                             (ModelRegistry.OPENAI_O_MODELS.match(params.model.modelId) ||
-                                    ModelRegistry.OPENAI_GPT_5_SERIES.match(params.model.modelId)),
+                                    ModelRegistry.OPENAI_GPT_5_SERIES.match(params.model.modelId) || isGpt6),
                 )
             )
 
@@ -352,7 +356,7 @@ class ChatCompletionsAPI(
                     ?.let { put("session_id", it) }
             }
 
-            if (params.model.abilities.contains(ModelAbility.REASONING) || isGlm53) {
+            if (params.model.abilities.contains(ModelAbility.REASONING) || isGlm53 || isGpt6) {
                 val level = params.reasoningLevel
                 when (endpointVendor) {
                     OpenAIEndpointVendor.OPENROUTER -> {
@@ -491,7 +495,7 @@ class ChatCompletionsAPI(
                     OpenAIEndpointVendor.COMPATIBLE,
                         -> {
                         if (level != ReasoningLevel.AUTO) {
-                            val effort = if (isOfficialOpenAI) {
+                            val effort = if (isOfficialOpenAI || isGpt6) {
                                 mapOfficialOpenAIReasoningEffort(params.model.modelId, level)
                             } else {
                                 // Unknown compatible gateways retain the existing conservative OFF fallback.
@@ -521,6 +525,7 @@ class ChatCompletionsAPI(
             params.customBody,
             CHAT_COMPLETIONS_OWNERSHIP,
         ).also { body ->
+            validateGpt6Request(params.model.modelId, body, responses = false)
             if (isGlm53) {
                 require("reasoning_effort" !in body ||
                     (body["reasoning_effort"] as? JsonPrimitive)?.content in setOf("low", "high", "max")) {

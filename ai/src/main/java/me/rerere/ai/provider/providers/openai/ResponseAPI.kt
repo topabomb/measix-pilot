@@ -335,7 +335,7 @@ class ResponseAPI(
             put("input", buildMessages(messages, endpointProfile, params.mediaCapabilities))
 
             // reasoning
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (params.model.abilities.contains(ModelAbility.REASONING) || ModelRegistry.OPENAI_GPT_6_SERIES.match(params.model.modelId)) {
                 val level = params.reasoningLevel
                 val reasoning = buildJsonObject {
                     if (endpointProfile.supportsReasoningSummary) {
@@ -346,7 +346,7 @@ class ResponseAPI(
                     } else if (endpointProfile == ResponseEndpointProfile.MIMO) {
                         mapMiMoResponsesReasoningEffort(level)?.let { put("effort", it) }
                     } else if (level != ReasoningLevel.AUTO) {
-                        val effort = if (isOfficialOpenAIHost(host)) {
+                        val effort = if (isOfficialOpenAIHost(host) || ModelRegistry.OPENAI_GPT_6_SERIES.match(params.model.modelId)) {
                             mapOfficialOpenAIReasoningEffort(params.model.modelId, level)
                         } else {
                             level.effort
@@ -408,7 +408,7 @@ class ResponseAPI(
         }.mergeCustomBody(
             params.customBody,
             RESPONSES_OWNERSHIP,
-        )
+        ).also { validateGpt6Request(params.model.modelId, it, responses = true) }
     }
 
     internal fun buildMessages(

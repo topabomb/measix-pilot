@@ -87,7 +87,22 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
-    /** GPT-5 protocol behavior shared by the base model and independently defined point releases. */
+    val GPT_6_REQUIRED_REASONING = defineModel {
+        idPattern("gpt-(?:6-astra|6\\.1-sol)")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GPT_6_OPTIONAL_REASONING = defineModel {
+        idPattern("gpt-6-(?:sol|luna)")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val OPENAI_GPT_6_SERIES = defineGroup {
+        add(GPT_6_REQUIRED_REASONING, GPT_6_OPTIONAL_REASONING)
+    }
+
     val OPENAI_GPT_5_SERIES = defineGroup {
         add(
             GPT_5,
@@ -716,6 +731,8 @@ object ModelRegistry {
         GPT_5_4_NANO,
         GPT_5_5,
         GPT_5_6,
+        GPT_6_REQUIRED_REASONING,
+        GPT_6_OPTIONAL_REASONING,
         GEMINI_20_FLASH,
         GEMINI_2_5_FLASH,
         GEMINI_2_5_PRO,

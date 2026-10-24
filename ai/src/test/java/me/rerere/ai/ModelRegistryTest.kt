@@ -10,6 +10,35 @@ import org.junit.Test
 
 class ModelRegistryTest {
     @Test
+    fun qwenVlEditionsKeepTheirOwnCapabilitiesAcrossSizesAndChannels() {
+        for (size in listOf("2B", "4B", "8B", "32B", "30B-A3B", "235B-A22B")) {
+            for (prefix in listOf("", "Qwen/", "vendor/")) {
+                for (suffix in listOf("", "-FP8", ":channel")) {
+                    for (edition in listOf("Instruct", "Thinking")) {
+                        val id = "${prefix}Qwen3-VL-$size-$edition$suffix"
+                        assertEquals(id, listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))
+                        assertEquals(id, if (edition == "Thinking") listOf(ModelAbility.TOOL, ModelAbility.REASONING)
+                            else listOf(ModelAbility.TOOL), ModelRegistry.MODEL_ABILITIES.getData(id))
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun parameterAndContextSizesDoNotBecomeVersionNumbers() {
+        for (id in listOf("qwen3-8b", "qwen3-5b", "qwen3-a8b", "qwen3-8k", "qwen2-vl-3b", "qwen2.5-vl-3b")) {
+            assertEquals(id, listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))
+        }
+        for (id in listOf("qwen3.5", "qwen3.8", "qwen3.8-8b")) {
+            assertEquals(id, listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))
+        }
+        for (id in listOf("qwen3-vl-999b-instruct", "qwen3-vl-8b-unknown", "myqwen3-vl-8b-instruct")) {
+            assertEquals(id, listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))
+        }
+    }
+
+    @Test
     fun testDeepseekV41FlashExactCapabilities() {
         listOf("deepseek-v4.1-flash", "deepseek-flash").forEach { id ->
             assertEquals(listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))

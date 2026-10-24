@@ -67,6 +67,15 @@ class ModelDefinitionBuilder {
         matchers += ExactIdMatcher(id)
     }
 
+    /** Match a complete model identity; exact registrations still take precedence. */
+    fun idPattern(pattern: String) {
+        val regex = pattern.toRegex(RegexOption.IGNORE_CASE)
+        matchers += object : TokenMatcher {
+            override fun score(modelId: String, tokens: List<String>): Int? =
+                if (regex.matches(modelId)) EXACT_ID_BONUS - 1 else null
+        }
+    }
+
     fun input(vararg modalities: Modality) {
         inputModalities.clear()
         inputModalities.addAll(modalities)
@@ -157,7 +166,9 @@ private class TokenSequenceMatcher(
     override fun score(modelId: String, tokens: List<String>): Int? {
         if (specs.isEmpty()) return null
         var specIndex = 0
-        for (token in tokens) {
+        for ((index, token) in tokens.withIndex()) {
+            // Parameter counts and context sizes are not model versions (8b, a3b, 32k).
+            if (token.first().isDigit() && tokens.getOrNull(index + 1) in MAGNITUDE_SUFFIXES) continue
             if (specs[specIndex].matches(token)) {
                 specIndex += 1
                 if (specIndex == specs.size) return specs.size
@@ -186,6 +197,7 @@ private fun parseTokenSpec(spec: String): TokenSpec {
 }
 
 private const val EXACT_ID_BONUS = 1000
+private val MAGNITUDE_SUFFIXES = setOf("b", "k")
 
 private fun tokenize(modelId: String): List<String> {
     val tokens = mutableListOf<String>()

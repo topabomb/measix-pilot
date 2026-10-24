@@ -20,6 +20,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -217,13 +218,19 @@ class ChatCompletionsAPI(
                         .trim()
                         .split("\n")
                         .filter { it.isNotBlank() }
-                        .map { json.parseToJsonElement(it).jsonObject }
+                        .mapNotNull {
+                            val element = json.parseToJsonElement(it)
+                            if (element == JsonNull) null else requireNotNull(element.jsonObjectOrNull) {
+                                "Chat completion stream payload must be an object"
+                            }
+                        }
                         .forEach {
                             // OpenAI-compatible gateways can report an application error inside an HTTP 200 SSE
                             // stream. Throwing from OkHttp's callback would bypass the Flow collector; close it with
                             // the parsed cause so the UI receives the failure through the normal generation path.
-                            if (it["error"] != null) {
-                                close(it["error"]!!.parseErrorDetail())
+                            val error = it["error"]?.takeUnless { value -> value == JsonNull }
+                            if (error != null) {
+                                close(error.parseErrorDetail())
                                 return
                             }
                             val messageChunk = parseStreamPayload(it, streamState, endpointVendor)
@@ -959,16 +966,16 @@ class ChatCompletionsAPI(
     }
 
     private fun parseAnnotations(jsonArray: JsonArray): List<UIMessageAnnotation> {
-        return jsonArray.map { element ->
+        return jsonArray.mapNotNull { element ->
+            val annotation = element.jsonObjectOrNull ?: return@mapNotNull null
             val type =
-                element.jsonObject["type"]?.jsonPrimitive?.contentOrNull ?: error("type is null")
+                annotation["type"]?.jsonPrimitiveOrNull?.contentOrNull ?: return@mapNotNull null
             when (type) {
                 "url_citation" -> {
+                    val citation = annotation["url_citation"]?.jsonObjectOrNull ?: return@mapNotNull null
                     UIMessageAnnotation.UrlCitation(
-                        title = element.jsonObject["url_citation"]?.jsonObject?.get("title")?.jsonPrimitive?.contentOrNull
-                            ?: "",
-                        url = element.jsonObject["url_citation"]?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
-                            ?: "",
+                        title = citation["title"]?.jsonPrimitiveOrNull?.contentOrNull ?: "",
+                        url = citation["url"]?.jsonPrimitiveOrNull?.contentOrNull ?: "",
                     )
                 }
 

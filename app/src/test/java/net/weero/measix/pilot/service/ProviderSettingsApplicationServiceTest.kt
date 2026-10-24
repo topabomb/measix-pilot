@@ -83,6 +83,7 @@ class ProviderSettingsApplicationServiceTest {
         assertEquals(4, captured.size)
         assertEquals(4, captured.map { kotlin.uuid.Uuid.parse(requireNotNull(it.openCodeSessionId)) }.distinct().size)
         assertTrue(captured.all { it.providerSessionId == null })
+        assertTrue(captured.all { it.reasoningLevel == me.rerere.ai.core.ReasoningLevel.AUTO })
     }
 
     @Test

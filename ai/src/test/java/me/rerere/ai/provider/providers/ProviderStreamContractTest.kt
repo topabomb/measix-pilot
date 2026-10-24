@@ -229,6 +229,35 @@ class ProviderStreamContractTest {
     }
 
     @Test
+    fun `chat null frames and empty annotations preserve text usage and terminal evidence`() {
+        val (chunks, error) = collect(Wire.CHAT, listOf(
+            "null",
+            """{"error":null,"choices":[{"delta":{"content":"answer","annotations":[null,{"type":"url_citation","url_citation":null}]}}]}""",
+            """{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}""",
+        ) + terminal(Wire.CHAT))
+        assertEquals(null, error)
+        assertTrue(chunks.flatMap { it.choices }.any { it.delta?.toText() == "answer" })
+        assertEquals(12L, chunks.mapNotNull { it.usage?.inputTokens }.single())
+
+        val (_, missingTerminal) = collect(Wire.CHAT, listOf("null", "[DONE]"))
+        assertEquals(ProviderTerminalStatus.INCOMPLETE, (missingTerminal as HttpException).terminalStatus)
+    }
+
+    @Test
+    fun `chat malformed top level values and explicit errors do not become empty success`() {
+        for (payload in listOf("[]", "42", "\"unexpected\"")) {
+            val (_, error) = collect(Wire.CHAT, listOf(payload) + terminal(Wire.CHAT))
+            assertTrue(error is IllegalArgumentException)
+            assertTrue(error?.message.orEmpty().contains("payload must be an object"))
+        }
+        val (_, error) = collect(Wire.CHAT, listOf(
+            "null", """{"error":{"message":"quota exhausted","type":"quota_error"}}""",
+        ) + terminal(Wire.CHAT))
+        assertNotNull(error)
+        assertTrue(error?.message.orEmpty().contains("quota exhausted"))
+    }
+
+    @Test
     fun `token limit termination remains incomplete instead of running emitted tools`() {
         val endings = listOf(
             Wire.CHAT to listOf("""{"choices":[{"delta":{},"finish_reason":"length"}]}""", "[DONE]"),

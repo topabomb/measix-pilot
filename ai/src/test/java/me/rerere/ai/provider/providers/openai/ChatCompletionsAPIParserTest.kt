@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.util.KeyRoulette
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
@@ -27,6 +28,21 @@ class ChatCompletionsAPIParserTest {
     @Before
     fun setUp() {
         api = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
+    }
+
+    @Test
+    fun `optional empty annotations do not discard content or valid citations`() {
+        val parsed = api.parseMessage(Json.parseToJsonElement("""{
+            "content":"answer",
+            "reasoning_details":[null],
+            "annotations":[null,[],42,{},
+                {"type":"url_citation","url_citation":null},
+                {"type":"url_citation","url_citation":[]},
+                {"type":"url_citation","url_citation":{"title":"Source","url":"https://example.test/source"}}]
+        }""").jsonObject)
+
+        assertEquals("answer", parsed.parts.filterIsInstance<UIMessagePart.Text>().single().text)
+        assertEquals(listOf(UIMessageAnnotation.UrlCitation("Source", "https://example.test/source")), parsed.annotations)
     }
 
     @Test

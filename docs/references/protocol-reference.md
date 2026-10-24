@@ -26,6 +26,17 @@ Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协�
 
 ## 共用请求边界
 
+设置页的非流式、流式和工具调用探测由 `ProviderSettingsApplicationService` 使用 `ReasoningLevel.AUTO`，
+避免用通用参数默认 OFF 关闭强制推理模型。探测保留模型自定义 headers/body 和原临时请求身份，不改写聊天配置。
+
+Chat Completions SSE 允许跳过顶层 JSON null 和可选空引用注解；非对象数组/标量帧仍报告格式错误，
+非空 error 仍终止请求。空帧不构成成功终态，usage-only 帧及真正的 finish_reason 继续沿原解析和用量链处理。
+
+模型目录匹配时，紧邻 `b/k` 的数量不参与版本 token 匹配，例如 8B、A3B、32K。
+Qwen3-VL 的已登记尺寸与 Instruct/Thinking 使用完整型号模式，支持渠道前缀和量化后缀；
+两者都有图片输入及工具能力，仅 Thinking 自动登记推理能力，既有用户显式配置不批量改写。
+型号与版本区分依据 [Qwen 官方仓库](https://github.com/QwenLM/Qwen3-VL)；模型登记不保证任意网关支持同一参数。
+
 ### 传输与认证
 
 四条文本协议的流式请求装配（包括文件编码）在 `Dispatchers.IO` 执行，`flowOn` 不改变下游收集上下文；非流式请求也在 IO 装配和读取。装配结束、创建 EventSource 之前复验协程仍 active，避免编码期间已取消的请求继续启动 HTTP。SSE 与 `readResponse` 继续拥有取消和关闭，无第二请求循环。

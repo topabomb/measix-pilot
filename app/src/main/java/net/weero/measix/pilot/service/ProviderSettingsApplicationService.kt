@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import me.rerere.ai.core.ModelRequestMessage
+import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.freeze
 import me.rerere.ai.provider.Model
@@ -185,6 +186,7 @@ class ProviderSettingsApplicationService(
 
     private fun params(model: Model) = TextGenerationParams(
         model = model,
+        reasoningLevel = ReasoningLevel.AUTO,
         customHeaders = model.customHeaders,
         customBody = model.customBodies,
         openCodeSessionId = kotlin.uuid.Uuid.random().toString(),

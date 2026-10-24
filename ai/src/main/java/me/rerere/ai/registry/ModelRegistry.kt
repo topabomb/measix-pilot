@@ -428,6 +428,18 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    private val QWEN_3_VL_INSTRUCT = defineModel {
+        idPattern("(?:[^/]+/)?qwen[-_]?3[-_]vl[-_](?:2b|4b|8b|32b|30b[-_]a3b|235b[-_]a22b)[-_]instruct(?:[-_:].+)?")
+        visionInput()
+        ability(ModelAbility.TOOL)
+    }
+
+    private val QWEN_3_VL_THINKING = defineModel {
+        idPattern("(?:[^/]+/)?qwen[-_]?3[-_]vl[-_](?:2b|4b|8b|32b|30b[-_]a3b|235b[-_]a22b)[-_]thinking(?:[-_:].+)?")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     private val QWEN_3_5 = defineModel {
         tokens("qwen", "3", "5")
         visionInput()
@@ -730,6 +742,8 @@ object ModelRegistry {
         DEEPSEEK_V3_1,
         DEEPSEEK_V3_2,
         QWEN_3,
+        QWEN_3_VL_INSTRUCT,
+        QWEN_3_VL_THINKING,
         QWEN_3_5,
         QWEN_3_6,
         QWEN_3_7,

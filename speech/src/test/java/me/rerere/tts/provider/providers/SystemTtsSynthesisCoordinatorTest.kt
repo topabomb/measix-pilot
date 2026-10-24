@@ -2,12 +2,14 @@ package me.rerere.tts.provider.providers
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import me.rerere.tts.provider.SystemTtsParameterPolicy
 import me.rerere.tts.provider.TTSProviderSetting
 import org.junit.Assert.assertArrayEquals
@@ -108,10 +110,36 @@ class SystemTtsSynthesisCoordinatorTest {
             advanceTimeBy(101)
             runCurrent()
 
-            expectSystemTtsFailure(result, "system_tts_timeout")
+            val failure = expectSystemTtsFailure(result, "system_tts_timeout")
+            assertTrue(failure.cause is TimeoutCancellationException)
             assertEquals(1, engine.shutdownCalls.get())
             assertFalse(file.exists())
         }
+    }
+
+    @Test
+    fun `enclosing deadline remains cancellation and releases the engine`() = runTest {
+        val coordinator = SystemTtsSynthesisCoordinator(timeoutMs = 5_000)
+        val engine = FakeEngine()
+        val file = temporaryFile()
+        val result = async {
+            withTimeout(100) {
+                coordinator.synthesize(engine.factory(), setting(), "hello", Locale.US, file)
+            }
+        }
+        engine.started.await()
+
+        advanceTimeBy(101)
+        runCurrent()
+
+        try {
+            result.await()
+            fail("Expected the enclosing deadline to cancel synthesis")
+        } catch (expected: TimeoutCancellationException) {
+            assertTrue(result.isCancelled)
+        }
+        assertEquals(1, engine.shutdownCalls.get())
+        assertFalse(file.exists())
     }
 
     @Test

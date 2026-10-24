@@ -41,8 +41,8 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
-import com.dokar.sonner.Toaster
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.Toaster
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -77,16 +77,26 @@ import net.weero.measix.pilot.ui.components.ui.ChainOfThoughtScope
 import net.weero.measix.pilot.ui.components.ui.DotLoading
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.modifier.shimmer
-import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.utils.JsonInstant
+import kotlin.time.Duration.Companion.milliseconds
 
 private const val ASK_USER_TOOL_NAME = "ask_user"
+
+@Composable
+internal fun ToolExecutionDuration(durationMillis: Long) {
+    Text(
+        text = durationMillis.milliseconds.toString(),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
 
 @Composable
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
     locator: ToolCallLocator,
     phase: ToolLivePhase? = null,
+    durationMillis: Long? = null,
     onToolDecision: (suspend (locator: ToolCallLocator, decision: ToolInteractionDecision) -> Boolean)? = null,
 ) {
     // ask_user 是交互式问答流程, 不走注册式渲染框架。这是 UI Renderer 特化；
@@ -239,6 +249,8 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                     }
                 }
             }
+        } else if (durationMillis != null && durationMillis >= 0 && !resolvedPhase.isBusy) {
+            { ToolExecutionDuration(durationMillis) }
         } else {
             null
         },
@@ -350,10 +362,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         }
                         Toaster(
                             state = modalToaster,
-                            darkTheme = LocalDarkMode.current,
-                            richColors = true,
                             alignment = Alignment.TopCenter,
-                            showCloseButton = true,
                         )
                     }
                 }

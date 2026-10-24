@@ -320,6 +320,7 @@ internal fun mergeAssistantDelta(
         ),
         modeInjectionIds = pickAssistantField(baseline.modeInjectionIds, edited.modeInjectionIds, current.modeInjectionIds),
         enabledSkills = pickAssistantField(baseline.enabledSkills, edited.enabledSkills, current.enabledSkills),
+        timeReminderIntervalMinutes = pickAssistantField(baseline.timeReminderIntervalMinutes, edited.timeReminderIntervalMinutes, current.timeReminderIntervalMinutes),
         enableTimeReminder = pickAssistantField(
             baseline.enableTimeReminder,
             edited.enableTimeReminder,

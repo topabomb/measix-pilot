@@ -9,7 +9,7 @@ import net.weero.measix.pilot.data.db.entity.ToolExecutionStatus
 interface ToolExecutionDAO {
     @Query(
         "SELECT t.assistant_message_id AS assistantMessageId, e.step_id AS stepId, " +
-            "e.local_call_id AS localCallId, e.status AS status FROM turn_execution t " +
+            "e.local_call_id AS localCallId, e.status AS status, e.duration_millis AS durationMillis FROM turn_execution t " +
             "LEFT JOIN tool_execution e ON e.turn_id=t.turn_id " +
             "WHERE t.conversation_id=:conversationId AND t.assistant_message_id IS NOT NULL"
     )
@@ -65,7 +65,7 @@ interface ToolExecutionDAO {
     ): Int
 
     @Query(
-        "UPDATE tool_execution SET status = :targetStatus, reason = :reason, " +
+        "UPDATE tool_execution SET status = :targetStatus, reason = :reason, duration_millis = :durationMillis, " +
             "child_conversation_id = COALESCE(child_conversation_id, :childConversationId), " +
             "child_turn_id = COALESCE(child_turn_id, :childTurnId), " +
             "sub_assistant_run_id = COALESCE(sub_assistant_run_id, :subAssistantRunId), updated_at = :updatedAt " +
@@ -87,6 +87,7 @@ interface ToolExecutionDAO {
         childTurnId: String?,
         subAssistantRunId: String?,
         updatedAt: Long,
+        durationMillis: Long? = null,
     ): Int
 
     @Query(
@@ -113,4 +114,5 @@ data class ConversationToolOutcomeRow(
     val stepId: String?,
     val localCallId: String?,
     val status: ToolExecutionStatus?,
+    val durationMillis: Long? = null,
 )

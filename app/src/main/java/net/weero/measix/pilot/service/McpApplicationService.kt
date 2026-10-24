@@ -11,6 +11,7 @@ import net.weero.measix.pilot.data.ai.mcp.McpServerConfig
 import net.weero.measix.pilot.data.ai.mcp.hasSameOAuthTrustBoundary
 import net.weero.measix.pilot.data.ai.mcp.validateMcpHeaders
 import net.weero.measix.pilot.data.ai.mcp.toolPolicyByName
+import net.weero.measix.pilot.data.ai.mcp.serverUrl
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -69,6 +70,53 @@ class McpApplicationService internal constructor(
                 mcpServers = if (existing == null) settings.mcpServers + saved else
                     settings.mcpServers.map { if (it.id == config.id) saved else it }
             )
+        }
+    }
+
+    /** Apply only edited fields against the latest definition; runtime and OAuth remain owner-managed. */
+    suspend fun saveConfiguration(baseline: McpServerConfig, edited: McpServerConfig) {
+        userReference(baseline.id)
+        require(edited.id == baseline.id) { "mcp_edit_identity_changed" }
+        validateMcpHeaders(edited.commonOptions.headers)
+        settingsStore.updateLocal { settings ->
+            val latest = checkNotNull(settings.mcpServers.firstOrNull { it.id == baseline.id }) { "mcp_definition_removed" }
+            fun <T> field(name: String, before: T, after: T, current: T): T {
+                if (before == after) return current
+                check(current == before || current == after) { "mcp_edit_conflict: $name" }
+                return after
+            }
+            val transport = field("transport", baseline::class, edited::class, latest::class)
+            val url = field("url", baseline.serverUrl, edited.serverUrl, latest.serverUrl)
+            val before = baseline.commonOptions
+            val after = edited.commonOptions
+            val current = latest.commonOptions
+            val originalPolicies = before.toolPolicyByName()
+            val editedPolicies = after.toolPolicyByName()
+            val policies = current.toolPolicyByName().toMutableMap()
+            (originalPolicies.keys + editedPolicies.keys).forEach { name ->
+                val original = originalPolicies[name]
+                val changed = editedPolicies[name]
+                if (original != changed) {
+                    val merged = field("tool_policy:$name", original, changed, policies[name])
+                    if (merged == null) policies.remove(name) else policies[name] = merged
+                }
+            }
+            val options = current.copy(
+                enable = field("enable", before.enable, after.enable, current.enable),
+                name = field("name", before.name, after.name, current.name),
+                headers = field("headers", before.headers, after.headers, current.headers),
+                toolPolicies = policies.values.toList(),
+            )
+            val merged = when (transport) {
+                McpServerConfig.SseTransportServer::class -> McpServerConfig.SseTransportServer(latest.id, options, url)
+                McpServerConfig.StreamableHTTPServer::class -> McpServerConfig.StreamableHTTPServer(latest.id, options, url)
+                else -> error("unsupported_mcp_transport")
+            }
+            val saved = merged.clone(commonOptions = options.copy(oauth = current.oauth?.takeIf {
+                latest.hasSameOAuthTrustBoundary(merged)
+            }))
+            requireUniqueName(settings.mcpServers, saved)
+            settings.copy(mcpServers = settings.mcpServers.map { if (it.id == saved.id) saved else it })
         }
     }
 

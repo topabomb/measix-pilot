@@ -71,6 +71,10 @@ class ChatDrawerVM internal constructor(
         selected?.takeIf { it.first == target }?.second
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    internal val draftFolder = combine(assistantTarget, selectedFolder) { target, selected ->
+        selected?.takeIf { it.first == target }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     internal suspend fun selectAssistant(selection: RealmSelection, assistantId: ConfigurationReference, createNew: Boolean) =
         conversationApplicationService.selectAssistantRequest(selection, assistantId, createNew)
 

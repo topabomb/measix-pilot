@@ -223,6 +223,46 @@ class ConversationQueryService internal constructor(
         return snapshot
     }
 
+    /** Borrow the selected variant's original resource source; callers cannot manufacture its authority. */
+    suspend fun messageResourceSource(
+        lease: ConversationViewLease,
+        conversationId: Uuid,
+        messageId: Uuid,
+    ): ConversationMessageResourceSource {
+        recoveryGate.awaitReady()
+        val origin = withViewAccess(lease) { messageWorkspaceOrigin(contextSnapshot(lease, conversationId), messageId) }
+        return ConversationMessageResourceSource(lease, origin) {
+            recoveryGate.awaitReady()
+            withViewAccess(lease) {
+                check(messageWorkspaceOrigin(contextSnapshot(lease, conversationId), messageId) == origin) {
+                    "message_resource_source_changed"
+                }
+            }
+        }
+    }
+
+    private fun messageWorkspaceOrigin(
+        snapshot: ConversationAggregateSnapshot,
+        messageId: Uuid,
+    ): net.weero.measix.pilot.data.model.WorkspaceContextOrigin? {
+        val node = requireNotNull(snapshot.nodes.find { it.currentMessage.id == messageId }) {
+            "message_resource_variant_unavailable"
+        }
+        val steps = node.currentMessage.parts.filterIsInstance<me.rerere.ai.ui.UIMessagePart.Step>()
+        val owner = net.weero.measix.pilot.data.model.ContextMessageLocator(node.id, messageId)
+        val admittedSteps = snapshot.contextAdmissions.filter { it.owner == owner }.mapTo(hashSetOf()) { it.stepId }
+        val step = steps.filter { it.stepId in admittedSteps }.maxByOrNull { it.ordinal } ?: return null
+        val selection = net.weero.measix.pilot.data.ai.request.resolveUsesAt(
+            snapshot.contextAdmissions, owner, step.stepId, steps).selection ?: return null
+        val entry = requireNotNull(snapshot.modelContextEntries.find { it.id == selection.systemEntryId }) {
+            "message_resource_system_missing"
+        }
+        val system = requireNotNull(entry.payload.source as? net.weero.measix.pilot.data.model.ConversationContextSource.System) {
+            "message_resource_system_invalid"
+        }
+        return system.workspace
+    }
+
     suspend fun contextDetails(
         lease: ConversationViewLease,
         conversationId: Uuid,
@@ -316,7 +356,12 @@ class ConversationQueryService internal constructor(
 
     fun observeConversation(lease: ConversationViewLease): Flow<ConversationReadState> =
         observeForView(lease, ConversationReadState.Failed(IllegalStateException("conversation_view_unavailable"))) {
-            observeRegisteredConversation(lease.conversationId).map { state ->
+            observeRegisteredConversation(lease.conversationId) { snapshot ->
+                withViewAccess(lease) {
+                    requireViewSnapshot(lease, snapshot)
+                    repository.getToolDurations(snapshot.conversationId)
+                }
+            }.map { state ->
                 if (state is ConversationReadState.Ready) requireViewSnapshot(lease, state.snapshot)
                 state
             }
@@ -332,12 +377,22 @@ class ConversationQueryService internal constructor(
         }
     }
 
-    private fun observeRegisteredConversation(conversationId: Uuid): Flow<ConversationReadState> =
+    private fun observeRegisteredConversation(
+        conversationId: Uuid,
+        durations: suspend (ConversationPresentationSnapshot) -> Map<me.rerere.ai.core.ToolCallLocator, Long> = { emptyMap() },
+    ): Flow<ConversationReadState> =
         runtimeRegistry.observeRuntimeState(conversationId).flatMapLatest { state ->
             val projector = net.weero.measix.pilot.service.runtime.ConversationPresentationProjector()
+            val durationProjection = ToolDurationQueryProjection()
+            suspend fun project(snapshot: net.weero.measix.pilot.service.runtime.ConversationRuntimeSnapshot): ConversationReadState.Ready {
+                val projected = projector.project(snapshot)
+                return ConversationReadState.Ready(projected.copy(toolDurationsMillis = durationProjection.read(snapshot.durable) {
+                    durations(projected)
+                }))
+            }
             when (state) {
-                is ConversationRuntimeState.Draft -> state.runtime.snapshot.map(projector::project).map { ConversationReadState.Ready(it) }
-                is ConversationRuntimeState.Ready -> state.runtime.snapshot.map(projector::project).map { ConversationReadState.Ready(it) }
+                is ConversationRuntimeState.Draft -> state.runtime.snapshot.map { project(it) }
+                is ConversationRuntimeState.Ready -> state.runtime.snapshot.map { project(it) }
                 ConversationRuntimeState.Loading -> flowOf(ConversationReadState.Loading)
                 ConversationRuntimeState.Missing -> flowOf(ConversationReadState.Missing)
                 is ConversationRuntimeState.Failed -> flowOf(ConversationReadState.Failed(state.error))
@@ -347,6 +402,7 @@ class ConversationQueryService internal constructor(
     fun conversationUiModel(lease: ConversationViewLease): Flow<ConversationUiModel?> =
         observeForView<ConversationUiModel?>(lease, null) {
             val projector = net.weero.measix.pilot.service.runtime.ConversationPresentationProjector()
+            val durationProjection = ToolDurationQueryProjection()
             runtimeRegistry.getConversationUiFlow(lease.conversationId)
             .combine(attachmentPreviewProjector.lifecycleChanges()) { joined, _ -> joined }
             .combine(settings.observeConfiguration(sessions.state, lease.access.scope).map {
@@ -358,7 +414,9 @@ class ConversationQueryService internal constructor(
                 val snapshot = projector.project(aggregate)
                 requireViewSnapshot(lease, snapshot)
                 ConversationUiModel(
-                    snapshot = snapshot,
+                    snapshot = snapshot.copy(toolDurationsMillis = durationProjection.read(aggregate.durable) {
+                        withViewAccess(lease) { repository.getToolDurations(lease.conversationId) }
+                    }),
                     presentation = presentation,
                     attachmentPreviews = attachmentPreviewProjector.project(snapshot, lease),
                     configuration = resolved.conversationConfiguration(ConversationAssistantTarget(lease.commandTarget, snapshot.header.assistantId),
@@ -385,7 +443,13 @@ class ConversationQueryService internal constructor(
             withViewAccess(source) {
                 retained = coordinator.openChildForView(source.access.scope, source.conversationId, childId)
             }
-            emitAll(observeRegisteredConversation(childId).mapNotNull { read ->
+            emitAll(observeRegisteredConversation(childId) { snapshot ->
+                withViewAccess(source) {
+                    check(snapshot.conversationId == childId && snapshot.header.scope == source.access.scope &&
+                        snapshot.header.parentConversationId == source.conversationId) { "sub_assistant_child_scope_mismatch" }
+                    repository.getToolDurations(childId)
+                }
+            }.mapNotNull { read ->
                 withViewAccess(source) {
                     when (read) {
                         is ConversationReadState.Ready -> read.snapshot.also { snapshot ->
@@ -476,6 +540,78 @@ class ConversationQueryService internal constructor(
                 repository.getRootConversations(selection.access.scope, sort).map { list -> list.map { it.toSummary(selection, sort) } }
         }
 
+    fun observeInputQueue(lease: ConversationViewLease): Flow<ConversationInputQueueUiModel?> =
+        observeForView<ConversationInputQueueUiModel?>(lease, null) {
+            runtimeRegistry.observeRuntimeState(lease.conversationId).flatMapLatest { state ->
+                val runtime = when (state) {
+                    is ConversationRuntimeState.Draft -> state.runtime
+                    is ConversationRuntimeState.Ready -> state.runtime
+                    else -> null
+                }
+                if (runtime == null) flowOf(null) else runtime.inputQueue.map { queue ->
+                    check(runtime.durable.header.scope == lease.access.scope) { "conversation_scope_mismatch" }
+                    check(queue.items.all { it.selection.access == lease.access }) { "queue_session_mismatch" }
+                    ConversationInputQueueUiModel(
+                        items = queue.items.map { item ->
+                            QueuedInputUiModel(item.id, item.version, item.parts.toList(), when (item.phase) {
+                                net.weero.measix.pilot.service.runtime.QueuedInputPhase.WAITING -> QueuedInputUiPhase.WAITING
+                                net.weero.measix.pilot.service.runtime.QueuedInputPhase.EDITING -> QueuedInputUiPhase.EDITING
+                                net.weero.measix.pilot.service.runtime.QueuedInputPhase.SUBMITTING -> QueuedInputUiPhase.SUBMITTING
+                            }, canEdit = item.phase == net.weero.measix.pilot.service.runtime.QueuedInputPhase.WAITING,
+                                canRemove = item.phase != net.weero.measix.pilot.service.runtime.QueuedInputPhase.SUBMITTING)
+                        },
+                        pauseReason = when (queue.pauseReason) {
+                            null -> null
+                            net.weero.measix.pilot.service.runtime.InputQueuePauseReason.USER_STOP -> InputQueuePauseUiReason.USER_STOP
+                            net.weero.measix.pilot.service.runtime.InputQueuePauseReason.REALM_CHANGED -> InputQueuePauseUiReason.REALM_CHANGED
+                            net.weero.measix.pilot.service.runtime.InputQueuePauseReason.CONTEXT_CHANGED -> InputQueuePauseUiReason.CONTEXT_CHANGED
+                            net.weero.measix.pilot.service.runtime.InputQueuePauseReason.REQUEST_FAILED -> InputQueuePauseUiReason.REQUEST_FAILED
+                        },
+                    )
+                }
+            }
+        }
+
+    suspend fun queuedInputPreviews(
+        lease: ConversationViewLease,
+        itemId: Uuid,
+        version: Long,
+    ): Map<String, ArtifactInputPreview> {
+        recoveryGate.awaitReady()
+        val (runtime, item) = withViewAccess(lease) {
+            val runtime = runtimeRegistry.requireRuntime(lease.conversationId)
+            check(runtime.durable.header.scope == lease.access.scope) { "conversation_scope_mismatch" }
+            val item = requireNotNull(runtime.inputQueue.value.items.find { it.id == itemId && it.version == version }) {
+                "queue_item_changed"
+            }
+            check(item.selection.access == lease.access) { "queue_session_mismatch" }
+            runtime to item
+        }
+        suspend fun verify() = withViewAccess(lease) {
+            check(runtimeRegistry.findRuntime(lease.conversationId) === runtime) { "queue_runtime_changed" }
+            val current = runtime.inputQueue.value.items.find { it.id == itemId && it.version == version }
+            check(current != null && current.submission === item.submission && current.parts == item.parts &&
+                current.selection.access == lease.access) { "queue_item_changed" }
+        }
+        // Submission performs its own Session-protected reads; callbacks must run outside that lock.
+        val result = item.submission?.describeInputs(item.parts, ::verify).orEmpty()
+        verify()
+        return result
+    }
+
+    internal fun foldersOfDraft(lease: ConversationViewLease): Flow<ConversationFolderDirectory?> =
+        observeForView<ConversationFolderDirectory?>(lease, null) {
+            observeRegisteredConversation(lease.conversationId).map { state ->
+                val snapshot = (state as? ConversationReadState.Ready)?.snapshot
+                snapshot?.let { requireViewSnapshot(lease, it) }
+                snapshot?.takeIf { it.header.newConversation }?.let {
+                    ConversationFolderAccess(lease.commandTarget.selection, it.header.assistantId)
+                }
+            }.distinctUntilChanged().flatMapLatest { target ->
+                if (target == null) flowOf(null) else foldersOfAssistant(target)
+            }
+        }
+
     fun foldersOfAssistant(target: ConversationFolderAccess): Flow<ConversationFolderDirectory?> = flow {
         recoveryGate.awaitReady()
         emitAll(sessions.observeSelectedRealmSelection().flatMapLatest { selection ->
@@ -554,3 +690,21 @@ internal fun mergeConversationActivities(
             if (conversationId in titleGenerationIds) add(ConversationActivity.TITLE_GENERATION)
         }
     }
+
+/** Subscription-local read cache, invalidated only by the committed aggregate identity. */
+internal class ToolDurationQueryProjection {
+    private var committed: ConversationAggregateSnapshot? = null
+    private var durations: Map<me.rerere.ai.core.ToolCallLocator, Long> = emptyMap()
+
+    suspend fun read(
+        snapshot: ConversationAggregateSnapshot,
+        load: suspend () -> Map<me.rerere.ai.core.ToolCallLocator, Long>,
+    ): Map<me.rerere.ai.core.ToolCallLocator, Long> {
+        if (snapshot !== committed) {
+            val loaded = if (snapshot.header.newConversation) emptyMap() else load()
+            durations = loaded
+            committed = snapshot
+        }
+        return durations
+    }
+}

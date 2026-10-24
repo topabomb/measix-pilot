@@ -168,6 +168,12 @@ gap 小于一天取整数 h，达到一天取整数 d；助手、工具和应用
 `search_web` 的固定指引要求时效问题核验发布日期和事件发生日期；检索顺序与抓取时间不证明新鲜度，
 缺日期或一手证据时继续检索/读取来源，不伪造 SDK 日期字段。服务拒绝与意外异常按公共错误协议区分。
 
+Bing、Tavily 与 SearXNG 的 query schema 共用 `SEARCH_QUERY_DESCRIPTION`：使用适合来源语言的简短关键词，
+专有名词、产品名与报错保留原文。Tavily 用户配置的 `includeAnswer` 缺字段默认 true，保持原 advanced 答案行为；
+false 在请求中发送布尔值，并在结果投影中排除意外返回的生成答案，保留原始来源条目与图片。
+`ConfigurationApplicationService.setTavilyIncludeAnswer` 只更新共享用户配置的该字段并比较原值，
+不覆盖并发修改的 API key 或搜索深度；企业发布搜索定义不由此命令编辑。
+
 ### 图片生成与按需识别
 
 `generate_image` 在开启 TextToImage 且本域生图配置可用时装配；主助手与子助手共用规则。
@@ -240,8 +246,11 @@ create 只返回 `id`，edit/delete 返回 `success+id`；正文已在 input，�
 | `workspace_read_file`、`workspace_write_file`、`workspace_edit_file`、`workspace_shell` | 文件工具使用 Rootfs 绝对路径，shell cwd 相对 /workspace；写/编辑只返回结果及元数据，diff 仅进入 UI metadata。审批、安全路径与 uploads 副本见 [Workspace](workspace-architecture.md) |
 | `use_skill` | name 按 canonical name 精确匹配；省略 path 读 SKILL.md，工具说明要求仅使用正文 Markdown 链接给出的相对路径。返回文件原文，严格 UTF-8 和大小限制由 SkillManager 校验 |
 
-本地 JS 执行工具已移除。`LocalToolOptionsSerializer` 在助手及按域使用偏好的列表读取边界清除退休的
-`javascript_engine` 选项，保留其他工具和显式空列表；历史工具消息仍按原结果显示，不重新执行。
+本地 JS 执行工具和 `chart_display` 已移除。`LocalToolOptionsSerializer` 在助手及按域使用偏好的列表读取边界
+清除退休的 `javascript_engine`、`chart_display` 选项，保留其他工具和显式空列表；旧配置及备份沿同一边界兼容。
+图表不再装配到个人或企业请求，也没有助手开关；模型直接输出 HTML/SVG 可默认预览。
+旧待执行图表调用在 ToolCallRuntime 的缺失定义分支返回 `tool_removed`，不创建可执行调用；已提交的拒绝或回答
+仍沿原事实回放。历史成功图表保留读取、展示与导出，不重新执行，不改写已保存结果。
 
 `webdav_upload`、`webdav_download` 在 START 捕获本域当前 WebDAV，两个工具成对启用，无单独开关或审批。
 上传参数为 `file_path`（已披露的精确 `/upload/<file>`）、`remote_path`（DAV 根内相对文件路径）和默认 false 的

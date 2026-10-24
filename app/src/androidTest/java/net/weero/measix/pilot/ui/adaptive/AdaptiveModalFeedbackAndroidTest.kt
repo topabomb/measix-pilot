@@ -12,7 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import net.weero.measix.pilot.R
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule

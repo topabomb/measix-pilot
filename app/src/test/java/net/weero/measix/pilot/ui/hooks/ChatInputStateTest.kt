@@ -5,6 +5,7 @@ import org.robolectric.annotation.Config
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -13,6 +14,102 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ChatInputStateTest {
+    @Test
+    fun removingOneRepeatedImageLeavesTheOtherOccurrenceAndInvalidatesOnlyItsOwnEdit() {
+        val state = ChatInputState()
+        val image = UIMessagePart.Image("file:///same.png")
+        state.messageContent = listOf(image, image)
+        val targets = state.imageEditTargets()
+        assertTrue(state.removeImage(targets[1]))
+        assertEquals(listOf(image), state.messageContent)
+        assertFalse(state.isImageEditCurrent(targets[1]))
+        assertTrue(state.isImageEditCurrent(targets[0]))
+        assertFalse(state.removeImage(targets[1]))
+        assertEquals(listOf(image), state.messageContent)
+    }
+
+    @Test
+    fun removingTheFirstRepeatedImageDoesNotMoveTheSecondAcrossHistoricalText() {
+        val state = ChatInputState()
+        val image = UIMessagePart.Image("file:///same.png")
+        val middle = UIMessagePart.Text("between")
+        val tail = UIMessagePart.Text("end")
+        state.setContents(listOf(image, middle, image, tail))
+        state.editingMessage = Uuid.random()
+        val targets = state.imageEditTargets()
+        assertTrue(state.removeImage(targets[0]))
+        assertEquals(listOf(middle, image, tail), state.getContents())
+        val edited = UIMessagePart.Image("file:///edited.png")
+        assertTrue(state.replaceImage(targets[1], edited))
+        assertEquals(listOf(middle, edited, tail), state.getContents())
+    }
+
+    @Test
+    fun imageEditTargetsDistinguishRepeatedInstancesAndPreserveMessageOrder() {
+        val state = ChatInputState()
+        val image = UIMessagePart.Image("file:///same.png")
+        val replacement = UIMessagePart.Image("file:///annotation.png")
+        state.setContents(listOf(image, UIMessagePart.Text("between"), image, UIMessagePart.Text("end")))
+        state.editingMessage = Uuid.random()
+        val targets = state.imageEditTargets()
+        assertTrue(state.replaceImage(targets[1], replacement))
+        assertEquals(listOf(image, UIMessagePart.Text("between"), replacement, UIMessagePart.Text("end")), state.getContents())
+        assertFalse(state.replaceImage(targets[1], image))
+        assertTrue(state.isImageEditCurrent(targets[0]))
+    }
+
+    @Test
+    fun imageEditCannotReplaceRemovedAndReselectedImageOrAnotherInput() {
+        val state = ChatInputState()
+        val image = UIMessagePart.Image("file:///same.png")
+        val replacement = UIMessagePart.Image("file:///annotation.png")
+        state.messageContent = listOf(image)
+        val removed = state.imageEditTargets().single()
+        state.messageContent = emptyList()
+        state.messageContent = listOf(image)
+        assertFalse(state.replaceImage(removed, replacement))
+        val previousInput = state.imageEditTargets().single()
+        state.setContents(listOf(image))
+        assertFalse(state.replaceImage(previousInput, replacement))
+        val previousEditor = state.imageEditTargets().single()
+        state.editingTarget = ChatInputEditTarget.Queued(Uuid.random(), 1)
+        assertFalse(state.replaceImage(previousEditor, replacement))
+        assertEquals(listOf(image), state.messageContent)
+    }
+
+    @Test
+    fun sendingInvalidatesImageEditBeforeCommitWithoutClearingTheDraft() {
+        val state = ChatInputState()
+        val image = UIMessagePart.Image("file:///same.png")
+        state.messageContent = listOf(image)
+        val target = state.imageEditTargets().single()
+        val submission = state.captureSubmission()
+        assertFalse(state.replaceImage(target, UIMessagePart.Image("file:///late.png")))
+        assertEquals(listOf(image), submission.contents)
+        assertEquals(listOf(image), state.messageContent)
+        state.completeSubmission(submission)
+        assertTrue(state.isEmpty())
+    }
+
+    @Test
+    fun queuedEditKeepsOriginalPartOrderAndDoesNotPretendToBeHistory() {
+        val state = ChatInputState()
+        val image = UIMessagePart.Image("file:///queued/image.png")
+        val target = ChatInputEditTarget.Queued(Uuid.random(), 4)
+        state.editingTarget = target
+        state.setContents(listOf(UIMessagePart.Text("first"), image, UIMessagePart.Text("last")))
+        state.setMessageText("changed")
+        assertTrue(state.isEditing())
+        assertNull(state.editingMessage)
+        assertEquals(listOf(UIMessagePart.Text("first"), image, UIMessagePart.Text("changed")), state.getContents())
+        assertFalse(state.shouldDeleteFileOnRemove(image))
+        val submitted = state.captureSubmission()
+        state.editingTarget = target.copy(version = 5)
+        state.completeSubmission(submitted)
+        assertEquals("changed", state.textContent.text.toString())
+        assertEquals(target.copy(version = 5), state.editingTarget)
+    }
+
     @Test
     fun committedSubmissionClearsCapturedInputButPreservesEditsAndNewAttachments() {
         val oldAttachment = UIMessagePart.Image("file:///managed/old.png")

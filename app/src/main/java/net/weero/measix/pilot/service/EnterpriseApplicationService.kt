@@ -587,6 +587,7 @@ internal class EnterpriseApplicationService(
     private val platform: PlatformEnterpriseService,
     private val remoteWorkspace: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService,
     private val webDav: net.weero.measix.pilot.service.webdav.WebDavApplicationService,
+    private val conversations: ConversationApplicationService,
 ) {
     private data class Switching(val request: RealmSwitchRequest, val result: Deferred<RealmSelection>)
     private val mutex = Mutex()
@@ -792,11 +793,12 @@ internal class EnterpriseApplicationService(
         return projectEnterpriseBudget(result)
     }
     fun runtimeUsageChanges(): Flow<RealmAccess.Enterprise> = platform.runtimeUsageChanged
-    suspend fun localDataReset(request: EnterpriseDataResetRequest) = dataReset.reset(request)
+    suspend fun prepareLocalDataReset(mode: EnterpriseDataResetMode): EnterpriseResetPreview = dataReset.prepare(mode)
+    suspend fun localDataReset(preview: EnterpriseResetPreview) = dataReset.reset(preview)
     suspend fun retryLocalDataReset() = dataReset.retryReset()
 
-    suspend fun captureExitRequest(): EnterpriseExitRequest? = exit.captureRequest()
-    suspend fun exit(request: EnterpriseExitRequest): EnterpriseExitResult = exit.exit(request)
+    suspend fun captureExitRequest(): EnterpriseExitPreview? = exit.captureRequest()
+    suspend fun exit(request: EnterpriseExitPreview): EnterpriseExitResult = exit.exit(request)
     suspend fun retryExit(failure: EnterpriseExitFailure) { exit.retry(failure) }
 
     suspend fun openPortal(context: Context, selection: RealmSelection, onClosed: (PortalClosure) -> Unit): PortalWebView {
@@ -840,6 +842,7 @@ internal class EnterpriseApplicationService(
         var failure: Exception? = null
         try {
             selected = sessions.switchRealm(request) { previous ->
+                conversations.pauseInputQueuesForRealmSwitch(previous)
                 davReceipt = webDav.revoke(previous)
                 remoteReceipt = remoteWorkspace.revoke(previous)
                 speech.revoke(previous)

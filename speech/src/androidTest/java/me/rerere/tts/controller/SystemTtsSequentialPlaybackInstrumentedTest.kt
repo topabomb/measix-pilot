@@ -278,7 +278,8 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
         }
 
         val chunks = withContext(Dispatchers.Main) {
-            withTimeout(SYNTHESIS_TIMEOUT_MS) {
+            // Vendor synthesis is serialized; each utterance retains its own 30-second deadline.
+            withTimeout(SYNTHESIS_TIMEOUT_MS * utterances.size) {
                 coroutineScope {
                     utterances.map { text ->
                         async {

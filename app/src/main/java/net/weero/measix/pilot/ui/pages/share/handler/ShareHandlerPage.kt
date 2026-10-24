@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R

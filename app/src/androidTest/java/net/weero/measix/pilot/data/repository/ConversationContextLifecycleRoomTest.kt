@@ -27,6 +27,60 @@ import kotlin.uuid.Uuid
 
 @RunWith(AndroidJUnit4::class)
 class ConversationContextLifecycleRoomTest {
+    @Test fun draftFolderValidationRejectsDeletedOrForeignFolderWithoutPublishingConversation() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val name = "draft-folder-${Uuid.random()}"
+        val database = createAppDatabase(context, name)
+        try {
+            val repository = repository(database)
+            val folderId = Uuid.random()
+            val snapshot = Conversation.ofId(Uuid.random()).copy(
+                newConversation = false,
+                folderId = folderId,
+                messageNodes = listOf(MessageNode.of(UIMessage.user("first message"))),
+            ).toSnapshot()
+            val folder = net.weero.measix.pilot.data.db.entity.FolderEntity(
+                id = folderId.toString(), assistantId = snapshot.header.assistantId.toString(),
+                name = "Selected folder", createAt = 1, scope = snapshot.header.scope,
+            )
+            database.folderDao().insert(folder)
+            database.folderDao().deleteById(folder.id)
+            val missing = try {
+                repository.commit(ConversationWrite.MaterializeDraft(snapshot))
+                null
+            } catch (error: IllegalArgumentException) { error }
+            assertEquals("draft_folder_not_found", missing?.message)
+            assertNull(repository.getConversationById(snapshot.conversationId))
+
+            database.folderDao().insert(folder.copy(assistantId = Uuid.random().toString()))
+            val mismatch = try {
+                repository.commit(ConversationWrite.MaterializeDraft(snapshot))
+                null
+            } catch (error: IllegalStateException) { error }
+            assertEquals("draft_folder_scope_mismatch", mismatch?.message)
+            assertNull(repository.getConversationById(snapshot.conversationId))
+
+            database.folderDao().insert(folder.copy(scope =
+                net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise(
+                    me.rerere.common.configuration.EnterpriseAuthority("other-deployment"), "other-user")))
+            val foreignScope = try {
+                repository.commit(ConversationWrite.MaterializeDraft(snapshot))
+                null
+            } catch (error: IllegalStateException) { error }
+            assertEquals("draft_folder_scope_mismatch", foreignScope?.message)
+            assertNull(repository.getConversationById(snapshot.conversationId))
+
+            database.folderDao().insert(folder)
+            assertTrue(repository.commit(ConversationWrite.MaterializeDraft(snapshot)))
+            val committed = requireNotNull(repository.getConversationById(snapshot.conversationId))
+            assertEquals(folderId, committed.folderId)
+            assertEquals(snapshot.nodes, committed.messageNodes)
+        } finally {
+            database.close()
+            context.deleteDatabase(name)
+        }
+    }
+
     @Test fun executionHistoryDistinguishesTrackedRejectionFromForkWithoutCreatingExecutions() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "context-tool-history-${Uuid.random()}"

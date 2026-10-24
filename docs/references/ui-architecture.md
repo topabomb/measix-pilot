@@ -35,6 +35,8 @@ Koin 只负责装配依赖，不作为 UI 的服务定位器。`LocalSettings` �
 成功进入同域同助手 Draft，不打开 Starter 选择、不自动发送；原助手不可用时说明原因并进入空间选择。
 删除其他会话不清输入。`HistoryVM` 持有删除结果与 Undo retention，历史页保持当前位置；
 `Navigator.replaceDeletedConversation` 只替换原 ID、scope 和 Session 匹配的聊天返回入口。
+系统 `NavDisplay.onBack` 与页面返回共用 `Navigator.popBackStack`，每次调用即时检查栈长度，连续返回不弹空根页面。
+历史列表滑动删除等待 `settledValue` 到达 EndToStart 后提交原删除动作，再复位滑动状态；拖动途中的 currentValue 不发删除。
 应用删除回执区分已提交的删除与最近引用维护失败；撤销恢复原树，不覆盖或自动打开新草稿。
 最近引用维护失败单独说明删除已完成，保留可复制诊断及继续新建入口；正常删除直接接续。
 历史页切域时释放原撤销 retention，不将旧空间的撤销或命令失败展示在新空间。
@@ -65,6 +67,18 @@ Missing 说明会话已删除或不存在，只提供显式新建和空间入口
 MCP 页的读取重试只重订阅原空间查询，共享定义继续由原编辑器管理；
 目录、调用能力、刷新和通知健康的展示口径由 [MCP 架构](mcp-architecture.md#8-ui-投影)统一维护。
 
+### 临时提示与紧凑抽屉
+
+`ToasterState` 只持有所属窗口的临时提示和计时任务；同一 ID 更新替换内容及期限，关闭可重复，
+无限期进度由调用者在完成或取消时结束。销毁后拒绝迟到提示，不承担业务事实或恢复职责。
+`Toaster` 作为所属窗口 Box 的最后一个普通 Compose 子项绘制，不创建 Popup 或全窗口输入拦截层。
+`RouteActivity` 随当前路由更换提示状态；`AdaptiveModal` 和图片查看器在自己的窗口内提供提示宿主。
+长提示提供完整详情、滚动与文本选择；提示卡以外的输入和点击继续由原页面处理。
+
+`ConversationList` 根据可用高度、头尾自然高度和字体尺度决定布局。剩余高度不足两行时，
+头部、会话和底部入口一起滚动；高度足够时固定头尾。头部列表槽始终保留，切换时按原可见项恢复位置，
+定位当前会话计入分页占位和头部槽偏移。`ChatDrawer` 避让 IME，短窗口不隐藏底部入口。
+
 ### 诊断与读取重试
 
 命令反馈绑定发起页面与原 lease，抽屉行命令另保留原行目标；离页、切域或撤权后的迟到失败只留日志。
@@ -79,6 +93,11 @@ Core Problem 保留 HTTP status、code、requestId、forwarded 与预算等实�
 Provider 故障的设置入口依据失败消息原 `modelId`：用户模型指向个人 Provider，企业模型提示检查企业服务，
 未知历史来源不猜测。只有 `EnterpriseSynchronizationService.prepareExecution` 抛出的
 `EnterprisePreparationException` 明确表示企业操作尚未开始；其他网络错误不套用该提示。
+
+`ThrowableDiagnosticText` 在诊断边界处理 serialization 的已知 JSON 输入值模板，UI、工具、Provider 与完整日志共用。
+它只投影文本，不修改原异常、cause、suppressed 或栈；JSON input 不写入可见诊断，保留原因句型和可安全保留的定位。
+1.12 的 tree 解码无法区分 DTO 属性与动态 map key，歧义属性路径明确遮蔽；数组下标、根路径及完整调用栈保留。
+关闭 exceptionsWithDebugInfo 不能替代这一处理，因为解析值仍可能出现在 shortMessage 中。普通非 JSON 错误保持原诊断。
 
 `ErrorDetails` 是统一的可选择、复制、滚动诊断弹层，页面通过 `DiagnosticDisclosure` 打开。
 错误卡保留短摘要，完整诊断不挤占输入区或另建页面内滚动区；弹层中的标题、关闭和复制动作始终可达。
@@ -206,6 +225,22 @@ IME 目标显示时将发送/取消或录音停止移入输入框，隐藏能力
 提交前失败或取消保留原稿；等待期间的新文字、重新添加的附件、新编辑目标不被旧结果清除。
 附件归还与事务提交见 [多模态与资源持久化](multimodal-context-and-turn-durability.md)。
 
+聊天发送由 `submitChatInput` 原子选择立即发送或入队。`ChatInputSubmissionReceipt.Queued` 仅表示队列已接管输入，
+同样只清理匹配的输入副本，但不产生指向未发送消息的滚动请求。运行中有内容时保留发送与独立停止按钮，空输入仍显示停止。
+`ChatInputQueue` 消费原页面授权 query 的只读投影，展开正文与附件；附件经队列项版本复验后的 ImageSource 显示，
+不以 URI 直接打开文件。撤回只作用于原 item/version；恢复先确认将发送到当前助手和分支，并提示队列只在本次应用运行保留。
+显式清空提示待发数量和不可撤销的损失，确认捕获整份 item/version 集合；列表新增、编辑或进入提交阶段后要求重新确认。
+服务在原 Session/会话锁内复验集合，清空仅释放未发送项与其编辑租约，当前回复继续运行。
+抽屉删除、历史滑删及批量删除先取得原目标的 ConversationDeletionPreview；存在待发内容时先提示数量，
+明确撤销聊天删除不能恢复待发项，再将原目标对象和原 preview 一并返回应用服务。切域或离页撤下确认，
+不得根据最新列表扩大删除范围，也不能在确认后从 ConversationSummary 重建目标替代原授权身份。
+切域关闭原 lease 后清空显示，旧 Session 的队列不能被同 scope 的新 Session 页面读取。
+
+待发项编辑复用 ChatInput，但使用独立 ChatInputState 和 QueueInputEditLease，保留普通草稿及其附件作用域；
+保存、取消或租约失效后回到原草稿。保存按钮只替换待发项，不立即追加历史消息；保存期间阻止继续编辑。
+编辑预览由应用服务分别读取原附件和新增附件，每次复验原编辑身份。输入组件与文件选择器按编辑器身份重建，
+切换时关闭选择器、旧补全与语音；导入及 Starter 回调同时校验原输入对象，迟到结果不能写入恢复的普通草稿。
+
 输入内容以最终 parts 判断是否为空，空白 Text 不形成输入；编辑历史保留非文本附件及顺序。
 导入结果交给输入框前复验原目标，失败或取消只释放本批新文件。
 
@@ -294,9 +329,10 @@ Gallery、文件管理与生成页面传入各自可见集合。
 不在外层再嵌套正文滚动容器；选区、IME 和正文滚动保持同一坐标。
 `FileTextEditor` 的 `fillViewport` 模式占满受限视口，不施加表单行数上限；Skill 等表单使用有边框及行数约束的输入框。
 `fileTextFormat` 统一识别常见文本、代码、配置及无扩展名文件，语言只选择高亮，不要求 JSON/XML 在编辑中合法。
-HTML/XML 按源码显示，不执行 HTML；未知语法的文本保持普通文本显示。
+HTML 默认预览并可切换源码；XML 与未知语法文本保持源码显示。
 本地与远程入口使用 `FileFormat.fileType`，共用 Markdown、SVG、图片、PDF 和媒体组件；
-Markdown/SVG 可切换渲染与源码，SVG 只渲染文件服务验证的静态子集。PDF 支持页码跳转。
+Markdown/HTML/SVG 可切换渲染与源码，三种工作区使用同一 FileDocumentPreview；Markdown 内完整
+HTML/SVG/Mermaid 沿聊天的默认渲染规则。相对资源由原文件来源读取，来源失效撤下预览。PDF 支持页码跳转。
 高亮复用 `highlight` 的 `CodeHighlighter`、`highlightTokenStyle` 和原有深浅色配色。
 文件与语言各自持有解析实例，避免可变 matcher 与消息渲染或已取消的旧语言计算并发使用。
 解析在后台串行合并快速输入，仅对当前正文 revision 应用结果；最多处理 128 Ki 个 UTF-16 字符和 10,000 个颜色 span，
@@ -305,8 +341,8 @@ Markdown/SVG 可切换渲染与源码，SVG 只渲染文件服务验证的静态
 只管理专有 `FileSyntaxColorSpan`，不修改正文或清理 IME/选择 span，样式变化不产生 dirty。
 编辑、保存和批量下载提供明确的动作名称；另存、重新读取和删除保留必要确认。
 本地文件编辑退出时比较已加载或成功提交的正文，未保存时确认，保存中不退出；不改变重建后重新读取的契约。
-本地 Markdown/SVG 保存后可在原页面返回渲染预览，存在未保存修改时不开放该动作。
-SVG 返回预览先取得新文件版本的图片来源；取得失败保留编辑稿和原模式，准备期间不允许编辑或并发保存。
+本地 Markdown/HTML/SVG 保存后可在原页面返回统一文档预览，存在未保存修改时不开放该动作。
+返回预览先取得原文件的 RenderedFileSource；取得失败保留编辑稿和原模式，准备期间不允许编辑或并发保存。
 
 编辑任务绑定原文件身份和 composition 生命周期。读写异常保留原 cause，保存失败保留正文，
 取消和失败均恢复提交状态；命令成功后才关闭编辑或删除窗口。文件访问和 Workspace 导出契约见
@@ -387,3 +423,10 @@ PDF 使用有界逐页渲染。身份、条件写入及系统交付约束见 [�
 
 纯布局与投影策略先做 JVM 验证，系统窗口、键盘、触觉和交互绑定由设备测试证明，分层要求见
 [测试策略](testing-strategy.md)。
+
+### 二维码扫描
+
+`QRCodeScannerDialog` 为供应商导入、MCP 导入和企业加入提供同一相机界面，解码结果仍交原 application 命令。
+打开时固定原 RealmSelection，绑定和主线程交付前复验；关闭、切域及暂停会使该次绑定的结果失效。
+CameraX 仅在 RESUMED 时绑定，每帧 finally 关闭 ImageProxy；退出解绑自身 use cases 并关闭、等待解码线程退出。
+二维码解码处理 rowStride/pixelStride，不把平面填充当图像像素。权限拒绝提供重试/系统设置，设备或读取失败保留详情。

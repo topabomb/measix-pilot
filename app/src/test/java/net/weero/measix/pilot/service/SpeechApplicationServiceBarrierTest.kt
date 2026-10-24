@@ -50,7 +50,7 @@ class SpeechApplicationServiceBarrierTest {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         try {
             for (enterprise in listOf(false, true)) {
-                val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+                val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
                 val packet = exampleEnterprisePackage().let { it.copy(configuration = it.configuration.copy(
                     policy = it.configuration.policy.copy(allowLocalTts = true))) }
                 if (enterprise) sessions.enrollFixture(packet) else sessions.recover()
@@ -107,7 +107,7 @@ class SpeechApplicationServiceBarrierTest {
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         try {
             for (protocol in listOf(EnterpriseTtsProtocol.SYSTEM, EnterpriseTtsProtocol.OPENAI)) {
-                val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+                val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
                 val packet = exampleEnterprisePackage().let { original ->
                     val configuration = original.configuration.copy(tts = original.configuration.tts.map { definition ->
                         if (protocol == EnterpriseTtsProtocol.SYSTEM) definition.copy(protocol = protocol, modelId = null, voice = null,
@@ -156,7 +156,7 @@ class SpeechApplicationServiceBarrierTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         val available = sessions.enrollFixture(packet)
         val selection = requireNotNull(sessions.readPresentation().selection)

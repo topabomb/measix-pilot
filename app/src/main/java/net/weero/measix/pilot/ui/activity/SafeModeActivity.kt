@@ -12,6 +12,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,8 +46,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.Toaster
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.Toaster
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.RouteActivity
@@ -53,7 +59,6 @@ import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.hooks.writeStringPreference
-import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.ui.theme.MeasixTheme
 import net.weero.measix.pilot.ui.theme.WindowSystemBars
 import net.weero.measix.pilot.utils.CrashHandler
@@ -83,103 +88,103 @@ class SafeModeActivity : ComponentActivity() {
                     LocalAdaptiveLayoutInfo provides adaptiveLayoutInfo,
                     LocalToaster provides toaster,
                 ) {
-                    Toaster(
-                        state = toaster,
-                        darkTheme = LocalDarkMode.current,
-                        richColors = true,
-                        alignment = Alignment.TopCenter,
-                        showCloseButton = true,
-                    )
-                    Scaffold(
-                        modifier = Modifier.fillMaxSize(),
-                        topBar = {
-                            TopAppBar(title = { Text(stringResource(R.string.safe_mode_title)) })
-                        }
-                    ) { innerPadding ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(innerPadding)
-                                .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Text(
-                                text = stringResource(R.string.safe_mode_description),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-
-                            Text(
-                                text = stringResource(
-                                    R.string.safe_mode_current_assistant,
-                                    settings.getCurrentAssistant().name.ifEmpty {
-                                        stringResource(R.string.safe_mode_default_assistant)
-                                    },
-                                ),
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-
-                            Button(
-                                onClick = { showAssistantPicker = true },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) {
-                                Text(stringResource(R.string.safe_mode_switch_assistant))
+                    Box(Modifier.fillMaxSize()) {
+                        Scaffold(
+                            modifier = Modifier.fillMaxSize(),
+                            topBar = {
+                                TopAppBar(title = { Text(stringResource(R.string.safe_mode_title)) })
                             }
-
-                            OutlinedButton(
-                                onClick = {
-                                    startActivity(Intent(this@SafeModeActivity, RouteActivity::class.java))
-                                    finish()
-                                },
-                                modifier = Modifier.fillMaxWidth(),
+                        ) { innerPadding ->
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(innerPadding)
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Text(stringResource(R.string.safe_mode_enter_app))
-                            }
+                                Text(
+                                    text = stringResource(R.string.safe_mode_description),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
 
-                            if (stackTrace != null) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.safe_mode_crash_report),
-                                        style = MaterialTheme.typography.titleSmall,
-                                    )
-                                    OutlinedButton(
-                                        onClick = {
-                                            val cm = context.getSystemService(
-                                                Context.CLIPBOARD_SERVICE,
-                                            ) as ClipboardManager
-                                            cm.setPrimaryClip(ClipData.newPlainText("crash", stackTrace))
+                                Text(
+                                    text = stringResource(
+                                        R.string.safe_mode_current_assistant,
+                                        settings.getCurrentAssistant().name.ifEmpty {
+                                            stringResource(R.string.safe_mode_default_assistant)
                                         },
+                                    ),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+
+                                Button(
+                                    onClick = { showAssistantPicker = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(stringResource(R.string.safe_mode_switch_assistant))
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        startActivity(Intent(this@SafeModeActivity, RouteActivity::class.java))
+                                        finish()
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(stringResource(R.string.safe_mode_enter_app))
+                                }
+
+                                if (stackTrace != null) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
                                     ) {
-                                        Text(stringResource(R.string.safe_mode_copy))
+                                        Text(
+                                            text = stringResource(R.string.safe_mode_crash_report),
+                                            style = MaterialTheme.typography.titleSmall,
+                                        )
+                                        OutlinedButton(
+                                            onClick = {
+                                                val cm = context.getSystemService(
+                                                    Context.CLIPBOARD_SERVICE,
+                                                ) as ClipboardManager
+                                                cm.setPrimaryClip(ClipData.newPlainText("crash", stackTrace))
+                                            },
+                                        ) {
+                                            Text(stringResource(R.string.safe_mode_copy))
+                                        }
+                                    }
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                        ),
+                                    ) {
+                                        val vScroll = rememberScrollState()
+                                        val hScroll = rememberScrollState()
+                                        Text(
+                                            text = stackTrace,
+                                            modifier = Modifier
+                                                .padding(12.dp)
+                                                .verticalScroll(vScroll)
+                                                .horizontalScroll(hScroll),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = FontFamily.Monospace,
+                                        )
                                     }
                                 }
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(1f),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                    ),
-                                ) {
-                                    val vScroll = rememberScrollState()
-                                    val hScroll = rememberScrollState()
-                                    Text(
-                                        text = stackTrace,
-                                        modifier = Modifier
-                                            .padding(12.dp)
-                                            .verticalScroll(vScroll)
-                                            .horizontalScroll(hScroll),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontFamily = FontFamily.Monospace,
-                                    )
-                                }
                             }
                         }
-                    }
 
+                        Toaster(
+                            state = toaster,
+                            modifier = Modifier.align(Alignment.TopCenter)
+                                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
+                        )
+                    }
                     if (showAssistantPicker) {
                         AssistantPickerSheet(
                             settings = settings,

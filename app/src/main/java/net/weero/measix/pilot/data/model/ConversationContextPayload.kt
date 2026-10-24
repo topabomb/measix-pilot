@@ -77,7 +77,11 @@ internal sealed interface ConversationContextSource {
 
     @Serializable
     @SerialName("system")
-    data class System(val contributions: List<SystemContextContribution>) : ConversationContextSource
+    data class System(
+        val contributions: List<SystemContextContribution>,
+        /** Captured for this request, never reconstructed from the current assistant. */
+        val workspace: WorkspaceContextOrigin? = null,
+    ) : ConversationContextSource
 
     @Serializable
     @SerialName("prompt_rule")
@@ -144,6 +148,22 @@ internal enum class AttachmentContextInput { DOCUMENT_TEXT, NATIVE, REFERENCE_ON
 
 @Serializable
 internal enum class SystemContextKind { DOMAIN, APPLICATION, TOOL, WORKSPACE, PROMPT_RULE }
+
+/** Historical resource provenance, not permission to read the registered Workspace. */
+@Serializable
+internal data class WorkspaceContextOrigin(
+    val workspaceId: String,
+    val root: String,
+    val cwd: String,
+    val version: Int = 1,
+) {
+    init {
+        require(version == 1) { "unsupported_workspace_context_origin" }
+        kotlin.uuid.Uuid.parse(workspaceId)
+        require(root.isNotBlank() && root.all { it.isLetterOrDigit() || it in "._-" }) { "invalid_workspace_context_root" }
+        require(me.rerere.workspace.RootfsPath.parse(cwd).value == cwd) { "invalid_workspace_context_cwd" }
+    }
+}
 
 @Serializable
 internal data class SystemContextContribution(

@@ -533,6 +533,9 @@ internal object TurnTransition {
         val tools = command.assistantMessage.getTools()
         val execution = (command as? ToolExecutionCheckpoint)?.toolExecution
         execution?.let { fact ->
+            require(fact.durationMillis == null || (fact.durationMillis >= 0 && fact.status != ToolExecutionStatus.STARTED)) {
+                "Tool duration requires a measured terminal execution"
+            }
             require(fact.assistantMessageId == command.turn.assistantMessageId && fact.stepId == command.step.stepId)
             val tool = tools.singleOrNull { it.stepId == fact.stepId && it.localCallId == fact.localCallId }
                 ?: error("Execution fact does not resolve to its Tool Call")
@@ -840,6 +843,7 @@ private fun ToolExecutionFact.toEntity(turnId: Uuid, nowMillis: Long): ToolExecu
     childConversationId = childConversationId,
     childTurnId = childTurnId,
     subAssistantRunId = subAssistantRunId,
+    durationMillis = durationMillis,
     createdAt = nowMillis,
     updatedAt = nowMillis,
 )

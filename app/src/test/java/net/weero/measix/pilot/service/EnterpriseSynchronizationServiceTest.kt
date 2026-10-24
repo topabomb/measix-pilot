@@ -237,7 +237,7 @@ class EnterpriseSynchronizationServiceTest {
     }
 
     private inner class Fixture(dispatcher: CoroutineDispatcher) {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { 1000L }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
         val platform = mockk<PlatformEnterpriseService>()
         val scope = CoroutineScope(SupervisorJob() + dispatcher)
         val service = EnterpriseSynchronizationService(sessions, scope, platform)

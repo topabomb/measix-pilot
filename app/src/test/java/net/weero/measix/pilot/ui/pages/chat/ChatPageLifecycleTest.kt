@@ -53,10 +53,161 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ChatPageLifecycleTest {
+    @Test fun `drawer deletion waits for pending input confirmation and passes original preview`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val preview = mockk<ConversationDeletionPreview>()
+        every { preview.pendingInputCount } returns 2
+        coEvery { fixture.application.prepareDeletion(any()) } returns preview
+        coEvery { fixture.application.delete(any(), preview) } throws java.io.IOException("delete rejected")
+        try {
+            val vm = fixture.create(); runCurrent()
+            val row = ConversationSummary(Uuid.random(), fixture.request.assistantId, "Other", null, false,
+                java.time.Instant.EPOCH, java.time.Instant.EPOCH, fixture.lease.commandTarget.selection)
+            vm.deleteConversation(row); runCurrent()
+            val pending = requireNotNull(vm.pendingConversationDeletion)
+            assertSame(preview, pending.preview)
+            coVerify(exactly = 0) { fixture.application.delete(any(), any()) }
+            vm.dismissConversationDeletion()
+            vm.confirmConversationDeletion(pending); runCurrent()
+            coVerify(exactly = 0) { fixture.application.delete(any(), any()) }
+            vm.deleteConversation(row); runCurrent()
+            val confirmed = requireNotNull(vm.pendingConversationDeletion)
+            vm.confirmConversationDeletion(confirmed); runCurrent()
+            coVerify(exactly = 1) { fixture.application.delete(confirmed.target, preview) }
+            coVerify(exactly = 1) { fixture.application.prepareDeletion(listOf(confirmed.target)) }
+            assertNull(vm.pendingConversationDeletion)
+            assertTrue(fixture.errors.errors.value.single().detail.contains("delete rejected"))
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    private fun editLease(parts: List<UIMessagePart>): QueueInputEditLease {
+        val lease = mockk<QueueInputEditLease>(relaxed = true)
+        val closed = MutableStateFlow(false)
+        every { lease.parts } returns parts
+        every { lease.itemId } returns Uuid.random()
+        every { lease.version } returns 1L
+        every { lease.draft } returns mockk(relaxed = true)
+        every { lease.isClosed } returns closed
+        every { lease.close() } answers { closed.value = true }
+        return lease
+    }
+
+    @Test fun `queue editor borrows its own inputs and cancellation restores original draft`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val lease = editLease(listOf(UIMessagePart.Text("queued"), UIMessagePart.Image("file:///pending")))
+        coEvery { fixture.turns.beginQueuedInputEdit(any(), any(), any()) } returns lease
+        try {
+            val vm = fixture.create(); runCurrent()
+            val target = ConversationAssistantTarget(fixture.lease.commandTarget, fixture.request.assistantId)
+            val original = vm.inputState
+            original.setContents(listOf(UIMessagePart.Text("unsent"), UIMessagePart.Image("file:///draft")))
+            vm.beginQueuedInputEdit(target, lease.itemId, 0); runCurrent()
+            assertNotSame(original, vm.inputState)
+            assertNull(vm.inputState.editingMessage)
+            assertEquals(lease.parts, vm.inputState.getContents())
+            assertSame(lease.draft, vm.importsFor(target))
+            assertThrows(IllegalStateException::class.java) { vm.requireInputOwner(target, original) }
+            vm.inputState.setMessageText("unfinished replacement")
+            vm.cancelInputEdit(); runCurrent()
+            assertSame(original, vm.inputState)
+            assertEquals("unsent", vm.inputState.textContent.text.toString())
+            assertEquals(listOf(UIMessagePart.Image("file:///draft")), vm.inputState.messageContent)
+            assertSame(fixture.imports, vm.importsFor(target))
+            verify(exactly = 1) { lease.close() }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `failed queue save retains editor and successful retry restores ordinary draft`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val lease = editLease(listOf(UIMessagePart.Text("queued")))
+        coEvery { fixture.turns.beginQueuedInputEdit(any(), any(), any()) } returns lease
+        coEvery { fixture.turns.saveQueuedInputEdit(any(), any()) } throws IllegalStateException("queue_item_changed")
+        try {
+            val vm = fixture.create(); runCurrent()
+            val target = ConversationAssistantTarget(fixture.lease.commandTarget, fixture.request.assistantId)
+            val original = vm.inputState
+            original.setMessageText("normal draft")
+            vm.beginQueuedInputEdit(target, lease.itemId, 0); runCurrent()
+            val editor = vm.inputState
+            editor.setMessageText("edited")
+            vm.saveQueuedInput(target)
+            assertSame(editor, vm.inputState)
+            assertEquals("edited", vm.inputState.textContent.text.toString())
+            assertFalse(vm.savingQueuedInput)
+            verify(exactly = 0) { lease.close() }
+            val saved = CompletableDeferred<QueuedInputReceipt?>()
+            coEvery { fixture.turns.saveQueuedInputEdit(lease, any()) } coAnswers { saved.await() }
+            val saving = async { vm.saveQueuedInput(target) }; runCurrent()
+            assertTrue(vm.savingQueuedInput)
+            vm.cancelInputEdit()
+            assertSame(editor, vm.inputState)
+            assertThrows(IllegalStateException::class.java) { vm.requireInputOwner(target, editor) }
+            saved.complete(QueuedInputReceipt(fixture.request.id, lease.itemId, 2))
+            saving.await(); runCurrent()
+            assertSame(original, vm.inputState)
+            assertEquals("normal draft", vm.inputState.textContent.text.toString())
+            assertFalse(vm.savingQueuedInput)
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `revoked queue editor restores original input without sending it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val lease = editLease(listOf(UIMessagePart.Text("queued")))
+        coEvery { fixture.turns.beginQueuedInputEdit(any(), any(), any()) } returns lease
+        try {
+            val vm = fixture.create(); runCurrent()
+            val target = ConversationAssistantTarget(fixture.lease.commandTarget, fixture.request.assistantId)
+            val original = vm.inputState
+            original.setMessageText("unsent")
+            vm.beginQueuedInputEdit(target, lease.itemId, 0); runCurrent()
+            lease.close(); runCurrent()
+            assertSame(original, vm.inputState)
+            assertEquals("unsent", vm.inputState.textContent.text.toString())
+            coVerify(exactly = 0) { fixture.turns.submitChatInput(any(), any(), any(), any()) }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `late starter result cannot write into restored ordinary draft`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        fixture.models.value = fixture.model.copy(configuration = mockk(relaxed = true))
+        val lease = editLease(listOf(UIMessagePart.Text("queued")))
+        coEvery { fixture.turns.beginQueuedInputEdit(any(), any(), any()) } returns lease
+        val entered = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        coEvery { fixture.application.appendStarterPrompt(any(), any(), any()) } coAnswers {
+            val accept = thirdArg<(String) -> Unit>()
+            entered.complete(Unit)
+            finish.await()
+            accept("late starter")
+        }
+        try {
+            val vm = fixture.create(); runCurrent()
+            val target = ConversationAssistantTarget(fixture.lease.commandTarget, fixture.request.assistantId)
+            val original = vm.inputState
+            original.setMessageText("unsent")
+            vm.beginQueuedInputEdit(target, lease.itemId, 0); runCurrent()
+            val editor = vm.inputState
+            val starter = ConversationStarterUiModel(mockk(), "Starter", "prompt")
+            val pending = async { runCatching { vm.selectStarter(target, starter, editor) } }
+            entered.await()
+            vm.cancelInputEdit()
+            finish.complete(Unit)
+            assertEquals("input_editor_changed", pending.await().exceptionOrNull()?.message)
+            assertSame(original, vm.inputState)
+            assertEquals("unsent", original.textContent.text.toString())
+            assertEquals("queued", editor.textContent.text.toString())
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun `cancelled drawer deletion releases its busy handoff without reporting a failure`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fixture = Fixture(draft = false)
-        coEvery { fixture.application.delete(any()) } throws kotlinx.coroutines.CancellationException("cancelled before commit")
+        coEvery { fixture.application.delete(any(), any()) } throws kotlinx.coroutines.CancellationException("cancelled before commit")
         try {
             val vm = fixture.create(); runCurrent()
             val row = ConversationSummary(fixture.request.id, fixture.request.assistantId, "Current", null, false,
@@ -74,7 +225,7 @@ class ChatPageLifecycleTest {
         val submitted = CompletableDeferred<Unit>()
         val commit = CompletableDeferred<Unit>()
         val receipt = net.weero.measix.pilot.service.ConversationDeletionReceipt(fixture.request.id, fixture.request.assistantId, fixture.lease.commandTarget.selection)
-        coEvery { fixture.application.delete(any()) } coAnswers {
+        coEvery { fixture.application.delete(any(), any()) } coAnswers {
             submitted.complete(Unit)
             fixture.reads.value = ConversationReadState.Missing
             commit.await()
@@ -100,7 +251,7 @@ class ChatPageLifecycleTest {
             runCurrent()
             assertEquals(1, navigations)
             assertNull(vm.handoff.value)
-            coVerify(exactly = 1) { fixture.application.delete(any()) }
+            coVerify(exactly = 1) { fixture.application.delete(any(), any()) }
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
     }
 
@@ -316,7 +467,7 @@ class ChatPageLifecycleTest {
             val vm = fixture.create()
             runCurrent()
             assertSame(ConversationReadState.Loading, vm.conversationState.value)
-            verify(exactly = 0) { fixture.artifacts.openDraftScope(any()) }
+            verify(exactly = 0) { fixture.artifacts.openDraftScope(any<ConversationViewLease>()) }
             verify(exactly = 0) { fixture.query.observeConversation(any()) }
             verify(exactly = 0) { fixture.favorites.observeNodeIds(any()) }
             pending.complete(fixture.lease)
@@ -367,7 +518,7 @@ class ChatPageLifecycleTest {
             coVerify(exactly = 0) { fixture.query.captureCurrentAccess() }
             coVerify(exactly = 0) { fixture.application.newDraftRequest(any<RealmAccess>()) }
             coVerify(exactly = 0) { fixture.application.newDraftRequest(any<net.weero.measix.pilot.data.enterprise.RealmSelection>()) }
-            verify(exactly = 0) { fixture.artifacts.openDraftScope(any()) }
+            verify(exactly = 0) { fixture.artifacts.openDraftScope(any<ConversationViewLease>()) }
             verify(exactly = 0) { fixture.query.observeConversation(any()) }
             verify(exactly = 0) { fixture.favorites.observeNodeIds(any()) }
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
@@ -563,7 +714,7 @@ class ChatPageLifecycleTest {
                 ArtifactDraftItem(Uri.parse("file:///owned/new"), "image", "image/png"),
             )
             coEvery { fixture.application.initialize(fixture.request) } returns nextLease
-            every { fixture.artifacts.openDraftScope(any()) } returns nextImports
+            every { fixture.artifacts.openDraftScope(any<ConversationViewLease>()) } returns nextImports
             fixture.access.value = true
             vm.retryConversationLoad()
             runCurrent()
@@ -669,7 +820,50 @@ class ChatPageLifecycleTest {
             assertEquals(listOf(UIMessagePart.Text("written while saving"), addedAttachment), vm.inputState.getContents())
             assertFalse(vm.inputState.isEditing())
             coVerify(exactly = 2) { fixture.application.editMessage(fixture.lease.commandTarget, messageId, any(), fixture.imports) }
-            coVerify(exactly = 0) { fixture.turns.sendMessage(any(), any(), any(), any()) }
+            coVerify(exactly = 0) { fixture.turns.submitChatInput(any(), any(), any(), any()) }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `queued acceptance clears only the submitted input and produces no append scroll receipt`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val accepted = CompletableDeferred<net.weero.measix.pilot.service.ChatInputSubmissionReceipt?>()
+        coEvery { fixture.turns.submitChatInput(any(), any(), any(), any()) } coAnswers { accepted.await() }
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            val target = ConversationAssistantTarget(fixture.lease.commandTarget, fixture.request.assistantId)
+            vm.inputState.setContents(listOf(UIMessagePart.Text("pending"), UIMessagePart.Image("file:///owned/pending")))
+            val sending = async { vm.handleMessageSend(target) }
+            runCurrent()
+            assertEquals("pending", vm.inputState.textContent.text.toString())
+            assertNull(vm.handleMessageSend(target))
+            accepted.complete(net.weero.measix.pilot.service.ChatInputSubmissionReceipt.Queued(
+                net.weero.measix.pilot.service.QueuedInputReceipt(fixture.request.id, Uuid.random(), 0)))
+            assertNull(sending.await())
+            assertTrue(vm.inputState.isEmpty())
+            coVerify(exactly = 1) { fixture.turns.submitChatInput(target, any(), true, fixture.imports) }
+            assertTrue(fixture.errors.errors.value.isEmpty())
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `late queue acceptance does not clear a replacement input`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val accepted = CompletableDeferred<net.weero.measix.pilot.service.ChatInputSubmissionReceipt?>()
+        coEvery { fixture.turns.submitChatInput(any(), any(), any(), any()) } coAnswers { accepted.await() }
+        try {
+            val vm = fixture.create()
+            runCurrent()
+            val target = ConversationAssistantTarget(fixture.lease.commandTarget, fixture.request.assistantId)
+            vm.inputState.setContents(listOf(UIMessagePart.Text("pending")))
+            val sending = async { vm.handleMessageSend(target) }
+            runCurrent()
+            vm.inputState.setContents(listOf(UIMessagePart.Text("next draft")))
+            accepted.complete(net.weero.measix.pilot.service.ChatInputSubmissionReceipt.Queued(
+                net.weero.measix.pilot.service.QueuedInputReceipt(fixture.request.id, Uuid.random(), 0)))
+            assertNull(sending.await())
+            assertEquals("next draft", vm.inputState.textContent.text.toString())
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
     }
 
@@ -756,7 +950,7 @@ class ChatPageLifecycleTest {
             assertEquals(newMessageId, vm.inputState.editingMessage)
             assertEquals(listOf(UIMessagePart.Text("another edit"), added), vm.inputState.getContents())
 
-            coEvery { fixture.turns.sendMessage(any(), any(), any(), any()) } throws java.io.IOException("worker installation rejected")
+            coEvery { fixture.turns.submitChatInput(any(), any(), any(), any()) } throws java.io.IOException("worker installation rejected")
             vm.inputState.clearInput()
             vm.inputState.setMessageText("new unsent message")
             vm.inputState.messageContent = listOf(added)
@@ -834,14 +1028,14 @@ class ChatPageLifecycleTest {
         val fixture = Fixture()
         val row = ConversationSummary(Uuid.random(), fixture.request.assistantId, "Other chat", null, false,
             java.time.Instant.EPOCH, java.time.Instant.EPOCH, fixture.lease.commandTarget.selection)
-        coEvery { fixture.application.delete(any()) } throws java.io.IOException("other chat delete failed")
+        coEvery { fixture.application.delete(any(), any()) } throws java.io.IOException("other chat delete failed")
         try {
             val vm = fixture.create(); runCurrent()
             vm.deleteConversation(row); runCurrent()
             val error = vm.errors.value.single()
             assertEquals(fixture.request.id, error.conversationId)
             assertTrue(error.detail.contains("IOException: other chat delete failed"))
-            coVerify { fixture.application.delete(match { it.conversationId == row.id && it.selection == row.commandTarget.selection }) }
+            coVerify { fixture.application.delete(match { it.conversationId == row.id && it.selection == row.commandTarget.selection }, any()) }
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
     }
 
@@ -961,8 +1155,9 @@ class ChatPageLifecycleTest {
         val models = MutableStateFlow<ConversationUiModel?>(model)
         init {
             coEvery { application.initialize(request) } returns lease
+            coEvery { application.prepareDeletion(any()) } returns ConversationDeletionPreview(null, emptyList())
             coEvery { application.rememberConversation(lease) } returns Unit
-            every { artifacts.openDraftScope(any()) } returns imports
+            every { artifacts.openDraftScope(any<ConversationViewLease>()) } returns imports
             every { imports.close() } returns Unit
             every { settings.userSettings } returns MutableStateFlow(net.weero.measix.pilot.data.datastore.Settings.dummy())
             every { updater.updateState } returns MutableStateFlow(UiState.Idle)

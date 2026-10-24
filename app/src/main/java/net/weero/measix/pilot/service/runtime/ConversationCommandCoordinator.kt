@@ -222,7 +222,7 @@ class ConversationCommandCoordinator(
             coroutineContext.ensureActive()
             withContext(NonCancellable) {
                 repository.deleteConversation(conversationId)
-                (children.map { it.conversationId } + conversationId).forEach { id -> registry.evictRuntime(id) }
+                (children.map { it.conversationId } + conversationId).forEach { id -> evictDeletedRuntime(id) }
                 deleted
             }
         }
@@ -300,7 +300,7 @@ class ConversationCommandCoordinator(
             ensureNotActive(conversationId, includeAuxiliary = true)
             val header = repository.getConversationHeader(conversationId)
             if (header == null) {
-                registry.evictRuntime(conversationId)
+                evictDeletedRuntime(conversationId)
                 throw ConversationNotFoundException(conversationId)
             }
             val childIds = if (header.parentConversationId == null) {
@@ -313,9 +313,16 @@ class ConversationCommandCoordinator(
             coroutineContext.ensureActive()
             withContext(NonCancellable) {
                 repository.deleteConversation(conversationId)
-                (childIds + conversationId).forEach { id -> registry.evictRuntime(id) }
+                (childIds + conversationId).forEach { id -> evictDeletedRuntime(id) }
             }
         }
+    }
+
+    /** Called only after durable deletion (or confirmed absence), while the deletion locks remain held. */
+    private suspend fun evictDeletedRuntime(conversationId: Uuid) {
+        registry.findRuntime(conversationId)?.takeIf { it.inputQueue.value.items.isNotEmpty() }
+            ?.clearInputQueueAfterStop()
+        registry.evictRuntime(conversationId)
     }
 
     /**

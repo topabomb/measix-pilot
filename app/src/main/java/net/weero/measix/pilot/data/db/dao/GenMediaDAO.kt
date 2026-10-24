@@ -28,6 +28,9 @@ interface GenMediaDAO {
     @Query("SELECT * FROM genmediaentity WHERE id = :id")
     suspend fun getById(id: Int): GenMediaEntity?
 
+    @Query("SELECT id FROM genmediaentity WHERE scope = :scope AND id IN (:ids)")
+    suspend fun existingIds(scope: ConfigurationScope, ids: List<Int>): List<Int>
+
     @Query("SELECT EXISTS(SELECT 1 FROM genmediaentity WHERE path = :path)")
     suspend fun existsByPath(path: String): Boolean
 

@@ -206,6 +206,37 @@ class ConversationRuntimeTest {
             snapshot
         }
 
+    @org.junit.Test fun `approval continuation reconciles cancellation before another queued start`() = runTest {
+        val rt = runtime(backgroundScope)
+        val turn = Uuid.random()
+        val handle = rt.startTurn(turn, Uuid.random())
+        val initial = requireNotNull(rt.currentWorker())
+        val model = Model(modelId = "model", displayName = "Model")
+        val assistant = Assistant(id = rt.durable.header.assistantId, enableMemory = false)
+        val context = testTurnContext(
+            settings = Settings(providers = listOf(ProviderSetting.OpenAI(models = listOf(model))), assistants = listOf(assistant)),
+            model = model, assistant = assistant,
+        )
+        rt.bindModelExecution(turn, initial, assistant.id, context.model.requests as ModelExecutionLease)
+        rt.bindTurnContext(turn, initial, context)
+        rt.retainAwaitingUser(handle)
+        initial.cancel()
+        val continuation = Job()
+        rt.continueAwaitingUser(handle, continuation, requireQueueOutcome = true)
+        val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(RealmAccess.Personal, 1)
+        rt.enqueueInput(selection, rt.durable.header.assistantId, listOf(UIMessagePart.Text("next")), true, null)
+        val epoch = rt.inputQueue.value.epoch
+        rt.applyCommand(FinalizeTurn(handle, null, TurnExecutionStatus.CANCELLED, null))
+        rt.releaseTurnWorker(turn, continuation)
+        continuation.complete()
+        val next = Job()
+        assertNull(rt.installQueuedInputWorker(requireNotNull(rt.nextQueuedInputDispatch()), selection, Uuid.random(), next))
+        assertTrue(rt.reconcileInputQueueOutcome(continuation, epoch, InputQueueRequestOutcome.CANCELLED))
+        assertEquals(InputQueuePauseReason.USER_STOP, rt.inputQueue.value.pauseReason)
+        next.complete()
+        rt.clearInputQueueAfterStop()
+    }
+
     private suspend fun ConversationRuntime.startTurn(
         turnId: Uuid,
         assistantMessageId: Uuid,

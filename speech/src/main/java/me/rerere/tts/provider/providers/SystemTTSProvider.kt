@@ -8,6 +8,8 @@ import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -116,6 +118,7 @@ internal class SystemTtsSynthesisCoordinator(
         var engine: SystemTtsEngine? = null
         var failure: Throwable? = null
         try {
+            currentCoroutineContext().ensureActive()
             SystemTtsParameterPolicy.requireValid(setting.speechRate.toDouble(), setting.pitch.toDouble())
             try {
                 withTimeout(timeoutMs) {
@@ -131,6 +134,8 @@ internal class SystemTtsSynthesisCoordinator(
                     audioFile.readBytes()
                 }
             } catch (timeout: TimeoutCancellationException) {
+                // An enclosing request deadline is cancellation, not this engine's timeout.
+                currentCoroutineContext().ensureActive()
                 throw SystemTtsException(
                     reason = "system_tts_timeout",
                     detail = "System TTS did not finish within ${timeoutMs}ms",

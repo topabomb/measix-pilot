@@ -76,6 +76,17 @@ Rootfs 内的主要映射：
 
 `WorkspaceStorageArea.FILES` 和 `LINUX` 用于管理页面的直接文件操作；AI 工具使用 Rootfs 绝对路径，以便与 shell 看到同一命名空间。
 
+历史消息图片的底层读取入口 `WorkspaceApplicationService.messageImageSource` 只接收查询层签发的
+`ConversationMessageResourceSource`。它使用请求保存的 workspaceId/root/cwd，经原 gate 和 Rootfs 字节读取，
+读取前后复验消息授权与注册身份；缺来源时不取当前助手的 Workspace。`/upload` 保留给 ArtifactStore，
+不会通过 Rootfs 同名路径读取。消息授权查询在 Workspace gate 外执行，避免反向取得企业 Session 锁。
+
+文件菜单复制路径通过 `WorkspaceQueryService.guestPath` 查询，Repository 委托 `WorkspaceManager.guestPath`
+将现存条目投影为 `WorkspaceGuestPath`。FILES 对应 `/workspace`，LINUX 对应 guest `/`；
+原文件组件核对挂载后才返回路径，被覆盖的 Linux 条目返回 MOUNT_SHADOWED，不提供宿主路径兜底。
+符号链接条目本身可复制其路径，路径中包含符号链接父目录则返回 SYMBOLIC_PARENT，避免宿主与 guest 解析差异。
+页面提供可复制的失败诊断；复制不读取文件内容、不产生访问授权，也不改变共享本地 Workspace 的资源归属。
+
 ### 文件导出与编辑草稿
 
 `WorkspaceApplicationService.exportFiles` 接收固定的 workspaceId、area 和相对路径集合，逐项创建 SAF document，记录 provider 返回的 URI 与实际名称；不查找覆盖同名外部文件，不持久化树授权。源 stat 与复制使用原 per-workspace gate，外部 provider 的 create/open/close/delete 在 gate 外，避免目标也是本应用 DocumentsProvider 时回入同一 gate。源在复制开始时重新校验，不承诺选择时的内容快照。
@@ -105,6 +116,9 @@ provenance URL 不能代替该义务。`workspace/tools/build-proot.py` 从固�
 Android Process 的终止请求由 PRoot 自身处理：启动前阻塞 TERM/QUIT，guest 恢复原 signal mask，tracer 在登记首个子进程、
 安装 handler 后才解除阻塞。两个信号共用既有 tracee registry 和 event loop，持续终止并回收包括晚到 fork/clone 事件中的子进程。
 Shell 保持 ProcessBuilder 和分离管道；WorkspacePtySession 使用现有 PID 发 TERM，不新增 wrapper 或进程监督 owner。
+本地 fork→clone 兼容补丁在 fork 事件发生时捕获原参数快照。内核未提供子 PID 时，快照随 pending child 保存，
+直接登记、父 syscall exit 后登记及 vfork 子进程先运行的登记路径共用；不能在延迟登记时重新读取父寄存器。
+子进程首次恢复前只还原参数，保留返回值和 syscall 阶段。路径与 fd 修复来自锁定的 `.96` 源码，设备验收范围见 `workspace/PROOT.md`。
 
 `ProotLaunchSpec` 统一构造 executable、Rootfs、bind、cwd、环境与命令参数；具体 argv 以类型实现为准。
 
@@ -291,13 +305,19 @@ Nav3 的 `clazzContentKey`，窗口或 Activity 重建复用原 VM、FileEditorS
 恢复后的刷新仍使用 VM 捕获的原 selection。关闭或撤权清除；替换 Session 不复活旧授权，UNKNOWN 写入不重放。
 进程死亡没有原 VM，导航 key 不恢复临时 selection，文件页要求显式返回重开；不从 Bundle/磁盘恢复正文或授权。分享副本使用短随机私有名和安全短扩展名，
 FileProvider 保留原展示名；Intent 使用 URI 实际 MIME，避免真实副本类型与接收应用看到的类型不一致。
-图片内容校验像素上限，PDF 逐页原生渲染，资源均有上限；HTML 只作源码，SVG 支持源码及静态渲染，外部打开仍是显式动作。
+图片内容校验像素上限，PDF 逐页原生渲染，资源均有上限；HTML/SVG 默认预览并保留源码切换，外部打开仍是显式动作。
 `validateWorkspaceImage` 独立于模型附件准入：位图限制 24 MiB / 1600 万像素，SVG 限制 2 MiB、节点及深度，
 拒绝脚本、DTD/实体、外部资源和递归引用；不支持的 SVG 保留源码入口。
-`RestrictedMarkdown` 禁止原始 HTML、HTML/SVG/Mermaid 渲染预览及外部图片，
-相对图片仍经原 handle 授权读取；不会向富文本渲染器暴露 Bearer URL。
-`WorkspaceFileRules.relativeImage` 只在 Markdown URL 边界严格解码一次百分编码，支持编码的空格和中文，
-保持字面加号；非法转义、非法 UTF-8、编码路径别名及越根引用仍拒绝。HTTP 调用始终传逻辑路径，由 URL builder 编码。
+本地、企业和 WebDAV 文件入口共用 `FileDocumentPreview`、`RichTextHost` 与消息渲染组件；
+Markdown 内完整 HTML/SVG/Mermaid 块沿相同默认预览和源码切换规则。普通文件图片仍使用上述静态图片校验；
+HTML/SVG 文档采用统一 WebView 策略，不向页面披露 Bearer URL、DAV 凭据或宿主路径。
+
+`RenderedFileSource` 绑定原文档目录，URL 在统一资源入口解码一次，拒绝其他 authority、编码斜线和越根路径，
+逻辑路径再交原服务校验。`FileBrowserSession.readPreviewResource` 分别沿 RemoteWorkspaceService 和
+WebDavBrowserService 的原 operation 执行；本地读取沿 WorkspaceApplicationService 的原 gate 与 NOFOLLOW IO。
+CSS、JS、SVG、字体等按 MIME 返回，单资源最多 24 MiB，Markdown 图片最多 4 MiB；不通过目录列表推断文件存在，
+不新增 Artifact/GeneratedMedia 记录或缓存 owner。读取前后复验原权限，来源变化会撤下静态已加载页面。
+渲染实例关闭/重试只取消自身读取 Job，不关闭借用的文件浏览会话；取消桥接见 [消息渲染](message-rendering-pipeline.md)。
 
 ### 文件管理与预览
 

@@ -15,8 +15,9 @@ class ConversationContextCloneTest {
         val step = UIMessagePart.Step(Uuid.random(), 0, Instant.parse("2026-09-26T10:00:00Z"))
         val owner = MessageNode.of(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(step)))
         val location = ContextMessageLocator(user.id, user.currentMessage.id)
+        val workspace = WorkspaceContextOrigin(Uuid.random().toString(), "original-root", "/workspace/reports")
         val entries = listOf(
-            ConversationContextSource.System(emptyList()),
+            ConversationContextSource.System(emptyList(), workspace),
             ConversationContextSource.PromptRule(PromptInjection.ModeInjection(content = "original rule"), emptyMap()),
             ConversationContextSource.Attachment(location, 0, "原文件.txt", AttachmentContextInput.DOCUMENT_TEXT, "attachment:original"),
             ConversationContextSource.MessageTime(location, "2026-09-26T10:00:00", ContextMessageLocator(previous.id,
@@ -50,6 +51,7 @@ class ConversationContextCloneTest {
         assertEquals(ContextPlacement.MessagePart(mappedUser, 0), mapped.uses[2].placement)
         assertEquals(ContextPlacement.BeforeStep(step.stepId), mapped.uses[3].placement)
         assertEquals(entries.map { it.payload.body }, mappedEntries.map { it.payload.body })
+        assertEquals(workspace, (mappedEntries[0].payload.source as ConversationContextSource.System).workspace)
         assertEquals(mappedUser, (mappedEntries[2].payload.source as ConversationContextSource.Attachment).message)
         val time = mappedEntries[3].payload.source as ConversationContextSource.MessageTime
         assertEquals(mappedUser, time.message)

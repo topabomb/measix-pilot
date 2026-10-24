@@ -11,7 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
@@ -23,6 +23,36 @@ import org.koin.compose.koinInject
 
 val LocalRenderedContentSource = staticCompositionLocalOf<RenderedContentSource?> { null }
 internal val LocalRichTextActions = staticCompositionLocalOf<RichTextActions?> { null }
+
+/** A message gets its own resource provenance; streaming text does not recreate the lease on every token. */
+@Composable
+internal fun MessageRichTextHost(
+    view: ConversationViewLease?,
+    conversationId: kotlin.uuid.Uuid?,
+    messageId: kotlin.uuid.Uuid,
+    hasContent: Boolean,
+    content: @Composable () -> Unit,
+) {
+    if (view == null || conversationId == null) {
+        content()
+        return
+    }
+    val queries: ConversationQueryService = koinInject()
+    var revision by remember(view, conversationId, messageId) { mutableIntStateOf(0) }
+    val resolved by produceState<Result<ConversationMessageResourceSource>?>(null,
+        view, conversationId, messageId, hasContent, revision) {
+        value = null
+        value = try { Result.success(queries.messageResourceSource(view, conversationId, messageId)) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { Result.failure(error) }
+    }
+    resolved?.exceptionOrNull()?.let { failure ->
+        net.weero.measix.pilot.ui.components.webview.RenderedContentReadFailure(failure, { revision++ })
+    }
+    val message = resolved?.getOrNull()
+    val source = remember(view, message) { message?.let { RenderedContentSource.Conversation(view, it) } }
+    RichTextHost(source, content = content)
+}
 
 internal class RichTextActions(
     val uriHandler: UriHandler,

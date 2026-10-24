@@ -149,6 +149,31 @@ jobs:
           PUBLISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           echo "publishedAt=${PUBLISHED_AT}" >> $GITHUB_OUTPUT
 
+      - name: Archive Release mapping
+        env:
+          VERSION: ${{ steps.release_info.outputs.version }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import zipfile
+
+          mapping = Path("app/build/outputs/mapping/release/mapping.txt").read_bytes()
+          if not mapping.strip():
+              raise ValueError("Release mapping is empty")
+          identity = {
+              "version": os.environ["VERSION"],
+              "commit": os.environ["GITHUB_SHA"],
+              "variant": "release",
+              "mappingSha256": hashlib.sha256(mapping).hexdigest(),
+          }
+          with zipfile.ZipFile("build/release-mapping.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+              archive.writestr("mapping.txt", mapping)
+              archive.writestr("identity.json", json.dumps(identity, indent=2) + "\n")
+          PY
+
       - name: Publish GitHub Release
         id: publish_release
         if: github.ref_type == 'tag' || inputs.publish_release == true
@@ -162,7 +187,7 @@ jobs:
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then EXTRA=(--verify-tag); fi
           # create rejects an occupied release; never upload with replacement/clobber semantics.
           gh release create "v${VERSION}" app/build/outputs/apk/release/*.apk \
-            build/apk-verification.json build/android-contracts.zip \
+            build/apk-verification.json build/android-contracts.zip build/release-mapping.zip \
             --target "$GITHUB_SHA" --title "MeasixPilot ${VERSION}" --notes-file build/release-notes.md \
             --latest "${EXTRA[@]}"
 
@@ -232,6 +257,7 @@ jobs:
             app/build/outputs/apk/release/*.apk
             build/apk-verification.json
             build/android-contracts.zip
+            build/release-mapping.zip
 
       - name: Cleanup signing files
         if: always()

@@ -26,7 +26,6 @@ internal class RemoteWorkspaceBrowserSource(
         override val writable = true
         override fun path(value: String) = WorkspaceFileRules.path(value, rootAllowed = true)
         override fun child(parent: String, name: String) = WorkspaceFileRules.child(parent, name)
-        override fun relativeImage(document: String, reference: String) = WorkspaceFileRules.relativeImage(document, reference)
         override suspend fun refresh() = service.refresh(handle.selection)
         override suspend fun isValid() = service.isValid(handle)
         override suspend fun close() = service.close(handle)
@@ -34,6 +33,7 @@ internal class RemoteWorkspaceBrowserSource(
         override suspend fun list(path: String) = service.list(handle, path)
         override suspend fun stat(path: String) = service.list(handle, path.substringBeforeLast('/', "")).files.find { it.path == path }
         override suspend fun readText(file: BrowserFile) = service.readText(handle, file)
+        override suspend fun readPreviewResource(path: String, maxBytes: Long) = service.readPreviewResource(handle, path, maxBytes)
         override suspend fun createDirectory(path: String) = service.createDirectory(handle, path)
         override suspend fun upload(path: String, etag: String?, length: Long?, input: () -> InputStream,
             progress: (Long, Long?) -> Unit) = service.upload(handle, path, etag, length, input, progress)

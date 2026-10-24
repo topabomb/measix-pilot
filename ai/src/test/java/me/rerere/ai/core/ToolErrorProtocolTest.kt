@@ -1,11 +1,21 @@
 package me.rerere.ai.core
 
+import kotlinx.serialization.decodeFromString
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ToolErrorProtocolTest {
+    @Test fun `JSON payload values are excluded from model error detail`() {
+        val error = requireNotNull(runCatching {
+            kotlinx.serialization.json.Json.decodeFromString<Boolean>("\"PRIVATE_BODY_SENTINEL\"")
+        }.exceptionOrNull())
+        val detail = ToolErrorProtocol.exceptionDetail(IllegalStateException(error))
+        assertFalse(detail.contains("PRIVATE_BODY_SENTINEL"))
+        assertTrue(detail.contains("boolean"))
+    }
+
     @Test fun `URL credentials are removed while diagnostic host and path remain`() {
         assertEquals("HTTP 401 https://<redacted>@files.example/a.png",
             ToolErrorProtocol.redactSecrets("HTTP 401 https://user:p%40ss@files.example/a.png"))

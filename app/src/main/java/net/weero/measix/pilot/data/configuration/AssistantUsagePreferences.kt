@@ -53,6 +53,7 @@ internal data class AssistantUsagePreferences(
     val modeInjectionIds: UsageValue<Set<ConfigurationReference>>? = null,
     val enabledSkills: UsageValue<Set<String>>? = null,
     val enableTimeReminder: UsageValue<Boolean>? = null,
+    val timeReminderIntervalMinutes: UsageValue<Int>? = null,
     val allowConversationSystemPrompt: UsageValue<Boolean>? = null,
     val allowConversationPromptInjection: UsageValue<Boolean>? = null,
     val additionalSubAssistantIds: Set<ConfigurationReference> = emptySet(),
@@ -61,6 +62,7 @@ internal data class AssistantUsagePreferences(
         if (assistantId is ConfigurationReference.Enterprise) {
             require(allowConversationSystemPrompt?.value != true) { "enterprise_assistant_prompt_is_fixed" }
         }
+        require(timeReminderIntervalMinutes == null || timeReminderIntervalMinutes.value > 0) { "invalid_time_reminder_interval" }
         require(assistantId !in additionalSubAssistantIds) { "assistant_cannot_delegate_to_itself" }
     }
 
@@ -144,6 +146,7 @@ private fun applyAssistantUsage(definition: Assistant, usage: AssistantUsagePref
         useGradientBackground = if (usage.useGradientBackground != null) usage.useGradientBackground.value else definition.useGradientBackground,
         modeInjectionIds = if (usage.modeInjectionIds != null) usage.modeInjectionIds.value else definition.modeInjectionIds,
         enabledSkills = if (usage.enabledSkills != null) usage.enabledSkills.value else definition.enabledSkills,
+        timeReminderIntervalMinutes = usage.timeReminderIntervalMinutes?.value ?: definition.timeReminderIntervalMinutes,
         enableTimeReminder = if (usage.enableTimeReminder != null) usage.enableTimeReminder.value else definition.enableTimeReminder,
         allowConversationSystemPrompt = if (usage.allowConversationSystemPrompt != null) usage.allowConversationSystemPrompt.value else definition.allowConversationSystemPrompt,
         allowConversationPromptInjection = if (usage.allowConversationPromptInjection != null) usage.allowConversationPromptInjection.value else definition.allowConversationPromptInjection,
@@ -185,6 +188,7 @@ internal fun AssistantUsagePreferences.withDelta(baseline: Assistant, edited: As
         modeInjectionIds = edited.modeInjectionIds,
         enabledSkills = edited.enabledSkills,
         enableTimeReminder = edited.enableTimeReminder,
+        timeReminderIntervalMinutes = edited.timeReminderIntervalMinutes,
         allowConversationSystemPrompt = edited.allowConversationSystemPrompt,
         allowConversationPromptInjection = edited.allowConversationPromptInjection,
     )
@@ -219,6 +223,7 @@ internal fun AssistantUsagePreferences.withDelta(baseline: Assistant, edited: As
         useGradientBackground = if (baseline.useGradientBackground != edited.useGradientBackground) UsageValue(edited.useGradientBackground) else useGradientBackground,
         modeInjectionIds = if (baseline.modeInjectionIds != edited.modeInjectionIds) UsageValue(edited.modeInjectionIds) else modeInjectionIds,
         enabledSkills = if (baseline.enabledSkills != edited.enabledSkills) UsageValue(edited.enabledSkills) else enabledSkills,
+        timeReminderIntervalMinutes = if (baseline.timeReminderIntervalMinutes != edited.timeReminderIntervalMinutes) UsageValue(edited.timeReminderIntervalMinutes) else timeReminderIntervalMinutes,
         enableTimeReminder = if (baseline.enableTimeReminder != edited.enableTimeReminder) UsageValue(edited.enableTimeReminder) else enableTimeReminder,
         allowConversationSystemPrompt = if (baseline.allowConversationSystemPrompt != edited.allowConversationSystemPrompt) UsageValue(edited.allowConversationSystemPrompt) else allowConversationSystemPrompt,
         allowConversationPromptInjection = if (baseline.allowConversationPromptInjection != edited.allowConversationPromptInjection) UsageValue(edited.allowConversationPromptInjection) else allowConversationPromptInjection,

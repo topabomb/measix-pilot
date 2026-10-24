@@ -15,6 +15,7 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.data.imggen.GeneratedMediaDeleteResult
 import kotlin.uuid.Uuid
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
@@ -26,6 +27,16 @@ data class FileCleanupResult(
     val skippedInProgress: Int,
     val failed: Int,
 )
+
+/** Per-item receipts are published immediately, so cancelling a batch does not erase earlier outcomes. */
+sealed interface GeneratedImageBatchItemResult {
+    val key: ManagedFileKey.Generated
+    data class Saved(override val key: ManagedFileKey.Generated, val exportedName: String) : GeneratedImageBatchItemResult
+    data class Deleted(override val key: ManagedFileKey.Generated) : GeneratedImageBatchItemResult
+    data class AlreadyAbsent(override val key: ManagedFileKey.Generated) : GeneratedImageBatchItemResult
+    data class CleanupPending(override val key: ManagedFileKey.Generated, val cause: Throwable) : GeneratedImageBatchItemResult
+    data class Failed(override val key: ManagedFileKey.Generated, val cause: Throwable) : GeneratedImageBatchItemResult
+}
 
 /** 托管文件的分类：上传与生成媒体走各自唯一 owner，页面只通过本 port 发命令。 */
 enum class FileCleanupCategory {
@@ -50,6 +61,7 @@ sealed interface FileCleanupRange {
  * Metadata projection remains in FileManagementQueryService; this port owns no durable files or rows.
  */
 class FileManagementApplicationService internal constructor(
+    private val workspace: net.weero.measix.pilot.service.workspace.WorkspaceApplicationService,
     private val artifactStore: ArtifactStore,
     private val generatedMediaStore: GeneratedMediaStore,
     private val recoveryGate: ApplicationRecoveryGate,
@@ -74,7 +86,9 @@ class FileManagementApplicationService internal constructor(
     internal suspend fun <T> withContentAccess(source: RenderedContentSource, action: suspend () -> T): T {
         recoveryGate.awaitReady()
         kotlinx.coroutines.currentCoroutineContext().ensureActive()
-        return when (source) {
+        (source as? RenderedContentSource.Conversation)?.message?.requireAccess()
+        val result = when (source) {
+            is RenderedContentSource.WorkspaceFile -> { source.file.requireAccess(); action().also { source.file.requireAccess() } }
             is RenderedContentSource.Conversation -> sessions.withSelectedRealmSelection(
                 RealmSelection(source.view.access, source.view.selectionRevision),
             ) { source.view.requireOpen(); action() }
@@ -83,10 +97,22 @@ class FileManagementApplicationService internal constructor(
             ) { source.view.requireOpen(); action() }
             RenderedContentSource.UserConfiguration, RenderedContentSource.Static -> action()
         }
+        (source as? RenderedContentSource.Conversation)?.message?.requireAccess()
+        return result
     }
 
     suspend fun resolveContentImage(source: RenderedContentSource, url: String): ImageSource? = when (source) {
-        is RenderedContentSource.Conversation -> resolveConversationImage(source.view, url)
+        is RenderedContentSource.WorkspaceFile -> {
+            source.file.requireAccess()
+            if (url.startsWith("https://", true) || url.startsWith("http://", true) || url.startsWith("data:", true)) externalImageSource(url)?.let { image ->
+                ImageSource(cacheIdentity = "rendered-file:${source.file.identity}:${image.cacheKey}", origin = image.origin,
+                    displayName = image.displayName, mimeHint = image.mimeHint,
+                    verifyAccess = { source.file.requireAccess(); image.requireAccess(); source.file.requireAccess() },
+                    readPayload = { source.file.requireAccess(); image.readBytes().also { source.file.requireAccess() } })
+            }
+            else source.file.image(url)
+        }
+        is RenderedContentSource.Conversation -> resolveMessageImage(source, url)
         is RenderedContentSource.RealmConfiguration -> resolveConfigurationImage(url, source.view)
         RenderedContentSource.UserConfiguration -> resolveConfigurationImage(url)
         RenderedContentSource.Static -> externalImageSource(url)
@@ -99,6 +125,28 @@ class FileManagementApplicationService internal constructor(
         return mime to bytes
     }
 
+    private suspend fun resolveMessageImage(source: RenderedContentSource.Conversation, url: String): ImageSource? {
+        val message = source.message ?: return resolveConversationImage(source.view, url)
+        message.requireAccess()
+        val original = resolveConversationImage(source.view, url) ?: run {
+            // Managed uploads and URI schemes must never fall through to a guest filesystem path.
+            val uri = java.net.URI(url)
+            if (uri.scheme != null || uri.rawAuthority != null || uri.path.orEmpty() == "/upload" ||
+                uri.path.orEmpty().startsWith("/upload/")) return null
+            workspace.messageImageSource(message, url)
+        }
+        message.requireAccess()
+        return ImageSource(cacheIdentity = "message:${message.identity}:${original.cacheKey}", origin = original.origin,
+            displayName = original.displayName, modifiedAtMillis = original.modifiedAtMillis,
+            mimeHint = original.mimeHint, gallerySaveSupported = original.gallerySaveSupported,
+            verifyAccess = { message.requireAccess(); original.requireAccess(); message.requireAccess() },
+            readPayload = { message.requireAccess(); original.readBytes().also { message.requireAccess() } })
+    }
+
+    suspend fun readRenderedResource(source: RenderedContentSource, url: String): Pair<String, ByteArray>? =
+        if (source is RenderedContentSource.WorkspaceFile) withContentAccess(source) { source.file.readResource(url) }
+        else readRenderedImage(source, url)
+
     suspend fun resolveContentAttachment(source: RenderedContentSource, url: String): AttachmentPreview? {
         val preview = withContentAccess(source) {
             val file = when {
@@ -110,7 +158,7 @@ class FileManagementApplicationService internal constructor(
                 is RenderedContentSource.Conversation -> artifactStore.resolveMediaPreviewForFile(source.view.access.scope, file, owner = source.view.ownedArtifact(file))
                 is RenderedContentSource.RealmConfiguration -> artifactStore.resolveConfigurationMedia(file, source.view.access.scope)
                 RenderedContentSource.UserConfiguration -> artifactStore.resolveConfigurationMedia(file)
-                RenderedContentSource.Static -> null
+                RenderedContentSource.Static, is RenderedContentSource.WorkspaceFile -> null
             }
         }
         requireContentAccess(source)
@@ -124,7 +172,7 @@ class FileManagementApplicationService internal constructor(
                 is RenderedContentSource.Conversation -> artifactStore.copyMediaTo(source.view.access.scope, target.artifactId, output, source.view.ownedArtifact(target.artifactId))
                 is RenderedContentSource.RealmConfiguration -> artifactStore.copyConfigurationMediaTo(target.artifactId, output, source.view.access.scope)
                 RenderedContentSource.UserConfiguration -> artifactStore.copyConfigurationMediaTo(target.artifactId, output)
-                RenderedContentSource.Static -> error("attachment_unavailable")
+                RenderedContentSource.Static, is RenderedContentSource.WorkspaceFile -> error("attachment_unavailable")
             }
         }
         withAttachmentAccess(preview) { }
@@ -139,7 +187,7 @@ class FileManagementApplicationService internal constructor(
                 is RenderedContentSource.Conversation -> artifactStore.requireMediaAccess(source.view.access.scope, target.artifactId, source.view.ownedArtifact(target.artifactId))
                 is RenderedContentSource.RealmConfiguration -> artifactStore.requireConfigurationMediaAccess(target.artifactId, source.view.access.scope)
                 RenderedContentSource.UserConfiguration -> artifactStore.requireConfigurationMediaAccess(target.artifactId)
-                RenderedContentSource.Static -> error("attachment_unavailable")
+                RenderedContentSource.Static, is RenderedContentSource.WorkspaceFile -> error("attachment_unavailable")
             }
         }
         return withContentAccess(target.source) { action() }
@@ -291,6 +339,56 @@ class FileManagementApplicationService internal constructor(
         return sessions.withSelectedRealmSelection(key.selection) {
             generatedMediaStore.delete(key.selection.access.scope, key.mediaId)
         }
+    }
+
+    suspend fun deleteGeneratedBatch(
+        keys: List<ManagedFileKey.Generated>,
+        onItem: (GeneratedImageBatchItemResult) -> Unit,
+    ): List<GeneratedImageBatchItemResult> = generatedImageBatch(keys, onItem) { key ->
+        recoveryGate.awaitReady()
+        val result = sessions.withSelectedRealmSelection(key.selection) {
+            generatedMediaStore.deleteDetailed(key.selection.access.scope, key.mediaId)
+        }
+        when (result) {
+            GeneratedMediaDeleteResult.Completed -> GeneratedImageBatchItemResult.Deleted(key)
+            GeneratedMediaDeleteResult.AlreadyAbsent -> GeneratedImageBatchItemResult.AlreadyAbsent(key)
+            is GeneratedMediaDeleteResult.CleanupPending -> GeneratedImageBatchItemResult.CleanupPending(key, result.cause)
+            is GeneratedMediaDeleteResult.Failed -> GeneratedImageBatchItemResult.Failed(key, result.cause)
+        }
+    }
+
+    suspend fun saveGeneratedBatch(
+        keys: List<ManagedFileKey.Generated>,
+        context: android.content.Context,
+        exporter: MediaExportService,
+        onItem: (GeneratedImageBatchItemResult) -> Unit,
+    ): List<GeneratedImageBatchItemResult> = generatedImageBatch(keys, onItem) { key ->
+        val image = imageSource(key)
+        image.requireAccess()
+        // Export performs its own authorized read and publication check; do not nest a Session lock around it.
+        GeneratedImageBatchItemResult.Saved(key, exporter.saveImage(context, image))
+    }
+
+    private suspend fun generatedImageBatch(
+        keys: List<ManagedFileKey.Generated>,
+        onItem: (GeneratedImageBatchItemResult) -> Unit,
+        operation: suspend (ManagedFileKey.Generated) -> GeneratedImageBatchItemResult,
+    ): List<GeneratedImageBatchItemResult> {
+        val original = keys.distinct()
+        require(original.map { it.selection }.distinct().size <= 1) { "generated_image_batch_selection_mismatch" }
+        val results = ArrayList<GeneratedImageBatchItemResult>(original.size)
+        for (key in original) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val result = try { operation(key) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                android.util.Log.e("FileManagement", "Generated image batch operation failed for ${key.mediaId}", error)
+                GeneratedImageBatchItemResult.Failed(key, error)
+            }
+            results += result
+            onItem(result)
+        }
+        return results
     }
 
     internal suspend fun createGeneratedPreview(item: ImageGenerationItem, tempDirectory: File, selection: RealmSelection, owner: Job): TemporaryImage =

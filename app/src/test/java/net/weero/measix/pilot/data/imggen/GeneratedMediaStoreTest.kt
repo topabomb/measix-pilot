@@ -34,6 +34,63 @@ import org.junit.Test
 class GeneratedMediaStoreTest {
     private fun tempDir(prefix: String): File = createTempDirectory(prefix).toFile()
 
+    @Test fun `selected identity lookup is bounded and never replaces a query failure with empty results`() = runTest {
+        val directory = tempDir("media-existing-ids")
+        try {
+            val repository = mockk<GenMediaRepository>()
+            val chunks = mutableListOf<List<Int>>()
+            coEvery { repository.existingIds(ConfigurationScope.Personal, any()) } coAnswers {
+                val ids = secondArg<List<Int>>()
+                chunks += ids
+                ids.filter { it % 2 == 0 }
+            }
+            val store = GeneratedMediaStore(directory, repository, mockk())
+            assertEquals((1..1001).filter { it % 2 == 0 }.toSet(),
+                store.existingIds(ConfigurationScope.Personal, (1..1001).toSet()))
+            assertEquals(listOf(500, 500, 1), chunks.map { it.size })
+            val failure = java.io.IOException("cannot read selected media")
+            coEvery { repository.existingIds(any(), any()) } throws failure
+            val observed = runCatching { store.existingIds(ConfigurationScope.Personal, setOf(1)) }.exceptionOrNull()
+            assertEquals(failure.javaClass, observed?.javaClass)
+            assertEquals(failure.message, observed?.message)
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun `detailed deletion retains database failure and restores original file`() = runTest {
+        val directory = tempDir("media-detailed-failure")
+        try {
+            val image = File(directory, "images/original.png").apply { requireNotNull(parentFile).mkdirs(); writeBytes(TINY_PNG) }
+            val repository = mockk<GenMediaRepository>()
+            coEvery { repository.getMediaById(3) } returns GenMediaEntity(id = 3, path = "images/original.png", modelId = "m", prompt = "p", createAt = 1L)
+            val cause = java.io.IOException("database write failed", IllegalStateException("transaction detail"))
+            every { repository.deleteMedia(3) } throws cause
+            val store = GeneratedMediaStore(directory, repository, mockk(relaxed = true))
+            val result = store.deleteDetailed(ConfigurationScope.Personal, 3)
+            org.junit.Assert.assertSame(cause, (result as GeneratedMediaDeleteResult.Failed).cause)
+            assertTrue(image.exists())
+            assertFalse(File(directory, "images/original.png.deleting").exists())
+        } finally { directory.deleteRecursively() }
+    }
+
+    @Test fun `detailed deletion distinguishes missing row and committed cleanup failure`() = runTest {
+        val directory = tempDir("media-detailed-cleanup")
+        try {
+            val image = File(directory, "images/original.png").apply { requireNotNull(parentFile).mkdirs(); writeBytes(TINY_PNG) }
+            val repository = mockk<GenMediaRepository>()
+            coEvery { repository.getMediaById(3) } returns GenMediaEntity(id = 3, path = "images/original.png", modelId = "m", prompt = "p", createAt = 1L)
+            coEvery { repository.getMediaById(4) } returns null
+            every { repository.deleteMedia(3) } returns Unit
+            val failure = java.io.IOException("committed payload deletion failed")
+            val store = GeneratedMediaStore(directory, repository, mockk(relaxed = true), deleteCommittedPayload = { throw failure })
+            assertEquals(GeneratedMediaDeleteResult.AlreadyAbsent, store.deleteDetailed(ConfigurationScope.Personal, 4))
+            val result = store.deleteDetailed(ConfigurationScope.Personal, 3)
+            org.junit.Assert.assertSame(failure, (result as GeneratedMediaDeleteResult.CleanupPending).cause)
+            assertFalse(image.exists())
+            assertTrue(File(directory, "images/original.png.deleting").exists())
+            verify(exactly = 1) { repository.deleteMedia(3) }
+        } finally { directory.deleteRecursively() }
+    }
+
     @Test
     fun `generated media selects the first free candidate in all four tiers`() = runTest {
         val filesDir = tempDir("media-candidate-priority")

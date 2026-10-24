@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
@@ -183,6 +184,13 @@ fun ChatDrawerContent(
     val conversationActivities by drawerVm.conversationActivities.collectAsStateWithLifecycle(
         initialValue = emptyMap(),
     )
+    vm.pendingConversationDeletion?.let { pending ->
+        PendingInputDeletionDialog(
+            count = pending.preview.pendingInputCount,
+            onConfirm = { vm.confirmConversationDeletion(pending) },
+            onDismiss = vm::dismissConversationDeletion,
+        )
+    }
 
     // 昵称编辑状态
     val nicknameEditState = useEditState<String> { newNickname ->
@@ -240,146 +248,271 @@ fun ChatDrawerContent(
     var showMenuPopup by remember { mutableStateOf(false) }
 
     val drawerBody: @Composable (Modifier) -> Unit = { bodyModifier ->
-        Box(bodyModifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            // 用户头像和昵称自定义区域
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                UIAvatar(
-                    name = settings.displaySetting.userNickname.ifBlank { stringResource(R.string.user_default_name) },
-                    value = settings.displaySetting.userAvatar,
-                    onUpdate = { newAvatar ->
-                        vm.updateSettings { current ->
-                            current.copy(
-                                displaySetting = current.displaySetting.copy(userAvatar = newAvatar)
-                            )
-                        }
-                    },
-                    onImportImage = vm::importUserAvatar,
-                    modifier = Modifier.size(50.dp),
-                )
-
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(
-                            text = settings.displaySetting.userNickname.ifBlank { stringResource(R.string.user_default_name) },
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.clickable {
-                                nicknameEditState.open(settings.displaySetting.userNickname)
-                            }
-                        )
-
-                        Icon(
-                            imageVector = HugeIcons.PencilEdit01,
-                            contentDescription = stringResource(R.string.edit),
-                            modifier = Modifier
-                                .onClick {
-                                    nicknameEditState.open(settings.displaySetting.userNickname)
-                                }
-                                .size(LocalTextStyle.current.fontSize.toDp())
-                        )
-                    }
-                    Greeting(
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
-
-                if (permanent && onCollapse != null) {
-                    Tooltip(
-                        tooltip = { Text(stringResource(R.string.chat_sidebar_collapse)) },
-                    ) {
-                        IconButton(onClick = onCollapse) {
-                            Icon(
-                                imageVector = HugeIcons.PanelLeftClose,
-                                contentDescription = stringResource(R.string.chat_sidebar_collapse),
-                            )
-                        }
-                    }
-                }
-            }
-
-            net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
-            )
-
-            val updateCheckDisabledUntil = settings.displaySetting.updateCheckDisabledUntilEpochMillis
-            var updateChecksEnabled by remember(settings.displaySetting.showUpdates, updateCheckDisabledUntil) {
-                mutableStateOf(settings.displaySetting.areUpdateChecksEnabled())
-            }
-            LaunchedEffect(settings.displaySetting.showUpdates, updateCheckDisabledUntil) {
-                while (true) {
-                    updateChecksEnabled = settings.displaySetting.areUpdateChecksEnabled()
-                    if (!settings.displaySetting.showUpdates || updateChecksEnabled) break
-                    val remaining = updateCheckDisabledUntil - System.currentTimeMillis()
-                    if (remaining <= 0) {
-                        updateChecksEnabled = true
-                        break
-                    }
-                    delay(minOf(remaining, 60 * 60 * 1_000L))
-                }
-            }
-            if (updateChecksEnabled && !isPlayStore) {
-                UpdateCard(vm)
-            }
-
-            BackupReminderCard(
-                settings = settings,
-                onClick = {
-                    navigateFromDrawer { navController.navigate(Screen.Backup) }
-                },
-            )
-
-            DrawerActions(
-                navController = navController,
-                navigateFromDrawer = navigateFromDrawer,
-            )
-
-            (sortFailure ?: folderDirectory?.diagnostic)?.let { detail ->
-                androidx.compose.foundation.text.selection.SelectionContainer(
-                    Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())
-                ) {
-                    Text(detail, color = MaterialTheme.colorScheme.error)
-                }
-                TextButton(onClick = drawerVm::retryFolders) { Text(stringResource(R.string.application_recovery_retry)) }
-            }
-            if (folderDirectory?.diagnostic == null) FolderBar(
-                access = folderDirectory?.access,
-                folders = folders,
-                selectedFolderId = selectedFolderId,
-                onSelect = { drawerVm.selectFolder(folderDirectory?.access, it) },
-                onCreate = { createFolderAccess = folderDirectory?.access },
-                onRename = { folder -> folderToRename = folderDirectory?.access?.let { it to folder } },
-                onDelete = { folder -> folderToDelete = folderDirectory?.access?.let { it to folder } },
-            )
-
+        Box(bodyModifier.fillMaxSize().imePadding().padding(horizontal = 8.dp)) {
             ConversationList(
                 currentConversationId = currentConversationId,
                 conversations = conversations,
                 conversationActivities = conversationActivities,
                 listState = conversationListState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
+                header = {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        // 用户头像和昵称自定义区域
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        ) {
+                            UIAvatar(
+                                name = settings.displaySetting.userNickname.ifBlank { stringResource(R.string.user_default_name) },
+                                value = settings.displaySetting.userAvatar,
+                                onUpdate = { newAvatar ->
+                                    vm.updateSettings { current ->
+                                        current.copy(
+                                            displaySetting = current.displaySetting.copy(userAvatar = newAvatar)
+                                        )
+                                    }
+                                },
+                                onImportImage = vm::importUserAvatar,
+                                modifier = Modifier.size(50.dp),
+                            )
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    Text(
+                                        text = settings.displaySetting.userNickname.ifBlank { stringResource(R.string.user_default_name) },
+                                        style = MaterialTheme.typography.titleMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.clickable {
+                                            nicknameEditState.open(settings.displaySetting.userNickname)
+                                        }
+                                    )
+
+                                    Icon(
+                                        imageVector = HugeIcons.PencilEdit01,
+                                        contentDescription = stringResource(R.string.edit),
+                                        modifier = Modifier
+                                            .onClick {
+                                                nicknameEditState.open(settings.displaySetting.userNickname)
+                                            }
+                                            .size(LocalTextStyle.current.fontSize.toDp())
+                                    )
+                                }
+                                Greeting(
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            }
+
+                            if (permanent && onCollapse != null) {
+                                Tooltip(
+                                    tooltip = { Text(stringResource(R.string.chat_sidebar_collapse)) },
+                                ) {
+                                    IconButton(onClick = onCollapse) {
+                                        Icon(
+                                            imageVector = HugeIcons.PanelLeftClose,
+                                            contentDescription = stringResource(R.string.chat_sidebar_collapse),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp),
+                        )
+
+                        val updateCheckDisabledUntil = settings.displaySetting.updateCheckDisabledUntilEpochMillis
+                        var updateChecksEnabled by remember(settings.displaySetting.showUpdates, updateCheckDisabledUntil) {
+                            mutableStateOf(settings.displaySetting.areUpdateChecksEnabled())
+                        }
+                        LaunchedEffect(settings.displaySetting.showUpdates, updateCheckDisabledUntil) {
+                            while (true) {
+                                updateChecksEnabled = settings.displaySetting.areUpdateChecksEnabled()
+                                if (!settings.displaySetting.showUpdates || updateChecksEnabled) break
+                                val remaining = updateCheckDisabledUntil - System.currentTimeMillis()
+                                if (remaining <= 0) {
+                                    updateChecksEnabled = true
+                                    break
+                                }
+                                delay(minOf(remaining, 60 * 60 * 1_000L))
+                            }
+                        }
+                        if (updateChecksEnabled && !isPlayStore) {
+                            UpdateCard(vm)
+                        }
+
+                        BackupReminderCard(
+                            settings = settings,
+                            onClick = {
+                                navigateFromDrawer { navController.navigate(Screen.Backup) }
+                            },
+                        )
+
+                        DrawerActions(
+                            navController = navController,
+                            navigateFromDrawer = navigateFromDrawer,
+                        )
+
+                        (sortFailure ?: folderDirectory?.diagnostic)?.let { detail ->
+                            androidx.compose.foundation.text.selection.SelectionContainer(
+                                Modifier.heightIn(max = 160.dp).verticalScroll(rememberScrollState())
+                            ) {
+                                Text(detail, color = MaterialTheme.colorScheme.error)
+                            }
+                            TextButton(onClick = drawerVm::retryFolders) { Text(stringResource(R.string.application_recovery_retry)) }
+                        }
+                        if (folderDirectory?.diagnostic == null) FolderBar(
+                            access = folderDirectory?.access,
+                            folders = folders,
+                            selectedFolderId = selectedFolderId,
+                            onSelect = { drawerVm.selectFolder(folderDirectory?.access, it) },
+                            onCreate = { createFolderAccess = folderDirectory?.access },
+                            onRename = { folder -> folderToRename = folderDirectory?.access?.let { it to folder } },
+                            onDelete = { folder -> folderToDelete = folderDirectory?.access?.let { it to folder } },
+                        )
+                    }
+                },
+                footer = {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        assistantCatalog?.let { catalog -> key(catalog.selection) {
+                            AssistantPicker(
+                                settings = settings,
+                                currentAssistantId = currentAssistantId,
+                                assistants = catalog.assistants,
+                                unavailableReasons = catalog.resources.associate { it.key.reference to it.access.unavailableReason },
+                                onSelectAssistant = { selectedAssistantId ->
+                                    try {
+                                        val request = drawerVm.selectAssistant(catalog.selection, selectedAssistantId,
+                                            context.readBooleanPreference("create_new_conversation_on_start", true))
+                                        navigateFromDrawer { navController.clearAndNavigate(Screen.Chat(request)) }
+                                        true
+                                    } catch (cancelled: CancellationException) { throw cancelled }
+                                    catch (error: Exception) {
+                                        logDiagnosticFailure("ChatDrawer", "Assistant selection failed", error)
+                                        drawerFailure = error
+                                        false
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                onManageAssistant = if (
+                                    catalog.assistants.containsKey(currentAssistantId) &&
+                                    catalog.resources.firstOrNull {
+                                        it.key.category == net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT &&
+                                            it.key.reference == currentAssistantId
+                                    }?.access?.unavailableReason == null
+                                ) {
+                                    { navigateFromDrawer(onViewCurrentAssistant) }
+                                } else null,
+                                onViewAssistant = { selected ->
+                                    if (selected.id == currentAssistantId) {
+                                        navigateFromDrawer(onViewCurrentAssistant)
+                                    } else {
+                                        assistantPreview = selected
+                                    }
+                                },
+                            )
+                        } }
+                        assistantCatalogFailure?.let { detail ->
+                            androidx.compose.foundation.text.selection.SelectionContainer {
+                                Text(detail, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+
+                        Row(
+                            horizontalArrangement = Arrangement.SpaceAround,
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 8.dp)
+                        ) {
+                            Box {
+                                DrawerAction(
+                                    icon = {
+                                        Icon(HugeIcons.Sparkles, stringResource(R.string.menu))
+                                    },
+                                    label = {
+                                        Text(stringResource(R.string.menu))
+                                    },
+                                    onClick = {
+                                        showMenuPopup = true
+                                    },
+                                )
+                                DropdownMenu(
+                                    expanded = showMenuPopup,
+                                    onDismissRequest = { showMenuPopup = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.chat_page_menu_image_generation)) },
+                                        leadingIcon = { Icon(HugeIcons.Image02, null) },
+                                        onClick = {
+                                            showMenuPopup = false
+                                            navigateFromDrawer { navController.navigate(Screen.ImageGen) }
+                                        }
+                                    )
+                                }
+                            }
+
+                            DrawerAction(
+                                icon = {
+                                    Icon(HugeIcons.InLove, stringResource(R.string.favorite_page_title))
+                                },
+                                label = {
+                                    Text(stringResource(R.string.favorite_page_title))
+                                },
+                                onClick = {
+                                    navigateFromDrawer { navController.navigate(Screen.Favorite) }
+                                },
+                            )
+
+                            DrawerAction(
+                                icon = {
+                                    Icon(HugeIcons.ChartColumn, stringResource(R.string.stats_page_title))
+                                },
+                                label = {
+                                    Text(stringResource(R.string.stats_page_title))
+                                },
+                                onClick = {
+                                    navigateFromDrawer { navController.navigate(Screen.Stats) }
+                                },
+                            )
+
+                            DrawerAction(
+                                icon = { Icon(HugeIcons.ServerStack01, stringResource(R.string.webdav_file_manager)) },
+                                label = { Text(stringResource(R.string.webdav_file_manager)) },
+                                enabled = (webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available)?.current != null,
+                                onClick = {
+                                    val current = webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available
+                                    if (current?.current != null) navigateFromDrawer { navController.navigate(Screen.WebDavFiles(selection = current.selection)) }
+                                },
+                            )
+
+                            Spacer(Modifier.weight(1f))
+
+                            DrawerAction(
+                                icon = {
+                                    Icon(HugeIcons.Settings03, stringResource(R.string.settings))
+                                },
+                                label = { Text(stringResource(R.string.settings)) },
+                                onClick = {
+                                    navigateFromDrawer {
+                                        navController.navigate(Screen.Setting)
+                                    }
+                                },
+                            )
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
                 onClick = {
                     navigateFromDrawer {
                         chatNavigation.existingChat(it.id)
@@ -404,134 +537,6 @@ fun ChatDrawerContent(
                     showMoveToFolderSheet = folderDirectory != null && folderDirectory.diagnostic == null
                 }
             )
-
-            assistantCatalog?.let { catalog -> key(catalog.selection) {
-                AssistantPicker(
-                    settings = settings,
-                    currentAssistantId = currentAssistantId,
-                    assistants = catalog.assistants,
-                    unavailableReasons = catalog.resources.associate { it.key.reference to it.access.unavailableReason },
-                    onSelectAssistant = { selectedAssistantId ->
-                        try {
-                            val request = drawerVm.selectAssistant(catalog.selection, selectedAssistantId,
-                                context.readBooleanPreference("create_new_conversation_on_start", true))
-                            navigateFromDrawer { navController.clearAndNavigate(Screen.Chat(request)) }
-                            true
-                        } catch (cancelled: CancellationException) { throw cancelled }
-                        catch (error: Exception) {
-                            logDiagnosticFailure("ChatDrawer", "Assistant selection failed", error)
-                            drawerFailure = error
-                            false
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    onManageAssistant = if (
-                        catalog.assistants.containsKey(currentAssistantId) &&
-                        catalog.resources.firstOrNull {
-                            it.key.category == net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT &&
-                                it.key.reference == currentAssistantId
-                        }?.access?.unavailableReason == null
-                    ) {
-                        { navigateFromDrawer(onViewCurrentAssistant) }
-                    } else null,
-                    onViewAssistant = { selected ->
-                        if (selected.id == currentAssistantId) {
-                            navigateFromDrawer(onViewCurrentAssistant)
-                        } else {
-                            assistantPreview = selected
-                        }
-                    },
-                )
-            } }
-            assistantCatalogFailure?.let { detail ->
-                androidx.compose.foundation.text.selection.SelectionContainer {
-                    Text(detail, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.SpaceAround,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 8.dp)
-            ) {
-                Box {
-                    DrawerAction(
-                        icon = {
-                            Icon(HugeIcons.Sparkles, stringResource(R.string.menu))
-                        },
-                        label = {
-                            Text(stringResource(R.string.menu))
-                        },
-                        onClick = {
-                            showMenuPopup = true
-                        },
-                    )
-                    DropdownMenu(
-                        expanded = showMenuPopup,
-                        onDismissRequest = { showMenuPopup = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.chat_page_menu_image_generation)) },
-                            leadingIcon = { Icon(HugeIcons.Image02, null) },
-                            onClick = {
-                                showMenuPopup = false
-                                navigateFromDrawer { navController.navigate(Screen.ImageGen) }
-                            }
-                        )
-                    }
-                }
-
-                DrawerAction(
-                    icon = {
-                        Icon(HugeIcons.InLove, stringResource(R.string.favorite_page_title))
-                    },
-                    label = {
-                        Text(stringResource(R.string.favorite_page_title))
-                    },
-                    onClick = {
-                        navigateFromDrawer { navController.navigate(Screen.Favorite) }
-                    },
-                )
-
-                DrawerAction(
-                    icon = {
-                        Icon(HugeIcons.ChartColumn, stringResource(R.string.stats_page_title))
-                    },
-                    label = {
-                        Text(stringResource(R.string.stats_page_title))
-                    },
-                    onClick = {
-                        navigateFromDrawer { navController.navigate(Screen.Stats) }
-                    },
-                )
-
-                DrawerAction(
-                    icon = { Icon(HugeIcons.ServerStack01, stringResource(R.string.webdav_file_manager)) },
-                    label = { Text(stringResource(R.string.webdav_file_manager)) },
-                    enabled = (webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available)?.current != null,
-                    onClick = {
-                        val current = webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available
-                        if (current?.current != null) navigateFromDrawer { navController.navigate(Screen.WebDavFiles(selection = current.selection)) }
-                    },
-                )
-
-                Spacer(Modifier.weight(1f))
-
-                DrawerAction(
-                    icon = {
-                        Icon(HugeIcons.Settings03, stringResource(R.string.settings))
-                    },
-                    label = { Text(stringResource(R.string.settings)) },
-                    onClick = {
-                        navigateFromDrawer {
-                            navController.navigate(Screen.Setting)
-                        }
-                    },
-                )
-            }
-        }
         if (showErrors) net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay(
             errors = drawerErrors, onDismissError = vm::dismissError, onClearAllErrors = vm::clearAllErrors,
             onRetryReads = vm::retryConversationLoad, modifier = Modifier.align(Alignment.BottomCenter))

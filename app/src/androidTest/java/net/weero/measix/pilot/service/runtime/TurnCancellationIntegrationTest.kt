@@ -83,7 +83,6 @@ import net.weero.measix.pilot.data.model.ConversationContextSource
 import net.weero.measix.pilot.data.model.ContextAdmissionReason
 import net.weero.measix.pilot.data.model.DisclosureNamespace
 import net.weero.measix.pilot.data.model.DisclosureSection
-import net.weero.measix.pilot.data.model.MIN_CONTEXT_MESSAGE_LIMIT
 import net.weero.measix.pilot.data.model.memoryAddress
 import net.weero.measix.pilot.data.model.toMessageNode
 import net.weero.measix.pilot.data.repository.ConversationRepository
@@ -561,7 +560,7 @@ class TurnCancellationIntegrationTest {
         assertEquals(originalText, artifactStore.withToolOutputText(source.conversationId, archive.ref) { it.readText() })
         assertEquals(TurnExecutionStatus.COMPLETED, repository.getTurnExecution(fixture.turnId.toString())!!.status)
 
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(payloadRoot, "fork-session")))
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(payloadRoot, "fork-session")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         sessions.recover()
         val service = ConversationApplicationService(
             settingsStore = settingsStore,
@@ -624,6 +623,9 @@ class TurnCancellationIntegrationTest {
 
     @Test
     fun compactionPreservesDisclosureAndWindowRestoreSurvivesForkReplay() = runBlocking {
+        // This scenario must retain the restored USER round on the next fork request.
+        // The product minimum may be one message, which intentionally discards that round.
+        val replayWindow = 40
         val memoryAssistant = assistant.copy(enableMemory = true, localTools = emptyList(), streamOutput = false)
         val memoryRepository = MemoryRepository(database.memoryDao(), RoomDatabaseTransactionRunner(database))
         val address = memoryAssistant.memoryAddress(ConfigurationScope.Personal)
@@ -717,22 +719,22 @@ class TurnCancellationIntegrationTest {
             afterArchiveRequest.flatMap { it.parts }.filterIsInstance<UIMessagePart.Tool>()
                 .single { it.localCallId == history[1].getTools().single().localCallId }.output)
 
-        // Build enough real committed rounds to exceed the production minimum. Positive limits
-        // below that minimum are normalized by the assistant owner, not a smaller test window.
-        val extraRounds = (MIN_CONTEXT_MESSAGE_LIMIT - afterArchive.nodes.size) / 2 + 1
+        // Build enough committed rounds to cross this fixed staircase window, independently
+        // of the minimum value users may select in the product.
+        val extraRounds = (replayWindow - afterArchive.nodes.size) / 2 + 1
         repeat(extraRounds) { index ->
             val request = nextRequest(first.runtime, "Retained ordinary round $index", 0)
             assertEquals(1, memoryCopies(request))
         }
         val beforeWindow = snapshot(first.runtime)
-        assertTrue(beforeWindow.nodes.size > MIN_CONTEXT_MESSAGE_LIMIT)
+        assertTrue(beforeWindow.nodes.size > replayWindow)
         assertPreserved(afterArchive, beforeWindow)
         assertEquals(listOf(baseline), disclosures(beforeWindow))
 
         // Window loss, not compaction of PRESERVE Memory results, requires a fresh baseline at
         // this request's causal tail. The original durable baseline must remain unchanged.
-        val windowQuestion = "Continue with the production minimum window"
-        val windowRequest = nextRequest(first.runtime, windowQuestion, MIN_CONTEXT_MESSAGE_LIMIT)
+        val windowQuestion = "Continue with the fixed replay window"
+        val windowRequest = nextRequest(first.runtime, windowQuestion, replayWindow)
         val restored = snapshot(first.runtime)
         assertPreserved(beforeWindow, restored)
         assertEquals(2, disclosures(restored).size)
@@ -754,7 +756,7 @@ class TurnCancellationIntegrationTest {
             .filterNot { it.text.contains(memory.content) }.map { it.text })
         assertTrue(windowRequest.flatMap { it.parts }.none { it is UIMessagePart.Tool })
 
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(payloadRoot, "disclosure-fork-session")))
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(payloadRoot, "disclosure-fork-session")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         sessions.recover()
         val service = ConversationApplicationService(
             settingsStore = settingsStore, conversationRepo = repository,
@@ -788,7 +790,7 @@ class TurnCancellationIntegrationTest {
 
         // Keep the restored USER round in view. A fork preserves admitted knowledge and must not
         // manufacture an INITIAL/RESTORE disclosure simply because node identities were cloned.
-        val forkRequest = nextRequest(forkRuntime, "Continue the fork with its restored baseline", MIN_CONTEXT_MESSAGE_LIMIT)
+        val forkRequest = nextRequest(forkRuntime, "Continue the fork with its restored baseline", replayWindow)
         val forkAfter = snapshot(forkRuntime)
         assertPreserved(fork, forkAfter)
         assertEquals(disclosures(fork), disclosures(forkAfter))

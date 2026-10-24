@@ -46,7 +46,7 @@ import net.weero.measix.pilot.utils.JsonInstant
  * v13：企业主体仅由 deploymentId 与 userId 构成，删除 URL 派生的来源字段。
  * v15：数据迁移补齐历史消息与会话注入引用中的企业身份，表结构与 v14 相同。
  */
-const val APP_DATABASE_VERSION = 16
+const val APP_DATABASE_VERSION = 17
 
 @Database(
     entities = [
@@ -54,6 +54,7 @@ const val APP_DATABASE_VERSION = 16
         MemoryEntity::class,
         GenMediaEntity::class,
         MessageNodeEntity::class,
+        net.weero.measix.pilot.data.db.entity.MessageFtsRowEntity::class,
         ArtifactEntity::class,
         ArtifactReferenceEntity::class,
         SystemMetaEntity::class,

@@ -51,6 +51,7 @@ class EnterpriseApplicationServiceTest {
             terminals = mockk(relaxed = true),
             speech = mockk(relaxed = true),
             platform = platform,
+            conversations = mockk(relaxed = true),
             webDav = mockk(relaxed = true) { io.mockk.coEvery { changeConnection<Unit>(any(), any()) } coAnswers { secondArg<suspend () -> Unit>().invoke() } },
             remoteWorkspace = mockk { coEvery { changeConnection<Unit>(any(), any()) } coAnswers { secondArg<suspend () -> Unit>().invoke() } },
         )
@@ -131,6 +132,7 @@ class EnterpriseApplicationServiceTest {
             terminals = mockk<WorkspaceTerminalRuntime>(relaxed = true),
             speech = mockk<SpeechApplicationService>(relaxed = true),
             platform = platform,
+            conversations = mockk(relaxed = true),
             webDav = mockk(relaxed = true) { io.mockk.coEvery { changeConnection<Unit>(any(), any()) } coAnswers { secondArg<suspend () -> Unit>().invoke() } },
             remoteWorkspace = mockk { coEvery { changeConnection<Unit>(any(), any()) } coAnswers { secondArg<suspend () -> Unit>().invoke() } },
         )

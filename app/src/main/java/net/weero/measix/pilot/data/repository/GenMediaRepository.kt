@@ -22,6 +22,8 @@ class GenMediaRepository(private val dao: GenMediaDAO) {
 
     suspend fun getMediaById(id: Int): GenMediaEntity? = dao.getById(id)
 
+    internal suspend fun existingIds(scope: ConfigurationScope, ids: List<Int>): List<Int> = dao.existingIds(scope, ids)
+
     suspend fun existsByPath(path: String): Boolean = dao.existsByPath(path)
 
     suspend fun listCreatedBefore(scope: ConfigurationScope, cutoff: Long): List<GenMediaEntity> = dao.listCreatedBefore(scope, cutoff)

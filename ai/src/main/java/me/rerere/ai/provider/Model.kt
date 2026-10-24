@@ -21,7 +21,13 @@ data class Model(
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val responsesImageModel: String = "gpt-image-2",
-)
+    /** User-declared input capacity; absent means unknown, not a Provider limit guarantee. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val contextLength: Int? = null,
+) {
+    init { require(contextLength == null || contextLength > 0) { "model_context_length_must_be_positive" } }
+}
 
 val RESPONSE_IMAGE_MODEL_IDS = listOf("gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare")
 

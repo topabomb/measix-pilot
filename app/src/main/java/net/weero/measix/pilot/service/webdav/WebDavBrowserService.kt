@@ -83,7 +83,6 @@ internal class WebDavBrowserService(
         override val writable get() = handle.writable
         override fun path(value: String) = paths.logical(value)
         override fun child(parent: String, name: String) = paths.child(parent, name)
-        override fun relativeImage(document: String, reference: String) = paths.relativeImage(document, reference)
         override suspend fun refresh() {
             check(!closed.get()) { "webdav_access_closed" }
             // Explicit retry must be able to replace an earlier uncertain status diagnosis.
@@ -127,6 +126,12 @@ internal class WebDavBrowserService(
             val buffer = ByteArrayOutputStream()
             val length = dav.download(handle, file.path, buffer, file.etag.takeIf { file.versioned }, maxBytes = 2L * 1024 * 1024)
             BrowserTextDocument(file.copy(size = length), WorkspaceText.decode(buffer.toByteArray()))
+        }
+        override suspend fun readPreviewResource(path: String, maxBytes: Long) = operation {
+            paths.logical(path)
+            val buffer = ByteArrayOutputStream()
+            dav.download(handle, path, buffer, maxBytes = maxBytes)
+            buffer.toByteArray()
         }
         override suspend fun createDirectory(path: String) = writeResult(path) { dav.mkdir(handle, path) }
         override suspend fun upload(path: String, etag: String?, length: Long?, input: () -> InputStream,

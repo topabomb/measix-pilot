@@ -7,6 +7,9 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -176,6 +179,54 @@ class ChatVM internal constructor(
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
+    internal val draftFolderDirectory = fromPage<net.weero.measix.pilot.service.ConversationFolderDirectory?>(null) { state ->
+        readRevision.flatMapLatest {
+            conversationQueryService.foldersOfDraft(state.lease).catch { error ->
+                if (error is CancellationException) throw error
+                reportCommandError(state, error, solution = net.weero.measix.pilot.service.ChatErrorSolution.RetryConversationReads)
+                emit(null)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    internal suspend fun updateDraftFolder(
+        target: ConversationAssistantTarget,
+        access: net.weero.measix.pilot.service.ConversationFolderAccess,
+        folderId: Uuid?,
+    ) = initialInputMutex.withLock {
+        requireConfigurationTarget(target)
+        conversationApplicationService.updateDraftFolder(target, access, folderId)
+        requireConfigurationTarget(target)
+    }
+
+    internal val pendingInputs = fromPage<net.weero.measix.pilot.service.ConversationInputQueueUiModel?>(null) { state ->
+        readRevision.flatMapLatest {
+            conversationQueryService.observeInputQueue(state.lease).catch { error ->
+                if (error is CancellationException) throw error
+                reportCommandError(state, error, solution = net.weero.measix.pilot.service.ChatErrorSolution.RetryConversationReads)
+                emit(null)
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    internal suspend fun queuedInputPreviews(target: ConversationAssistantTarget, itemId: Uuid, version: Long) =
+        conversationQueryService.queuedInputPreviews(requireNotNull(detailSource(target)) { "conversation_view_unavailable" }, itemId, version)
+
+    internal suspend fun removeQueuedInput(target: ConversationAssistantTarget, itemId: Uuid, version: Long) {
+        requireConfigurationTarget(target)
+        turnService.removeQueuedInput(target.conversation, itemId, version)
+    }
+
+    internal suspend fun resumeInputQueue(target: ConversationAssistantTarget) {
+        requireConfigurationTarget(target)
+        turnService.resumeInputQueue(target)
+    }
+
+    internal suspend fun clearQueuedInputs(target: ConversationAssistantTarget, expectedVersions: Map<Uuid, Long>) {
+        requireConfigurationTarget(target)
+        turnService.clearQueuedInputs(target.conversation, expectedVersions)
+    }
+
     private fun requirePage(): PageState.Open = (page.value as? PageState.Open)
         ?.also { it.lease.requireOpen() } ?: error("conversation_view_unavailable")
 
@@ -184,8 +235,163 @@ class ChatVM internal constructor(
         return requireNotNull(snapshot.value)
     }
 
-    val inputState = ChatInputState()
-    val artifactDraftScope: ArtifactDraftScope get() = requirePage().imports
+    internal var pendingConversationDeletion by mutableStateOf<PendingConversationDeletion?>(null)
+        private set
+    internal var preparingConversationDeletion by mutableStateOf(false)
+        private set
+    private val ordinaryInputState = ChatInputState()
+    private class QueueEditor(val lease: net.weero.measix.pilot.service.QueueInputEditLease) {
+        val state = ChatInputState().apply {
+            editingTarget = net.weero.measix.pilot.ui.hooks.ChatInputEditTarget.Queued(lease.itemId, lease.version)
+            setContents(lease.parts)
+        }
+    }
+    private var queueEditor by mutableStateOf<QueueEditor?>(null)
+    internal var savingQueuedInput by mutableStateOf(false)
+        private set
+    val inputState: ChatInputState get() = queueEditor?.state ?: ordinaryInputState
+    val artifactDraftScope: ArtifactDraftScope get() = queueEditor?.lease?.draft ?: requirePage().imports
+
+    internal fun beginQueuedInputEdit(target: ConversationAssistantTarget, itemId: Uuid, version: Long) {
+        launchCommand(target.conversation) {
+            initialInputMutex.withLock {
+                requireConfigurationTarget(target)
+                if (queueEditor != null || inputSubmissionPending) return@withLock
+                val lease = turnService.beginQueuedInputEdit(target, itemId, version)
+                try {
+                    requireConfigurationTarget(target)
+                    val editor = QueueEditor(lease)
+                    queueEditor = editor
+                    viewModelScope.launch {
+                        lease.isClosed.first { it }
+                        if (queueEditor === editor && !savingQueuedInput) queueEditor = null
+                    }
+                } catch (error: Throwable) {
+                    lease.close()
+                    throw error
+                }
+            }
+        }
+    }
+
+    internal fun cancelInputEdit() {
+        if (savingQueuedInput) return
+        val editor = queueEditor
+        if (editor == null) ordinaryInputState.clearInput()
+        else {
+            queueEditor = null
+            editor.lease.close()
+        }
+    }
+
+    internal fun requireInputOwner(target: ConversationAssistantTarget, expectedInput: ChatInputState) {
+        requireConfigurationTarget(target)
+        check(inputState === expectedInput && !savingQueuedInput) { "input_editor_changed" }
+        queueEditor?.lease?.requireOpen()
+    }
+
+    internal suspend fun inputPreviews(target: ConversationAssistantTarget, parts: List<UIMessagePart>): Map<String, net.weero.measix.pilot.service.ArtifactInputPreview> {
+        requireConfigurationTarget(target)
+        val editor = queueEditor
+        return if (editor == null) requirePage().imports.describeInputs(parts)
+        else turnService.queuedInputEditPreviews(editor.lease, parts)
+    }
+
+    internal class ImageAnnotationInput internal constructor(
+        internal val target: ConversationAssistantTarget,
+        internal val input: ChatInputState,
+        internal val image: ChatInputState.ImageEditTarget,
+        internal val draft: ArtifactDraftScope,
+        internal val source: net.weero.measix.pilot.service.ImageSource,
+        val bytes: ByteArray,
+    ) : AutoCloseable {
+        private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+        internal fun requireOpen() = check(!closed.get()) { "image_annotation_closed" }
+        override fun close() { closed.set(true) }
+    }
+
+    internal suspend fun beginImageAnnotation(
+        target: ConversationAssistantTarget,
+        input: ChatInputState,
+        image: ChatInputState.ImageEditTarget,
+    ): ImageAnnotationInput {
+        fun validate() {
+            requireInputOwner(target, input)
+            check(!inputSubmissionPending && input.isImageEditCurrent(image)) { "image_annotation_input_changed" }
+        }
+        validate()
+        val draft = artifactDraftScope
+        val source = requireNotNull(inputPreviews(target, listOf(image.image))[image.image.url]?.image) {
+            "image_annotation_source_unavailable"
+        }
+        val bytes = source.readBytes()
+        validate()
+        check(artifactDraftScope === draft) { "image_annotation_input_changed" }
+        return ImageAnnotationInput(target, input, image, draft, source, bytes)
+    }
+
+    internal suspend fun saveImageAnnotation(edit: ImageAnnotationInput, png: ByteArray): Boolean {
+        edit.requireOpen()
+        edit.source.requireAccess()
+        return initialInputMutex.withLock {
+            fun validate() {
+                edit.requireOpen()
+                requireInputOwner(edit.target, edit.input)
+                check(!inputSubmissionPending && artifactDraftScope === edit.draft && edit.input.isImageEditCurrent(edit.image)) {
+                    "image_annotation_input_changed"
+                }
+            }
+            validate()
+            val accepted = edit.draft.acceptAnnotatedImage(png) { image ->
+                validate()
+                edit.input.replaceImage(edit.image, image)
+            }
+            if (accepted) {
+                edit.close()
+                // Another input occurrence may still refer to the same draft-owned payload.
+                val sourceStillUsed = edit.input.messageContent.any { part ->
+                    when (part) {
+                        is UIMessagePart.Image -> part.url
+                        is UIMessagePart.Video -> part.url
+                        is UIMessagePart.Audio -> part.url
+                        is UIMessagePart.Document -> part.url
+                        else -> null
+                    } == edit.image.image.url
+                }
+                if (!sourceStillUsed &&
+                    edit.input.shouldDeleteFileOnRemove(edit.image.image)) {
+                    try { edit.draft.discard(android.net.Uri.parse(edit.image.image.url)) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (error: Exception) { reportCommandError(page.value as? PageState.Open, error) }
+                }
+            }
+            accepted
+        }
+    }
+
+    internal suspend fun saveQueuedInput(target: ConversationAssistantTarget) {
+        if (savingQueuedInput) return
+        val editor = queueEditor ?: return
+        editor.state.invalidateImageEdits()
+        savingQueuedInput = true
+        val original = page.value as? PageState.Open
+        try {
+            initialInputMutex.withLock {
+                requireConfigurationTarget(target)
+                if (queueEditor !== editor) return@withLock
+                val result = turnService.saveQueuedInputEdit(editor.lease, editor.state.getContents())
+                if (result != null && queueEditor === editor) {
+                    queueEditor = null
+                    editor.lease.close()
+                }
+            }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { reportCommandError(original, error) }
+        finally {
+            savingQueuedInput = false
+            if (editor.lease.isClosed.value && queueEditor === editor) queueEditor = null
+        }
+    }
     private val initialInputMutex = Mutex()
     private var inputSubmissionPending = false
     private var initialInputConsumed = false
@@ -328,7 +534,10 @@ class ChatVM internal constructor(
     }
 
     private fun discardInput() {
-        inputState.clearInput()
+        pendingConversationDeletion = null
+        queueEditor?.lease?.close()
+        queueEditor = null
+        ordinaryInputState.clearInput()
         initialInputConsumed = false
     }
 
@@ -456,16 +665,17 @@ class ChatVM internal constructor(
         }
     }
 
-    internal suspend fun selectStarter(target: ConversationAssistantTarget, starter: net.weero.measix.pilot.service.ConversationStarterUiModel) =
+    internal suspend fun selectStarter(target: ConversationAssistantTarget, starter: net.weero.measix.pilot.service.ConversationStarterUiModel,
+        expectedInput: ChatInputState = inputState) =
         initialInputMutex.withLock {
-            requireConfigurationTarget(target)
+            requireInputOwner(target, expectedInput)
             val original = requirePage()
             val configuration = requireNotNull(conversationUiModel.value?.configuration)
             fun accept(prompt: String) {
                 check(requirePage() === original) { "conversation_view_unavailable" }
-                requireConfigurationTarget(target)
-                val spacer = if (inputState.textContent.text.isBlank()) "" else "\n\n"
-                inputState.appendText(spacer + prompt)
+                requireInputOwner(target, expectedInput)
+                val spacer = if (expectedInput.textContent.text.isBlank()) "" else "\n\n"
+                expectedInput.appendText(spacer + prompt)
             }
             if (currentSnapshot().header.newConversation) {
                 conversationApplicationService.selectDraftStarter(target, starter.reference, configuration.opening?.selectionToken,
@@ -496,7 +706,8 @@ class ChatVM internal constructor(
         (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation }?.lease
 
     internal fun importsFor(target: ConversationAssistantTarget): ArtifactDraftScope? =
-        (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation }?.imports
+        (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget === target.conversation }
+            ?.let { queueEditor?.lease?.draft ?: it.imports }
 
     // Update checker — 共享 UpdateChecker 的缓存 StateFlow，App 生命周期内只请求一次
     val updateState = updateChecker.updateState
@@ -505,12 +716,13 @@ class ChatVM internal constructor(
      * 处理消息发送
      *
      * @param answer 是否触发消息生成，如果为false，则仅添加消息到消息列表中
-     * @return 已持久提交的消息身份；提交前失败或页面已变化返回 null。
+     * @return 已持久提交的消息身份用于定位；入队成功会清理对应输入但不定位未发送消息。
      */
     internal suspend fun handleMessageSend(target: ConversationAssistantTarget, answer: Boolean = true): net.weero.measix.pilot.service.SendMessageReceipt? {
-        return submitInput(target) { opened, submission ->
-            turnService.sendMessage(opened.lease.commandTarget, submission.contents, answer, opened.imports)
+        val result = submitInput(target) { opened, submission ->
+            turnService.submitChatInput(target, submission.contents, answer, opened.imports)
         }
+        return (result as? net.weero.measix.pilot.service.ChatInputSubmissionReceipt.Sent)?.receipt
     }
 
     private suspend fun <T : Any> submitInput(
@@ -525,11 +737,12 @@ class ChatVM internal constructor(
                 val opened = (page.value as? PageState.Open)?.takeIf {
                     it.lease.commandTarget === target.conversation && snapshot.value?.header?.assistantId == target.assistantId
                 } ?: return@withLock null
-                val submission = inputState.captureSubmission()
+                if (queueEditor != null) return@withLock null
+                val submission = ordinaryInputState.captureSubmission()
                 val result = submit(opened, submission)
                     ?: return@withLock null
                 if (page.value !== opened) return@withLock null
-                inputState.completeSubmission(submission)
+                ordinaryInputState.completeSubmission(submission)
                 result
             }
         } catch (cancelled: CancellationException) {
@@ -666,16 +879,49 @@ class ChatVM internal constructor(
         launchPageCommand { opened -> conversationApplicationService.updateTitle(opened.lease.commandTarget, title) }
     }
 
+    internal data class PendingConversationDeletion(
+        val conversation: ConversationSummary,
+        val target: ConversationCommandTarget,
+        val preview: net.weero.measix.pilot.service.ConversationDeletionPreview,
+    )
     fun deleteConversation(conversation: ConversationSummary) {
-        val original = (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget.selection == conversation.commandTarget.selection }
+        if (preparingConversationDeletion || pendingConversationDeletion != null || _handoff.value != null) return
+        val original = (page.value as? PageState.Open)?.takeIf {
+            it.lease.commandTarget.selection == conversation.commandTarget.selection
+        } ?: return
+        preparingConversationDeletion = true
+        val target = conversation.commandTarget
+        viewModelScope.launch {
+            try {
+                val preview = conversationApplicationService.prepareDeletion(listOf(target))
+                if (page.value !== original) return@launch
+                if (preview.pendingInputCount > 0) pendingConversationDeletion = PendingConversationDeletion(conversation, target, preview)
+                else performConversationDeletion(target, preview)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportCommandError(original, error) }
+            finally { preparingConversationDeletion = false }
+        }
+    }
+
+    internal fun dismissConversationDeletion() { pendingConversationDeletion = null }
+
+    internal fun confirmConversationDeletion(expected: PendingConversationDeletion) {
+        if (pendingConversationDeletion !== expected) return
+        pendingConversationDeletion = null
+        performConversationDeletion(expected.target, expected.preview)
+    }
+
+    private fun performConversationDeletion(target: ConversationCommandTarget,
+        preview: net.weero.measix.pilot.service.ConversationDeletionPreview) {
+        val original = (page.value as? PageState.Open)?.takeIf { it.lease.commandTarget.selection == target.selection }
             ?: return
-        val current = conversation.id == request.id
+        val current = target.conversationId == request.id
         if (_handoff.value != null) return
-        if (current) _handoff.value = ConversationHandoff(conversation.commandTarget.selection)
+        if (current) _handoff.value = ConversationHandoff(target.selection)
         viewModelScope.launch {
             var committed: net.weero.measix.pilot.service.ConversationDeletionReceipt? = null
             try {
-                val receipt = conversationApplicationService.delete(conversation.commandTarget)
+                val receipt = conversationApplicationService.delete(target, preview)
                 committed = receipt
                 if (current) {
                     val continuation = conversationApplicationService.deletionContinuation(receipt)
@@ -689,9 +935,14 @@ class ChatVM internal constructor(
             catch (error: Exception) {
                 if (current && committed != null) {
                     logDiagnosticFailure("ChatVM", "Deleted conversation continuation failed", error)
-                    _handoff.value = ConversationHandoff(conversation.commandTarget.selection, failure = error)
+                    _handoff.value = ConversationHandoff(target.selection, failure = error)
                 }
-                else { if (current) _handoff.value = null; reportCommandError(original, error) }
+                else {
+                    if (current) _handoff.value = null
+                    reportCommandError(original, error, title = context.getString(
+                        if (error.message in setOf("conversation_pending_inputs_changed", "conversation_pending_inputs_confirmation_required"))
+                            R.string.chat_queue_changed else R.string.error_title_operation))
+                }
             }
         }
     }

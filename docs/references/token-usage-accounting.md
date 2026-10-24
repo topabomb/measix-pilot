@@ -64,6 +64,13 @@ Provider wire usage event
 
 ## 3. 单请求与 Turn 累计算法
 
+`TokenUsage.latestRequestContextCapacityTokens` 保存展示上下文对应请求的模型容量，缺失表示未知。
+`StepRunner` 将 START 捕获的 `Model.contextLength` 显式传入 `recordRequestStarted` 和 `apply`。
+请求开始时，有旧实测就保留旧实测与旧容量；没有旧实测才更新本次估算与容量。
+请求关闭时一起发布本次实测（缺失时使用本次估算）与捕获容量，失败、取消、零 input 和未知容量同样适用。
+该字段不累计、不读取当前配置补填历史；旧消息仍只显示 token 数。NerdLine 对已知正容量显示占比，超过 100% 不截断。
+`ChatSizeChecker` 读取最新估算，与可能仍显示旧实测的底栏不同，不能混用底栏分母计算它的比例。
+
 每次真实 Provider 调用创建一个新 `RequestUsageReducer` 和连续 request ordinal：
 
 1. 流式事件按字段 presence 覆盖当前请求快照；字段缺失表示本事件不更新该字段，显式 `0` 必须覆盖旧值。

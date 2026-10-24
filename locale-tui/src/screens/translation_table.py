@@ -14,7 +14,7 @@ from textual import work
 from models.entry import TranslationEntry, entries_from_documents
 from services.xml_parser import StringsXmlParser, ResourceError, describe_error, normalize_value, validate_translation
 from services.translator import AITranslator
-from services.dead_entry_finder import DeadEntryFinder
+from services.dead_entry_finder import DeadEntryFinder, ReferenceScanError
 
 if TYPE_CHECKING:
     from config import Config, ModuleConfig
@@ -135,12 +135,14 @@ class TranslationTableScreen(Screen):
             for key, reason in document.unsupported.items():
                 self.notify(f"Not edited: {code}/{key}: {reason}")
 
-        # Mark dead entries
-        if self.module.source_patterns:
-            finder = DeadEntryFinder(self.config.project_root)
-            dead_count = finder.mark_dead_entries(
-                self.entries, self.module.source_patterns
-            )
+        # Scan all modules even when this module has no extra source patterns.
+        finder = DeadEntryFinder(self.config.project_root, self.module.keep_keys)
+        try:
+            dead_count = finder.mark_dead_entries(self.entries, self.module.source_patterns)
+        except ReferenceScanError as error:
+            self.show_dead_only = False
+            self.notify(f"Unused-entry scan unavailable: {describe_error(error)}", severity="error")
+        else:
             self.notify(f"Found {dead_count} dead entries")
 
         self.apply_filters()

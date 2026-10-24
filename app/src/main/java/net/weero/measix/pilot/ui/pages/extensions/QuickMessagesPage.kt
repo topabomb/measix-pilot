@@ -45,7 +45,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.flow.collect
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01

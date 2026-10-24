@@ -49,6 +49,45 @@ class McpApplicationServiceTest {
     }
 
     @Test
+    fun `detail save merges edited fields with latest oauth and unrelated changes`() = runTest {
+        val baseline = remote(name = "Tools", policies = listOf(McpToolPolicy(name = "a")))
+        val oauth = McpOAuthState(enabled = true, accessToken = "rotated")
+        val latest = baseline.clone(commonOptions = baseline.commonOptions.copy(enable = false, oauth = oauth,
+            toolPolicies = listOf(McpToolPolicy(name = "a"), McpToolPolicy(name = "new", needsApproval = true))))
+        local = Settings(mcpServers = listOf(latest))
+        val edited = baseline.clone(commonOptions = baseline.commonOptions.copy(name = "Renamed"))
+        service.saveConfiguration(baseline, edited)
+        val saved = local.mcpServers.single()
+        assertEquals("Renamed", saved.commonOptions.name)
+        assertEquals(false, saved.commonOptions.enable)
+        assertEquals(oauth, saved.commonOptions.oauth)
+        assertEquals(latest.commonOptions.toolPolicies, saved.commonOptions.toolPolicies)
+    }
+
+    @Test
+    fun `detail save rejects concurrent field conflicts and does not resurrect deleted servers`() = runTest {
+        val baseline = remote(name = "Tools")
+        val edited = baseline.clone(commonOptions = baseline.commonOptions.copy(name = "My edit"))
+        val latest = baseline.clone(commonOptions = baseline.commonOptions.copy(name = "Another edit"))
+        local = Settings(mcpServers = listOf(latest))
+        try { service.saveConfiguration(baseline, edited); error("Expected conflict") }
+        catch (failure: IllegalStateException) { assertEquals("mcp_edit_conflict: name", failure.message) }
+        assertEquals(listOf(latest), local.mcpServers)
+        local = local.copy(mcpServers = emptyList())
+        try { service.saveConfiguration(baseline, edited); error("Expected removal") }
+        catch (failure: IllegalStateException) { assertEquals("mcp_definition_removed", failure.message) }
+        assertTrue(local.mcpServers.isEmpty())
+    }
+
+    @Test
+    fun `detail endpoint change drops original oauth without changing unrelated policies`() = runTest {
+        val baseline = remote(name = "Tools", oauth = McpOAuthState(enabled = true, accessToken = "old"))
+        local = Settings(mcpServers = listOf(baseline))
+        service.saveConfiguration(baseline, (baseline as McpServerConfig.StreamableHTTPServer).copy(url = "https://other.example/mcp"))
+        assertEquals(null, local.mcpServers.single().commonOptions.oauth)
+    }
+
+    @Test
     fun `same-name overwrite clears oauth when the resource changes and preserves tool policy`() = runTest {
         val oauth = McpOAuthState(enabled = true, accessToken = "current-token")
         val existing = remote(

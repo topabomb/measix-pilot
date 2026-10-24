@@ -47,6 +47,284 @@ import kotlin.uuid.Uuid
 class ConversationFolderAccessTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `queue projection exposes current item phases capabilities and pause reasons without persisting`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            val view = f.openRuntime(access, draft = false)
+            val runtime = f.registry.requireRuntime(view.conversationId)
+            val parts = listOf(me.rerere.ai.ui.UIMessagePart.Text("queued request"))
+            val item = runtime.enqueueInput(access.selection, access.assistantId, parts, true, null)
+            var latest: ConversationInputQueueUiModel? = null
+            val observe = backgroundScope.launch { f.query.observeInputQueue(view).collect { latest = it } }
+            val worker = kotlinx.coroutines.Job()
+            val turnId = Uuid.random()
+            try {
+                runCurrent()
+                assertEquals(1, requireNotNull(latest).queueCount)
+                val waiting = requireNotNull(latest).items.single()
+                assertEquals(item.id, waiting.id)
+                assertEquals(item.version, waiting.version)
+                assertEquals(parts, waiting.parts)
+                assertEquals(QueuedInputUiPhase.WAITING, waiting.phase)
+                assertTrue(waiting.canEdit)
+                assertTrue(waiting.canRemove)
+                assertTrue(f.query.queuedInputPreviews(view, item.id, item.version).isEmpty())
+                for ((reason, displayed) in listOf(
+                    InputQueuePauseReason.USER_STOP to InputQueuePauseUiReason.USER_STOP,
+                    InputQueuePauseReason.REALM_CHANGED to InputQueuePauseUiReason.REALM_CHANGED,
+                    InputQueuePauseReason.CONTEXT_CHANGED to InputQueuePauseUiReason.CONTEXT_CHANGED,
+                    InputQueuePauseReason.REQUEST_FAILED to InputQueuePauseUiReason.REQUEST_FAILED,
+                )) {
+                    runtime.pauseInputQueue(reason)
+                    runCurrent()
+                    assertEquals(displayed, requireNotNull(latest).pauseReason)
+                }
+                val editing = runtime.beginQueuedInputEdit(item.id, item.version)
+                runCurrent()
+                assertEquals(QueuedInputUiPhase.EDITING, requireNotNull(latest).items.single().phase)
+                assertFalse(requireNotNull(latest).items.single().canEdit)
+                assertTrue(requireNotNull(latest).items.single().canRemove)
+                runtime.cancelQueuedInputEdit(editing.id, editing.version, requireNotNull(editing.editToken))
+                runtime.resumeInputQueue(access.selection, access.assistantId)
+                val dispatch = requireNotNull(runtime.nextQueuedInputDispatch())
+                assertNotNull(runtime.installQueuedInputWorker(dispatch, access.selection, turnId, worker))
+                runCurrent()
+                val submitting = requireNotNull(latest).items.single()
+                assertEquals(QueuedInputUiPhase.SUBMITTING, submitting.phase)
+                assertFalse(submitting.canEdit)
+                assertFalse(submitting.canRemove)
+                assertNull(requireNotNull(latest).pauseReason)
+                runtime.settleQueuedInputSubmission(dispatch, committed = false)
+                runCurrent()
+                assertEquals(QueuedInputUiPhase.WAITING, requireNotNull(latest).items.single().phase)
+                assertEquals(InputQueuePauseUiReason.REQUEST_FAILED, requireNotNull(latest).pauseReason)
+                coVerify(exactly = 0) { f.repository.commit(any()) }
+            } finally {
+                worker.cancel()
+                runtime.releaseTurnWorker(turnId, worker)
+                runtime.clearInputQueueAfterStop()
+                observe.cancel()
+                view.close()
+            }
+        }
+    }
+
+    @Test fun `queue projection clears and cannot publish again through an old view after realm round trip`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            val view = f.openRuntime(access, draft = false)
+            val runtime = f.registry.requireRuntime(view.conversationId)
+            runtime.enqueueInput(access.selection, access.assistantId, listOf(me.rerere.ai.ui.UIMessagePart.Text("private")), true, null)
+            var latest: ConversationInputQueueUiModel? = null
+            val job = backgroundScope.launch { f.query.observeInputQueue(view).collect { latest = it } }
+            try {
+                runCurrent()
+                assertEquals(1, requireNotNull(latest).queueCount)
+                f.sessions.selectPersonalFixture()
+                f.sessions.selectEnterpriseFixture()
+                runCurrent()
+                assertNull(latest)
+                assertTrue(view.closed.value)
+                runtime.pauseInputQueue(InputQueuePauseReason.USER_STOP)
+                runCurrent()
+                assertNull(latest)
+                assertTrue(job.isActive)
+            } finally { job.cancel(); runtime.clearInputQueueAfterStop(); view.close() }
+        }
+    }
+
+    @Test fun `queued preview capability rejects removal version change and closed originating view`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            for (change in listOf("remove", "version", "close")) {
+                val view = f.openRuntime(access, draft = false)
+                val runtime = f.registry.requireRuntime(view.conversationId)
+                val submission = mockk<ArtifactSubmission>(relaxed = true)
+                val parts = listOf(me.rerere.ai.ui.UIMessagePart.Text("input $change"))
+                val item = runtime.enqueueInput(access.selection, access.assistantId, parts, true, submission)
+                var verifier: (suspend () -> Unit)? = null
+                val expected = mapOf("attachment" to ArtifactInputPreview("image.png", null))
+                coEvery { submission.describeInputs(parts, any()) } coAnswers {
+                    verifier = secondArg()
+                    requireNotNull(verifier).invoke()
+                    expected
+                }
+                try {
+                    val result = kotlinx.coroutines.withTimeout(2_000) { f.query.queuedInputPreviews(view, item.id, item.version) }
+                    assertEquals(expected, result)
+                    requireNotNull(verifier).invoke()
+                    when (change) {
+                        "remove" -> runtime.removeQueuedInput(item.id, item.version)
+                        "version" -> runtime.beginQueuedInputEdit(item.id, item.version)
+                        "close" -> view.close()
+                    }
+                    rejects<IllegalStateException> { requireNotNull(verifier).invoke() }
+                    coVerify(exactly = 1) { submission.describeInputs(parts, any()) }
+                } finally { runtime.clearInputQueueAfterStop(); view.close() }
+            }
+        }
+    }
+
+    @Test fun `queued preview refuses a result when item changes during the owner read`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            val view = f.openRuntime(access, draft = false)
+            val runtime = f.registry.requireRuntime(view.conversationId)
+            val submission = mockk<ArtifactSubmission>(relaxed = true)
+            val parts = listOf(me.rerere.ai.ui.UIMessagePart.Text("input"))
+            val item = runtime.enqueueInput(access.selection, access.assistantId, parts, true, submission)
+            coEvery { submission.describeInputs(parts, any()) } coAnswers {
+                secondArg<suspend () -> Unit>().invoke()
+                runtime.beginQueuedInputEdit(item.id, item.version)
+                mapOf("attachment" to ArtifactInputPreview("obsolete.png", null))
+            }
+            try {
+                rejects<IllegalStateException> {
+                    kotlinx.coroutines.withTimeout(2_000) { f.query.queuedInputPreviews(view, item.id, item.version) }
+                }
+            } finally { runtime.clearInputQueueAfterStop(); view.close() }
+        }
+    }
+
+    @Test fun `a new view cannot expose queued input from a different enterprise session with the same scope`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            val view = f.openRuntime(access, draft = false)
+            val runtime = f.registry.requireRuntime(view.conversationId)
+            val enterprise = access.selection.access as RealmAccess.Enterprise
+            val foreign = RealmSelection(RealmAccess.Enterprise(enterprise.scope, "another-session"), access.selection.revision)
+            val submission = mockk<ArtifactSubmission>(relaxed = true)
+            val item = runtime.enqueueInput(foreign, access.assistantId,
+                listOf(me.rerere.ai.ui.UIMessagePart.Text("other session input")), true, submission)
+            var exposed: ConversationInputQueueUiModel? = null
+            try {
+                rejects<IllegalStateException> {
+                    f.query.observeInputQueue(view).map { exposed = it; it }.first { it != null }
+                }
+                assertNull(exposed)
+                rejects<IllegalStateException> { f.query.queuedInputPreviews(view, item.id, item.version) }
+                coVerify(exactly = 0) { submission.describeInputs(any(), any()) }
+            } finally { runtime.clearInputQueueAfterStop(); view.close() }
+        }
+    }
+
+    @Test fun `draft location can be replaced or cleared without persisting or replacing its messages`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            f.application.createFolder(access, "first")
+            f.application.createFolder(access, "replacement")
+            val first = Uuid.parse(f.folders.value.first().id)
+            val replacement = Uuid.parse(f.folders.value.last().id)
+            val view = f.openRuntime(access, draft = true, folderId = first)
+            try {
+                val runtime = f.registry.requireRuntime(view.conversationId)
+                val nodes = runtime.durable.nodes
+                val target = ConversationAssistantTarget(view.commandTarget, access.assistantId)
+                // The originally selected folder disappeared while the input was still a Draft.
+                f.folderDao.deleteById(first.toString())
+                f.application.updateDraftFolder(target, access, replacement)
+                assertEquals(replacement, runtime.durable.header.folderId)
+                assertEquals(nodes, runtime.durable.nodes)
+                assertTrue(runtime.durable.header.newConversation)
+                assertTrue(f.registry.isDraft(view.conversationId))
+                assertFalse(f.headers.containsKey(view.conversationId))
+                f.application.updateDraftFolder(target, access, null)
+                assertNull(runtime.durable.header.folderId)
+                assertEquals(nodes, runtime.durable.nodes)
+                coVerify(exactly = 0) { f.repository.commit(any()) }
+                coVerify(exactly = 0) { f.repository.getConversationSnapshotById(any()) }
+            } finally { view.close() }
+        }
+    }
+
+    @Test fun `draft location rejects ready conversation changed assistant and old selection without mutation`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            f.application.createFolder(access, "original")
+            val folderId = Uuid.parse(f.folders.value.single().id)
+            val ready = f.openRuntime(access, draft = false, folderId = folderId)
+            val draft = f.openRuntime(access, draft = true, folderId = folderId)
+            try {
+                rejects<IllegalStateException> {
+                    f.application.updateDraftFolder(ConversationAssistantTarget(ready.commandTarget, access.assistantId), access, null)
+                }
+                val staleAssistant = ConfigurationReference.random()
+                rejects<IllegalStateException> {
+                    f.application.updateDraftFolder(ConversationAssistantTarget(draft.commandTarget, staleAssistant),
+                        ConversationFolderAccess(access.selection, staleAssistant), null)
+                }
+                rejects<IllegalStateException> {
+                    f.application.updateDraftFolder(ConversationAssistantTarget(draft.commandTarget, access.assistantId),
+                        ConversationFolderAccess(access.selection, staleAssistant), null)
+                }
+                f.sessions.selectPersonalFixture()
+                f.sessions.selectEnterpriseFixture()
+                rejects<EnterpriseConfigurationException> {
+                    f.application.updateDraftFolder(ConversationAssistantTarget(draft.commandTarget, access.assistantId), access, null)
+                }
+                assertEquals(folderId, f.registry.requireRuntime(ready.conversationId).durable.header.folderId)
+                assertEquals(folderId, f.registry.requireRuntime(draft.conversationId).durable.header.folderId)
+                coVerify(exactly = 0) { f.repository.commit(any()) }
+            } finally { draft.close(); ready.close() }
+        }
+    }
+
+    @Test fun `draft folder query retains original directory authority and clears after realm round trip`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            f.application.createFolder(access, "visible")
+            val view = f.openRuntime(access, draft = true)
+            var latest: ConversationFolderDirectory? = null
+            val job = backgroundScope.launch { f.query.foldersOfDraft(view).collect { latest = it } }
+            try {
+                runCurrent()
+                assertEquals(access, requireNotNull(latest).access)
+                assertEquals("visible", requireNotNull(latest).folders.single().name)
+                f.sessions.selectPersonalFixture()
+                f.sessions.selectEnterpriseFixture()
+                runCurrent()
+                assertNull(latest)
+                assertTrue(view.closed.value)
+                assertTrue(job.isActive)
+            } finally { job.cancel(); view.close() }
+        }
+    }
+
+    @Test fun `ready conversation has no draft folder directory`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            val view = f.openRuntime(access, draft = false)
+            var latest: ConversationFolderDirectory? = ConversationFolderDirectory(access, emptyList())
+            val job = backgroundScope.launch { f.query.foldersOfDraft(view).collect { latest = it } }
+            try {
+                runCurrent()
+                assertNull(latest)
+            } finally { job.cancel(); view.close() }
+        }
+    }
+
+    @Test fun `draft directory read failure can retry on the same view without replacing input`() = runTest {
+        fixture { f ->
+            val access = f.directory().access
+            val view = f.openRuntime(access, draft = true)
+            val original = f.registry.requireRuntime(view.conversationId).durable
+            try {
+                every { f.folderDao.getFoldersOfAssistant(any(), any()) } returns kotlinx.coroutines.flow.flow {
+                    throw IOException("draft folder read failed")
+                }
+                val failed = f.query.foldersOfDraft(view).first { it?.diagnostic != null }
+                assertTrue(requireNotNull(failed?.diagnostic).contains("draft folder read failed"))
+                every { f.folderDao.getFoldersOfAssistant(any(), any()) } returns kotlinx.coroutines.flow.flowOf(emptyList())
+                val retried = f.query.foldersOfDraft(view).first { it != null }
+                assertNull(requireNotNull(retried).diagnostic)
+                assertEquals(access, retried.access)
+                assertEquals(original, f.registry.requireRuntime(view.conversationId).durable)
+                assertFalse(view.closed.value)
+                coVerify(exactly = 0) { f.repository.commit(any()) }
+            } finally { view.close() }
+        }
+    }
+
     @Test fun `create rename move and delete preserve enterprise ownership through actual command and repository paths`() = runTest {
         fixture { f ->
             val access = f.directory().access
@@ -268,7 +546,7 @@ class ConversationFolderAccessTest {
 
     private inner class Fixture(test: TestScope) {
         val appScope = AppScope(StandardTestDispatcher(test.testScheduler))
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val folderDao = mockk<FolderDAO>()
         val conversationDao = mockk<ConversationDAO>()
         val repository = mockk<ConversationRepository>()
@@ -331,6 +609,19 @@ class ConversationFolderAccessTest {
         }
 
         suspend fun directory(): ConversationFolderDirectory = query.foldersOfAssistant(ConversationFolderAccess(requireNotNull(sessions.observeSelectedRealmSelection().first()), DEFAULT_ASSISTANT_ID)).first { it != null }!!
+
+        suspend fun openRuntime(access: ConversationFolderAccess, draft: Boolean, folderId: Uuid? = null): ConversationViewLease {
+            val conversation = Conversation.ofId(Uuid.random(), access.assistantId, newConversation = draft)
+                .copy(scope = access.selection.access.scope, folderId = folderId)
+                .updateCurrentMessages(listOf(me.rerere.ai.ui.UIMessage.user("Keep the original input")))
+            val runtime = if (draft) registry.installDraft(conversation) else {
+                headers[conversation.id] = conversation.toSnapshot().header
+                registry.registerSnapshot(conversation.toSnapshot())
+            }
+            val runtimeLease = registry.acquireRegisteredRuntime(conversation.id, runtime)
+            return ConversationViewLease(conversation.id, access.selection.access, access.selection.revision,
+                closeAction = runtimeLease::close)
+        }
 
         fun addConversation(scope: ConfigurationScope, folderId: Uuid? = null): Uuid {
             val conversation = Conversation.ofId(Uuid.random(), DEFAULT_ASSISTANT_ID).copy(scope = scope, folderId = folderId)

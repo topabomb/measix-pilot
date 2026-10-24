@@ -19,11 +19,62 @@ import org.junit.Test
 @org.robolectric.annotation.Config(sdk = [34])
 @org.robolectric.annotation.GraphicsMode(org.robolectric.annotation.GraphicsMode.Mode.NATIVE)
 class WorkspaceApplicationServiceTest {
+    @Test fun `message images use original cwd and root and refuse late revoked reads`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val id = kotlin.uuid.Uuid.random().toString()
+        val registered = workspace().copy(id = id, root = "original-root")
+        coEvery { repository.getById(id) } returns registered
+        io.mockk.every { repository.listFlow() } returns kotlinx.coroutines.flow.flowOf(listOf(registered))
+        val bytes = java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        var allowed = true
+        var revokeDuringRead = false
+        coEvery { repository.readRootfsBytes(id, "/workspace/reports/photo.png", 4L * 1024 * 1024) } coAnswers {
+            if (revokeDuringRead) allowed = false
+            bytes
+        }
+        val source = net.weero.measix.pilot.service.ConversationMessageResourceSource(mockk(),
+            net.weero.measix.pilot.data.model.WorkspaceContextOrigin(id, registered.root, "/workspace/reports")) {
+            check(allowed) { "conversation_view_revoked" }
+        }
+        val service = workspaceService(repository, mockk())
+        val image = service.messageImageSource(source, "./photo.png?v=1")
+        org.junit.Assert.assertArrayEquals(bytes, image.readBytes())
+        org.junit.Assert.assertArrayEquals(bytes, service.messageImageSource(source, "/workspace/reports/photo.png").readBytes())
+        revokeDuringRead = true
+        assertTrue(runCatching { image.readBytes() }.exceptionOrNull()?.message == "conversation_view_revoked")
+        allowed = true
+        coEvery { repository.getById(id) } returns registered.copy(root = "replacement-root")
+        assertTrue(runCatching { image.readBytes() }.exceptionOrNull()?.message == "message_workspace_unavailable")
+        coVerify(exactly = 3) { repository.readRootfsBytes(any(), any(), any()) }
+        for (path in listOf("../../../secret", "/upload/attachment.png", "file:///private/photo.png")) {
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { service.messageImageSource(source, path) }
+        }
+        val legacy = net.weero.measix.pilot.service.ConversationMessageResourceSource(mockk(), null) {}
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) { service.messageImageSource(legacy, "photo.png") }
+    }
+
+    @Test fun `rendered resources stay on original local workspace and reject deleted registration`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        coEvery { repository.getById("id") } returns workspace()
+        io.mockk.every { repository.listFlow() } returns kotlinx.coroutines.flow.flowOf(listOf(workspace()))
+        coEvery { repository.exportFile("id", area, "assets/style.css", any()) } coAnswers {
+            arg<java.io.OutputStream>(3).write("body{}".toByteArray())
+        }
+        val service = workspaceService(repository, mockk())
+        val source = service.renderedSource("id", area, "docs/index.html")
+        assertEquals("body{}", source.readResource("../assets/style.css").second.decodeToString())
+        coEvery { repository.getById("id") } returns null
+        try { source.readResource("../assets/style.css"); org.junit.Assert.fail() }
+        catch (error: IllegalStateException) { assertEquals("rendered_file_revoked", error.message) }
+        coVerify(exactly = 1) { repository.exportFile(any(), any(), any(), any()) }
+    }
+
     private val selection = net.weero.measix.pilot.data.enterprise.RealmSelection(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0)
     @get:org.junit.Rule val temporary = org.junit.rules.TemporaryFolder()
     private fun workspaceService(repository: WorkspaceRepository, terminals: WorkspaceTerminalRuntime) = WorkspaceApplicationService(
         repository, terminals, mockk(),
-        net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())),
+        net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))),
         temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
     )
 
@@ -251,7 +302,7 @@ class WorkspaceApplicationServiceTest {
             kotlinx.coroutines.awaitCancellation()
         }
         val service = WorkspaceApplicationService(repository, mockk(), artifacts,
-            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())),
+            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))),
             temporary.newFolder(), net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() })
         val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal
         val request = async { service.executeTool("id", access) { executeCommand("cat", uploads = listOf("/upload/a")) } }

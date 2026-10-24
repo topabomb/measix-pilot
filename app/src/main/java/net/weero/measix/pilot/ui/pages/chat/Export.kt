@@ -67,7 +67,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.request.crossfade
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -96,7 +96,7 @@ import net.weero.measix.pilot.ui.components.ui.ModelIconFallback
 import net.weero.measix.pilot.ui.components.ui.ErrorDetails
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.service.MediaExportService
 import net.weero.measix.pilot.service.ChatError
@@ -253,6 +253,14 @@ fun ChatExportSheet(
                                     exporting = true
                                     scope.launch {
                                         try {
+                                            val view = requireNotNull(source) { "conversation_view_unavailable" }
+                                            val messageSources = selectedMessages.associate { message ->
+                                                message.id to queries.messageResourceSource(view, view.conversationId, message.id)
+                                            }
+                                            val rendering = messageSources.mapValues { (_, message) ->
+                                                val rendered = net.weero.measix.pilot.service.RenderedContentSource.Conversation(view, message)
+                                                MessageExportRendering(rendered) { url -> contentFiles.resolveContentImage(rendered, url) }
+                                            }
                                             exportToImage(
                                                 context = context,
                                                 density = density,
@@ -263,9 +271,10 @@ fun ChatExportSheet(
                                                 attachmentPreview = attachmentPreview,
                                                 imageResolver = imageResolver,
                                                 contentSource = contentSource,
-                                                verifyAccess = verifyAccess,
+                                                verifyAccess = { verifyAccess(); messageSources.values.forEach { it.requireAccess() } },
                                                 modelIconFallback = modelIconFallback,
-                                                options = exportOptions
+                                                options = exportOptions,
+                                                messageRendering = rendering,
                                             )
                                             toaster.show(imageSuccessMessage, type = ToastType.Success)
                                             onDismissRequest()
@@ -448,6 +457,11 @@ internal fun renderMarkdownExport(
     }
 }
 
+internal data class MessageExportRendering(
+    val source: net.weero.measix.pilot.service.RenderedContentSource,
+    val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource?,
+)
+
 internal suspend fun exportToImage(
     context: Context,
     density: Density,
@@ -460,7 +474,8 @@ internal suspend fun exportToImage(
     contentSource: net.weero.measix.pilot.service.RenderedContentSource?,
     verifyAccess: suspend () -> Unit,
     modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
-    options: ChatExportOptions = ChatExportOptions()
+    options: ChatExportOptions = ChatExportOptions(),
+    messageRendering: Map<kotlin.uuid.Uuid, MessageExportRendering> = emptyMap(),
 ) {
     val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.png"
     val composer = BitmapComposer()
@@ -483,7 +498,8 @@ internal suspend fun exportToImage(
                     messages = messages,
                     attachmentPreview = attachmentPreview,
                     modelIconFallback = modelIconFallback,
-                    options = options
+                    options = options,
+                    messageRendering = messageRendering,
                 )
             }
         }
@@ -513,7 +529,8 @@ private fun ExportedChatImage(
     messages: List<UIMessage>,
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
     modelIconFallback: ModelIconFallback,
-    options: ChatExportOptions = ChatExportOptions()
+    options: ChatExportOptions = ChatExportOptions(),
+    messageRendering: Map<kotlin.uuid.Uuid, MessageExportRendering> = emptyMap(),
 ) {
     val navBackStack = remember { mutableStateListOf<NavKey>() }
     val navigator = Navigator(navBackStack)
@@ -561,13 +578,21 @@ private fun ExportedChatImage(
 
                     // Messages
                     messages.forEachIndexed { index, message ->
-                        ExportedChatMessage(
-                            message = message.copy(parts = exportParts(message.parts, options)),
-                            attachmentPreview = attachmentPreview,
-                            modelIconFallback = modelIconFallback,
-                            options = options,
-                            prevMessage = messages.getOrNull(index - 1)
-                        )
+                        val rendering = messageRendering[message.id]
+                        CompositionLocalProvider(
+                            net.weero.measix.pilot.ui.components.richtext.LocalRenderedContentSource provides
+                                (rendering?.source ?: net.weero.measix.pilot.ui.components.richtext.LocalRenderedContentSource.current),
+                            net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver provides
+                                (rendering?.imageResolver ?: net.weero.measix.pilot.ui.components.richtext.LocalImageSourceResolver.current),
+                        ) {
+                            ExportedChatMessage(
+                                message = message.copy(parts = exportParts(message.parts, options)),
+                                attachmentPreview = attachmentPreview,
+                                modelIconFallback = modelIconFallback,
+                                options = options,
+                                prevMessage = messages.getOrNull(index - 1)
+                            )
+                        }
                     }
 
                     // Watermark

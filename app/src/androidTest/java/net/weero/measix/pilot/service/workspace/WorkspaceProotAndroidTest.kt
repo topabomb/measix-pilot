@@ -18,17 +18,234 @@ import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.RootfsCompatibility
 import me.rerere.workspace.WorkspaceManager
+import me.rerere.workspace.readResult
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import org.junit.Before
 import org.junit.runner.RunWith
 
 /** Opt-in matching-ABI Linux fixture; the ordinary PTY tests use Android's system shell. */
 @RunWith(AndroidJUnit4::class)
 class WorkspaceProotAndroidTest {
+    @Before
+    fun awaitStartupRecovery(): Unit = runBlocking {
+        // Recovery owns Workspace temp cleanup; installing before it finishes races staging deletion.
+        withTimeout(60_000) {
+            org.koin.core.context.GlobalContext.get()
+                .get<net.weero.measix.pilot.service.ApplicationRecoveryGate>().awaitReady()
+        }
+    }
+
+    /** Explicit 26.04 fixture: exercise the package manager and Rust coreutils, not just --version. */
+    @Test
+    fun ubuntu2604InstallsReplacesAndPurgesLocalPackageUsingRustCoreutils(): Unit = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue("Enable prootUbuntu2604 with the matching official Ubuntu 26.04 fixture",
+            args.getString("prootUbuntu2604") == "true")
+        val url = requireNotNull(args.getString("prootRootfsUrl"))
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val native = File(context.applicationInfo.nativeLibraryDir)
+        val compatibility = RootfsCompatibility(native)
+        assumeTrue("The amd64 Ubuntu fixture requires a 4 KB host",
+            compatibility.architecture != RootfsCompatibility.Architecture.X86_64 || Os.sysconf(OsConstants._SC_PAGESIZE) == 4096L)
+        val root = "proot-dpkg-${UUID.randomUUID()}"
+        val manager = WorkspaceManager(File(context.filesDir, "workspaces"), shellRunner = ProotShellRunner(native),
+            bindMounts = ProotLaunchSpec.appBindMounts(context.filesDir))
+        var stage = "install Ubuntu fixture"
+        try {
+            withContext(Dispatchers.IO) { RootfsInstaller(manager, native).install(root, url) }
+            suspend fun shell(command: String): String = runInterruptible(Dispatchers.IO) {
+                manager.executeCommand(root, command, timeoutMillis = 120_000).also {
+                    assertFalse("$stage timed out: ${it.stderr}", it.timedOut)
+                    assertEquals("$stage: ${it.stderr}", 0, it.exitCode)
+                }.stdout.trim()
+            }
+            stage = "verify actual distribution and Rust utility"
+            assertTrue(shell("cat /etc/os-release").contains("VERSION_ID=\"26.04\""))
+            for (utility in listOf("ls", "cp", "rm", "ln")) {
+                assertTrue("$utility must really use Rust coreutils",
+                    shell("/usr/bin/coreutils $utility --version").contains("uutils", ignoreCase = true))
+            }
+            val files = manager.filesDir(root)
+            for (version in listOf("1.0", "2.0")) {
+                stage = "prepare offline package $version"
+                withContext(Dispatchers.IO) {
+                    val control = File(files, "pkg/DEBIAN").apply { check(isDirectory || mkdirs()) }
+                    File(control, "control").writeText("Package: pilot-proot-acceptance\nVersion: $version\nSection: misc\nPriority: optional\nArchitecture: all\nMaintainer: Pilot Test <test@localhost>\nDescription: Isolated PRoot acceptance fixture\n")
+                    File(control, "postinst").apply {
+                        // Ubuntu's default cp/rm can still select GNU; explicitly exercise its shipped Rust binary.
+                        writeText("#!/bin/sh\nset -eu\n/usr/bin/coreutils cp /usr/share/pilot-proot-acceptance/payload /workspace/installed-copy\n/usr/bin/coreutils rm -f /workspace/installed-link\n/usr/bin/coreutils ln /workspace/installed-copy /workspace/installed-link\ncmp /workspace/installed-copy /workspace/installed-link\n")
+                        check(setExecutable(true))
+                    }
+                    File(files, "pkg/usr/share/pilot-proot-acceptance").apply { check(isDirectory || mkdirs()) }
+                    File(files, "pkg/usr/share/pilot-proot-acceptance/payload").writeText("payload-$version\n")
+                    File(files, "pkg").walkTopDown().forEach { entry ->
+                        Os.chmod(entry.absolutePath, if (entry.isDirectory || entry.name == "postinst") 493 else 420)
+                    }
+                }
+                stage = "build and install package $version"
+                shell("set -e; dpkg-deb --root-owner-group --build pkg package.deb; dpkg --install package.deb")
+                assertEquals("payload-$version", shell("cat /usr/share/pilot-proot-acceptance/payload"))
+                assertEquals("payload-$version", shell("cat /workspace/installed-copy; cmp /workspace/installed-copy /workspace/installed-link"))
+                assertTrue(shell("dpkg-query --show pilot-proot-acceptance").endsWith(version))
+            }
+            stage = "purge installed package"
+            shell("set -e; dpkg --purge pilot-proot-acceptance; test ! -e /usr/share/pilot-proot-acceptance/payload")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            throw AssertionError("Ubuntu 26.04 acceptance failed at $stage", error)
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                assertTrue("Temporary Ubuntu workspace cleanup failed: $root", manager.deleteWorkspace(root))
+            }
+        }
+    }
+
+    /** Independent opt-in: missing probes appear as skipped, never as a passed subset of the PTY test. */
+    @Test
+    fun matchingNativeProbeChecksL2sExecutableNamesDescriptorsAndChildExecution() = runBlocking {
+        val args = InstrumentationRegistry.getArguments()
+        val rootfsUrl = args.getString("prootRootfsUrl")
+        val probeUrl = args.getString("prootBehaviorProbeUrl")
+        assumeTrue("Supply prootRootfsUrl and a matching-ABI prootBehaviorProbeUrl", !rootfsUrl.isNullOrBlank() && !probeUrl.isNullOrBlank())
+        assumeTrue("The static posix_spawn fixture requires Android API 28+", android.os.Build.VERSION.SDK_INT >= 28)
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val native = File(context.applicationInfo.nativeLibraryDir)
+        val compatibility = RootfsCompatibility(native)
+        assumeTrue("The standard amd64 Ubuntu fixture requires a 4 KB host",
+            compatibility.architecture != RootfsCompatibility.Architecture.X86_64 || Os.sysconf(OsConstants._SC_PAGESIZE) == 4096L)
+        val root = "proot-behavior-${UUID.randomUUID()}"
+        val mounts = ProotLaunchSpec.appBindMounts(context.filesDir)
+        val manager = WorkspaceManager(File(context.filesDir, "workspaces"), shellRunner = ProotShellRunner(native), bindMounts = mounts)
+        var stage = "install"
+        try {
+            withContext(Dispatchers.IO) { RootfsInstaller(manager, native).install(root, requireNotNull(rootfsUrl)) }
+            stage = "download matching static probe"
+            withContext(Dispatchers.IO) {
+                val connection = java.net.URL(requireNotNull(probeUrl)).openConnection().apply {
+                    connectTimeout = 20_000
+                    readTimeout = 20_000
+                }
+                val bytes = connection.getInputStream().use { input ->
+                    val output = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        currentCoroutineContext().ensureActive()
+                        val size = input.read(buffer)
+                        if (size < 0) break
+                        check(output.size() + size <= 2 * 1024 * 1024) { "Native behavior probe exceeds 2 MiB" }
+                        output.write(buffer, 0, size)
+                    }
+                    output.toByteArray()
+                }
+                check(bytes.size >= 64 && bytes[0] == 0x7f.toByte() && bytes[1] == 'E'.code.toByte() &&
+                    bytes[2] == 'L'.code.toByte() && bytes[3] == 'F'.code.toByte() && bytes[4] == 2.toByte() && bytes[5] == 1.toByte()) {
+                    "Native behavior probe must be a little-endian ELF64 executable"
+                }
+                val machine = (bytes[18].toInt() and 255) or ((bytes[19].toInt() and 255) shl 8)
+                val expected = if (compatibility.architecture == RootfsCompatibility.Architecture.X86_64) 62 else 183
+                check(machine == expected) { "Behavior probe ABI mismatch: $machine, expected $expected" }
+                File(manager.filesDir(root), "behavior-probe").apply { writeBytes(bytes); check(setExecutable(true)) }
+            }
+            suspend fun shell(command: String): String = runInterruptible(Dispatchers.IO) {
+                manager.executeCommand(root, command, timeoutMillis = 20_000).also {
+                    assertFalse("$stage timed out: ${it.stderr}", it.timedOut)
+                    assertEquals("$stage: ${it.stderr}", 0, it.exitCode)
+                }.stdout.trim()
+            }
+            stage = "create hard links inside PRoot"
+            shell("set -e; mkdir -p p36/bin p36/lib; cp behavior-probe p36/lib/original; ln p36/lib/original p36/lib/link; ln -s ../lib/link p36/bin/symlink; printf content > p36/data; ln p36/data p36/data-link")
+            assertTrue("The link must be PRoot's emulated hard link, not a host hard link",
+                java.nio.file.Files.isSymbolicLink(File(manager.filesDir(root), "p36/lib/link").toPath()))
+            val linked = "/workspace/p36/lib/link"
+            val symlink = "/workspace/p36/bin/symlink"
+            val original = "/workspace/p36/lib/original"
+            stage = "direct initial executable lookup"
+            for (path in listOf(linked, symlink, original)) {
+                val result = runInterruptible(Dispatchers.IO) {
+                    val environment = compatibility.requireCompatible(manager.linuxDir(root))
+                    val spec = ProotLaunchSpec.from(native, manager.filesDir(root), manager.linuxDir(root),
+                        manager.tempDir(root), mounts, environment)
+                    val commandOffset = spec.arguments.indexOf(environment.envCommand.first())
+                    check(commandOffset > 0)
+                    // Retain the production flags/binds/cwd; make the fixture the initial guest instead of env/sh.
+                    ProcessBuilder(listOf(spec.executable.absolutePath) + spec.arguments.take(commandOffset) + listOf(path, "self"))
+                        .directory(spec.workingDirectory).apply { environment().putAll(spec.environment) }
+                        .start().readResult(20_000)
+                }
+                assertFalse("$stage: ${result.stderr}", result.timedOut)
+                assertEquals("$stage: ${result.stderr}", 0, result.exitCode)
+                assertEquals(if (path == original) original else linked, result.stdout.trim())
+            }
+            stage = "shell exec and execveat naming"
+            for (path in listOf(linked, symlink, original)) {
+                assertEquals(if (path == original) original else linked, shell("$path self"))
+            }
+            assertEquals(linked, shell("/workspace/behavior-probe execat $symlink"))
+            stage = "O_NOFOLLOW and O_PATH descriptor naming"
+            for (mode in listOf("nofollow", "path")) {
+                assertEquals("/workspace/p36/data-link", shell("/workspace/behavior-probe $mode /workspace/p36/data-link"))
+            }
+            stage = "regular and memfd descriptor access modes"
+            val nativeProbeUrl = requireNotNull(args.getString("prootNativeProbeUrl")) {
+                "Full descriptor acceptance requires the matching dynamic PIE prootNativeProbeUrl"
+            }
+            val nativeFixture = File(manager.filesDir(root), "native-probe")
+            withContext(Dispatchers.IO) {
+                val connection = java.net.URL(nativeProbeUrl).openConnection().apply {
+                    connectTimeout = 20_000
+                    readTimeout = 20_000
+                }
+                connection.getInputStream().use { input ->
+                    nativeFixture.outputStream().use { output ->
+                        val buffer = ByteArray(8192)
+                        var total = 0
+                        while (true) {
+                            currentCoroutineContext().ensureActive()
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            check(total <= 2 * 1024 * 1024) { "Native probe exceeds 2 MiB" }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                }
+            }
+            val nativeResult = runInterruptible(Dispatchers.IO) {
+                ProcessBuilder("/system/bin/linker64", nativeFixture.absolutePath, "reopen",
+                    File(manager.filesDir(root), "native-reopen-file").absolutePath).start().readResult(20_000)
+            }
+            val reopened = "regular-reopen-ok\nregular-memfd-reopen-ok"
+            val denied = "regular-reopen-ok\nmemfd-readonly-denied:EACCES"
+            assertFalse("Native baseline timed out: $nativeResult", nativeResult.timedOut)
+            assertTrue("Unexpected native descriptor result: $nativeResult",
+                nativeResult.exitCode == 0 && nativeResult.stdout.trim() == reopened ||
+                    nativeResult.exitCode == 42 && nativeResult.stdout.trim() == denied)
+            val guestResult = runInterruptible(Dispatchers.IO) {
+                manager.executeCommand(root, "/workspace/behavior-probe reopen /workspace/p36/reopen-file", timeoutMillis = 20_000)
+            }
+            assertFalse("PRoot descriptor timeout: $guestResult", guestResult.timedOut)
+            assertEquals("Native=$nativeResult; PRoot=$guestResult", nativeResult.exitCode, guestResult.exitCode)
+            assertEquals(nativeResult.stdout.trim(), guestResult.stdout.trim())
+            android.util.Log.i("ProotDescriptorPolicy", "native=$nativeResult; proot=$guestResult")
+            stage = "creat new file and truncation"
+            assertEquals("creat-ok", shell("/workspace/behavior-probe create /workspace/p36/created-file"))
+            stage = "vfork and posix_spawn child lifecycle"
+            assertEquals("vfork-posix-spawn-ok", shell("/workspace/behavior-probe spawn $original"))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            throw AssertionError("PRoot behavior acceptance failed at $stage", error)
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) { manager.deleteWorkspace(root) }
+        }
+    }
+
     @Test
     fun matchingRootfsRunsProductionShellAndTwoPtysWithCancellationCleanup() = runBlocking {
         val url = InstrumentationRegistry.getArguments().getString("prootRootfsUrl")
@@ -45,7 +262,7 @@ class WorkspaceProotAndroidTest {
             bindMounts = ProotLaunchSpec.appBindMounts(context.filesDir),
         )
         val stateDir = File(context.cacheDir, root).apply { check(mkdirs()) }
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(stateDir, "enterprise"))).also { it.recover() }
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(stateDir, "enterprise")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).also { it.recover() }
         val scope = AppScope()
         val runtime = WorkspaceTerminalRuntime(context, scope, sessions)
         var stage = "install"

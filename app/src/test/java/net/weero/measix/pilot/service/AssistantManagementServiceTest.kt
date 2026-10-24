@@ -182,9 +182,13 @@ class AssistantManagementServiceTest {
             coEvery { sessions.withRealmAccess<AssistantManagementResult>(any(), any()) } coAnswers {
                 secondArg<suspend () -> AssistantManagementResult>()()
             }
-            coEvery { artifacts.manageAssistantReferences(any(), any(), any(), any(), any()) } coAnswers {
-                arg<() -> Unit>(4)()
+            coEvery { sessions.withRealmAdmission<AssistantManagementResult>(any(), any()) } coAnswers {
+                secondArg<suspend () -> AssistantManagementResult>()()
+            }
+            coEvery { artifacts.manageAssistantReferences(any(), any(), any(), any(), any(), any()) } coAnswers {
+                arg<() -> Unit>(5)()
                 val mutation = document.manageAssistant(firstArg(), secondArg(), thirdArg(), arg(3))
+                arg<suspend () -> Unit>(4)()
                 document = mutation.document
                 settings.value = document.personalSettings()
                 mutation.result

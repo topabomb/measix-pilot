@@ -11,6 +11,11 @@
 
 ## 语音合成与播放
 
+`SpeechApplicationService` 在送入播放器前调用一次 `stripMarkdown`。app 层复用与正文渲染相同的
+`prepareMarkdownSource` 和 GFM 语法解析，按 HTML 文档结构提取可读文字，保留链接文字、比较符和段落，
+跳过代码、图片、公式及脚本/样式。HTML 实体仅在文档解析时解码一次，结果直接作为纯文本进入播放器，
+不得再次清洗。纯解析逻辑放在 app 的 utils，speech 模块不依赖 Compose 渲染组件。
+
 个人 TTS 支持 OpenAI、Gemini、MiMo、Volcengine 与 SystemTTS，配置由 `TTSProviderSetting` 定义；云端音色和系统引擎参数不能互相代用。
 
 `VolcengineTTSProvider` 使用 V3 单向 SSE 和 MP3，资源 ID、音色及服务端语速在播放会话中冻结；每段合成复验原空间准入，仅更新同 endpoint 的凭据。只在明确成功终态且音频非空时交付完整分片；截断、服务错误及本地字节上限均失败，不播放部分结果。调用禁止重试、重定向与认证重放，取消等待正文读取实际退出。解析失败保留原异常类型名称、堆栈和因果诊断，并脱敏已知请求凭据。企业允许使用自有 TTS 时复用这条个人配置链；平台下发协议不增加未经约定的火山映射。
@@ -21,7 +26,7 @@
 
 企业公开定义使用 `EnterpriseTtsResource`，按协议区分云端模型/音色与 System TTS 的 rate/pitch。启用的普通云端 TTS 显式提供 `voice`；MiMo voicedesign 显式提供非空 `voiceDesignPrompt` 并省略 `voice`，不补默认音色。企业定义、用户 `TTSProviderSetting` 与平台执行描述 `EnterpriseExecution.Platform` 分开保存，短期凭据由 Session owner 提供。
 
-`TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。系统 TTS 在主线程创建和调用引擎，初始化、参数、语言、启动、带错误码终态、主动停止、空输出、超时和关闭都产生明确诊断；回调只接受第一个匹配 utterance 的终态，取消仍向上传播。System TTS 的 speech rate 固定为 `0.1..3.0`，pitch 固定为 `0.1..2.0`，个人与企业定义共用该校验。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
+`TtsController` 统一管理分片、预取与播放；每个 `TtsPlaybackSession` 提供合成和播放准入回调。停止取消并返回同一组任务的清理回执，恢复播放复验原 worker，销毁等待整个 controller 协程作用域，包含旧队列尚未退出的合成。系统 TTS 在主线程创建和调用引擎，初始化、参数、语言、启动、带错误码终态、主动停止、空输出、超时和关闭都产生明确诊断；回调只接受第一个匹配 utterance 的终态，取消仍向上传播。每段取得串行合成槽后独立执行 30 秒期限；调用者的外层超时仍属于取消，不能转换为 system_tts_timeout，所有终态均释放本段引擎和临时文件。System TTS 的 speech rate 固定为 `0.1..3.0`，pitch 固定为 `0.1..2.0`，个人与企业定义共用该校验。OpenAI/Gemini HTTP 合成使用 `Call.readResponse`，取消实际网络 Call，并等待响应正文读取退出后关闭响应。
 
 ### 队列归属与调用来源
 

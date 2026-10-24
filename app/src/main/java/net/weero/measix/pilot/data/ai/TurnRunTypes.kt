@@ -22,6 +22,8 @@ data class ToolExecutionFact(
     val childTurnId: String? = null,
     /** assistant_call 的稳定运行 id。 */
     val subAssistantRunId: String? = null,
+    /** Monotonic elapsed time observed by the executor; absent for unmeasured/recovered execution. */
+    val durationMillis: Long? = null,
 )
 
 /** 对一个已消费历史 Tool Result 的窄压缩改写；不得携带整条历史消息。 */

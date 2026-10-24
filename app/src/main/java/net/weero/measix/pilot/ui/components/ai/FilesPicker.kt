@@ -112,7 +112,7 @@ internal fun FilesPicker(
     onPickVideo: () -> Unit,
     onPickAudio: () -> Unit,
     onPickFile: () -> Unit,
-    feedback: com.dokar.sonner.ToasterState? = null,
+    feedback: net.weero.measix.pilot.ui.components.toast.ToasterState? = null,
     onMcpPickerVisibilityChange: (Boolean) -> Unit = {},
     onOpenRemoteWorkspace: (() -> Unit)? = null,
 ) {
@@ -403,7 +403,7 @@ private fun WorkspacePickerListItem(
 
 @Composable
 private fun InjectionQuickConfigSheet(
-    feedback: com.dokar.sonner.ToasterState?,
+    feedback: net.weero.measix.pilot.ui.components.toast.ToasterState?,
     conversationModeInjectionIds: Set<ConfigurationReference>,
     assistant: Assistant,
     settings: Settings,

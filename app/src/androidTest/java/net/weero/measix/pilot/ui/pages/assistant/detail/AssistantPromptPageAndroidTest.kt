@@ -8,7 +8,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableSharedFlow

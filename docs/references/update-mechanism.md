@@ -97,6 +97,7 @@ ChatDrawer 组合
   -> assembleRelease
   -> 正式发布时逐个 apksigner verify
   -> 从 versionName/tag 与 changelog 生成 Release 信息
+  -> 归档非空 Release mapping 与版本、commit、哈希
   -> 发布 GitHub Release 或上传非发布 Artifact
   -> always 清理临时签名文件
 ```
@@ -104,6 +105,10 @@ ChatDrawer 组合
 正式发布包括 tag 触发和手动 `publish_release=true`。这两种情况必须提供 `KEY_BASE64` 与 `SIGNING_CONFIG`，并且所有 APK 必须通过 `apksigner verify` 后才能上传。手动的非发布 Artifact 构建允许不提供签名，产物不得当作正式版本分发。
 
 Release notes 从 `docs/dev/changelog.md` 提取版本段落，未找到时回退为 `Release <version>`。GitHub Release 发布后，本工作流通过 `repository_dispatch` 向 `measix-pilot-website` 发送 `app-release` 事件，包含版本、changelog 和 APK 列表；下载地址使用当前 `GITHUB_SERVER_URL` 与 `GITHUB_REPOSITORY` 生成，避免仓库改名后继续发布旧地址。这一步需要 `WEBSITE_SYNC_TOKEN`。网站是否成功更新静态 `version.json` 是另一仓库的执行结果，dispatch 成功本身不能证明线上内容已更新。
+
+`release-mapping.zip` 随正式 Release 和非发布 Artifact 一起保存，包含 `mapping.txt` 与 `identity.json`。
+归档读取固定 release 变体输出，文件缺失或为空时中止工作流；identity 记录版本、commit 与 mapping SHA256，
+诊断必须使用与 APK 对应的 mapping。R8 保留异常类型名称和源码行信息，不因此关闭优化或保留全部类成员。
 
 ### 签名配置形状
 

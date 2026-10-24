@@ -354,6 +354,14 @@ internal class RemoteWorkspaceService(
         )
     }
 
+    internal suspend fun readPreviewResource(handle: RemoteWorkspaceHandle, path: String, maxBytes: Long): ByteArray =
+        operation(handle, retryRejectedToken = true) { token ->
+            WorkspaceFileRules.path(path)
+            val buffer = ByteArrayOutputStream()
+            client.download(handle.connection, token, handle.space, path, buffer, maxBytes)
+            buffer.toByteArray()
+        }
+
     suspend fun readText(handle: RemoteWorkspaceHandle, file: BrowserFile): BrowserTextDocument = operation(handle, retryRejectedToken = true) { token ->
         val buffer = ByteArrayOutputStream()
         val metadata = client.download(handle.connection, token, handle.space, file.path, buffer, WorkspaceFileRules.TEXT_LIMIT.toLong())

@@ -175,7 +175,7 @@ class StarterSubmissionOwnershipAndroidTest {
         val appScope = AppScope(Dispatchers.Default)
         val candidate = starterDeviceCandidate(false)
         val appliedStore = EnterpriseAppliedStore(File(root, "enterprise"))
-        val sessions = EnterpriseSessionController(appliedStore)
+        val sessions = EnterpriseSessionController(appliedStore, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val settings = mockk<SettingsStore>()
         val store = spyk(ArtifactStore(ArtifactPayloadStore(context), database.artifactDao(), database.artifactReferenceDao(),
             database.systemMetaDao(), database.conversationDao(), database.messageNodeDao(), database.conversationModelContextDao(),

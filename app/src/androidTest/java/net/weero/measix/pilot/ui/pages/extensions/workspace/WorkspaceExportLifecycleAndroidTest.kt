@@ -26,7 +26,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first

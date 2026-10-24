@@ -59,7 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.flow.collect
 import me.rerere.hugeicons.stroke.MoreVertical
 import net.weero.measix.pilot.R
@@ -308,6 +308,41 @@ fun AssistantPage(vm: AssistantVM = koinViewModel()) {
     }
 
     AssistantCreationSheet(createState)
+
+    vm.pendingDeletion?.let { pending ->
+        AlertDialog(
+            onDismissRequest = vm::dismissDeletion,
+            title = { Text(stringResource(R.string.assistant_page_delete)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(pending.assistant.name)
+                    Text(stringResource(R.string.assistant_page_delete_dialog_text))
+                    Text(stringResource(R.string.assistant_delete_queue_count, pending.preview.pendingInputCount))
+                    Text(stringResource(R.string.assistant_delete_queue_other_spaces))
+                }
+            },
+            confirmButton = { TextButton(onClick = { vm.confirmDeletion(pending) }, enabled = !vm.deletionBusy) {
+                Text(stringResource(R.string.confirm))
+            } },
+            dismissButton = { TextButton(onClick = vm::dismissDeletion, enabled = !vm.deletionBusy) {
+                Text(stringResource(R.string.cancel))
+            } },
+        )
+    }
+    vm.deletionFailure?.let { detail ->
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            net.weero.measix.pilot.service.ChatError(title = stringResource(
+                if (vm.deletionNeedsReview) R.string.chat_queue_changed else R.string.assistant_page_delete), detail = detail),
+            onDismiss = vm::dismissDeletionFailure,
+        )
+    }
+    if (vm.deletionCleanupPending) {
+        AlertDialog(
+            onDismissRequest = vm::dismissDeletionFailure,
+            text = { Text(stringResource(R.string.assistant_delete_cleanup_pending)) },
+            confirmButton = { TextButton(onClick = vm::dismissDeletionFailure) { Text(stringResource(R.string.confirm)) } },
+        )
+    }
 
     // 操作菜单 Bottom Sheet
     actionSheetAssistant?.let { assistant ->
@@ -639,7 +674,6 @@ private fun AssistantActionSheet(
     onCopy: () -> Unit,
     onDelete: () -> Unit
 ) {
-    var showDeleteDialog by remember { mutableStateOf(false) }
 
     AdaptiveModal(
         onDismissRequest = onDismiss
@@ -695,7 +729,7 @@ private fun AssistantActionSheet(
                             tint = MaterialTheme.colorScheme.error
                         )
                     },
-                    modifier = Modifier.onClick { showDeleteDialog = true },
+                    modifier = Modifier.onClick { onDelete() },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                 ) {
                     Text(
@@ -707,25 +741,4 @@ private fun AssistantActionSheet(
         }
     }
 
-    if (showDeleteDialog) {
-        AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text(stringResource(R.string.assistant_page_delete)) },
-            text = { Text(stringResource(R.string.assistant_page_delete_dialog_text)) },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDeleteDialog = false
-                        onDelete()
-                    }) {
-                    Text(stringResource(R.string.confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
-    }
 }

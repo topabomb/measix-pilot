@@ -10,6 +10,8 @@ import me.rerere.common.configuration.ConfigurationReference
 
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AlertCircle
+import me.rerere.hugeicons.stroke.ArrowLeft01
+import androidx.activity.compose.BackHandler
 import me.rerere.hugeicons.stroke.ArrowDown01
 import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.Camera01
@@ -36,8 +38,6 @@ import androidx.compose.ui.draw.clip
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
-import io.github.g00fy2.quickie.QRResult
-import io.github.g00fy2.quickie.ScanQRCode
 import android.net.Uri
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
@@ -126,7 +126,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.serialization.json.Json
@@ -188,6 +188,7 @@ internal fun SettingMcpPage(
     configurationCommands: ConfigurationApplicationService = koinInject(),
 ) {
     val pageScope = rememberCoroutineScope()
+    var scannerSelection by remember { mutableStateOf<RealmSelection?>(null) }
     val toaster = LocalToaster.current
     val context = LocalContext.current
     val resources = LocalResources.current
@@ -210,8 +211,6 @@ internal fun SettingMcpPage(
     }
     val mcpConfigs = userServers.mapNotNull { it.definition }
 
-    val scanErrorText = stringResource(R.string.setting_provider_page_scan_error)
-    val noPermissionText = stringResource(R.string.setting_provider_page_no_permission)
     val noQrFoundText = stringResource(R.string.setting_provider_page_no_qr_found)
     val conflictOverwriteText = stringResource(R.string.setting_mcp_page_conflict_overwrite)
     var refreshRunning by remember(catalog?.selection) { mutableStateOf(false) }
@@ -252,17 +251,19 @@ internal fun SettingMcpPage(
         }
     }
 
-    val scanQrCodeLauncher = rememberLauncherForActivityResult(ScanQRCode()) { result ->
-        when (result) {
-            is QRResult.QRSuccess -> pageScope.launch {
-                handleMcpImport(result.content.rawValue ?: "", mcpApplicationService, toaster, context) { conflicts ->
-                    pendingConflicts = conflicts
+    scannerSelection?.let { original ->
+        net.weero.measix.pilot.ui.components.ui.QRCodeScannerDialog(
+            selection = original, queries = org.koin.compose.koinInject(),
+            onDismissRequest = { scannerSelection = null },
+            onResult = { content ->
+                scannerSelection = null
+                if (catalog?.selection == original) pageScope.launch {
+                    handleMcpImport(content, mcpApplicationService, toaster, context) { conflicts ->
+                        pendingConflicts = conflicts
+                    }
                 }
-            }
-            is QRResult.QRError -> toaster.show(scanErrorText, type = ToastType.Error)
-            QRResult.QRMissingPermission -> toaster.show(noPermissionText, type = ToastType.Error)
-            QRResult.QRUserCanceled -> {}
-        }
+            },
+        )
     }
 
     val pickImageLauncher = rememberLauncherForActivityResult(
@@ -283,6 +284,15 @@ internal fun SettingMcpPage(
     }
 
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    if (creationState.isEditing) {
+        McpServerConfigPage(creationState) { _, edited -> mcpApplicationService.upsert(edited) }
+        return
+    }
+    if (editState.isEditing) {
+        McpServerConfigPage(editState, mcpApplicationService::saveConfiguration)
+        return
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -471,8 +481,6 @@ internal fun SettingMcpPage(
             content = content,
         )
     }
-    McpServerConfigModal(creationState, mcpApplicationService::upsert)
-    McpServerConfigModal(editState, mcpApplicationService::upsert)
 
     shareConfig?.let { config ->
         McpShareSheet(
@@ -483,10 +491,11 @@ internal fun SettingMcpPage(
 
     if (showImportMethodDialog) {
         McpImportMethodDialog(
+            scanEnabled = catalog?.selection != null,
             onDismiss = { showImportMethodDialog = false },
             onScanQr = {
                 showImportMethodDialog = false
-                scanQrCodeLauncher.launch(null)
+                scannerSelection = catalog?.selection
             },
             onPickImage = {
                 showImportMethodDialog = false
@@ -888,24 +897,31 @@ private fun McpServerItem(
 }
 
 @Composable
-internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspend (McpServerConfig) -> Unit) {
+internal fun McpServerConfigPage(state: EditState<McpServerConfig>, save: suspend (McpServerConfig, McpServerConfig) -> Unit) {
     state.EditStateContent { config, updateValue ->
         val pagerState = rememberPagerState { 2 }
-        val compactTools = pagerState.settledPage == 1
+        val baseline = remember(config.id) { config }
         val scope = rememberCoroutineScope()
         var saving by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<Throwable?>(null) }
         var newHeaderRows by remember { mutableStateOf(emptySet<Int>()) }
-        val update: (McpServerConfig) -> Unit = { updated -> error = null; updateValue(updated) }
-        AdaptiveModal(
-            onDismissRequest = state::dismiss,
-            dialogMaxWidth = 840.dp,
-            dialogMaxHeight = 900.dp,
-        ) {
+        val update: (McpServerConfig) -> Unit = { updated -> if (!saving) { error = null; updateValue(updated) } }
+        BackHandler { if (!saving) state.dismiss() }
+        Scaffold(
+            containerColor = CustomColors.topBarColors.containerColor,
+            topBar = { TopAppBar(
+                title = { Text(config.commonOptions.name.ifBlank { stringResource(R.string.setting_mcp_page_title) }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = { IconButton(enabled = !saving, onClick = state::dismiss) {
+                    Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back))
+                } },
+                colors = CustomColors.topBarColors,
+            ) },
+        ) { padding ->
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .then(if (compactTools) Modifier else Modifier.fillMaxHeight(0.9f))
+                    .fillMaxSize()
+                    .padding(padding)
+                    .imePadding()
                     .padding(start = 16.dp, top = 0.dp, end = 16.dp, bottom = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -939,7 +955,7 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspe
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier
-                        .weight(1f, fill = !compactTools)
+                        .weight(1f)
                         .fillMaxWidth()
                 ) { page ->
                     when (page) {
@@ -968,7 +984,7 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspe
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
-                    TextButton(onClick = state::dismiss) {
+                    TextButton(enabled = !saving, onClick = state::dismiss) {
                         Text(stringResource(R.string.cancel))
                     }
                     TextButton(
@@ -990,7 +1006,7 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>, save: suspe
                                                 true
                                             }
                                         }
-                                        save(config.clone(commonOptions = config.commonOptions.copy(headers = headers)))
+                                        save(baseline, config.clone(commonOptions = config.commonOptions.copy(headers = headers)))
                                         if (state.currentState == config) state.dismiss()
                                     } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                         throw cancelled
@@ -1641,7 +1657,7 @@ internal fun McpImportModal(
 internal suspend fun handleMcpImport(
     json: String,
     mcpApplicationService: McpApplicationService,
-    toaster: com.dokar.sonner.ToasterState,
+    toaster: net.weero.measix.pilot.ui.components.toast.ToasterState,
     context: android.content.Context,
     onConflicts: (List<Pair<McpServerConfig, McpServerConfig>>) -> Unit,
 ): String? {
@@ -1686,6 +1702,7 @@ internal suspend fun handleMcpImport(
 
 @Composable
 private fun McpImportMethodDialog(
+    scanEnabled: Boolean,
     onDismiss: () -> Unit,
     onScanQr: () -> Unit,
     onPickImage: () -> Unit,
@@ -1703,6 +1720,7 @@ private fun McpImportMethodDialog(
                 )
                 Button(
                     onClick = onScanQr,
+                    enabled = scanEnabled,
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     shape = MaterialTheme.shapes.large
                 ) {

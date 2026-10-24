@@ -36,6 +36,22 @@ uv run --directory locale-tui src/main.py set greeting "欢迎" -m app -l values
 
 每个目标文件只原子提交其成功条目，保留属性、注释、顺序和其他节点。坏 XML 报路径及原始错误，不当作空文件；写入或替换失败保留原 bytes。翻译期间选中条目被外部修改时拒绝覆盖，刷新后再决定。跨语言文件没有全局事务：部分失败保留已提交文件，列出失败语言/key，CLI 返回非零；取消不发布半写 XML。`add` 中已明确保存的源语言不因后续翻译取消而撤回。
 
+## 未使用资源检查
+
+TUI 检查引用时扫描项目内全部模块的 Kotlin、Java、Gradle 与 Android XML，排除 build、generated 等生成目录。
+`source_patterns` 可补充其他文本入口。任何读取或 XML 解析失败都会中止删除建议并清除旧标记；修复后重新扫描。
+静态扫描无法证明动态拼接的资源名无人使用。此类 key 在对应资源模块的 `keep_keys` 中显式保留，例如：
+
+```yaml
+modules:
+  - name: app
+    res_path: app/src/main/res
+    keep_keys:
+      - dynamically_selected_label
+```
+
+保留名单只影响删除建议，不创建资源，也不替代运行时引用校验。
+
 ## 术语表
 
 术语按目标语言配置，共用于 CLI、add 和 TUI：

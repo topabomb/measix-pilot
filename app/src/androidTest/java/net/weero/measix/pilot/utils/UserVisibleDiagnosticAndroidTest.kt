@@ -5,12 +5,32 @@ import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.IOException
+import net.weero.measix.pilot.service.portal.PortalFailure
+import net.weero.measix.pilot.service.portal.PortalProtocol
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class UserVisibleDiagnosticAndroidTest {
+    @Test
+    fun productionParserFailurePreservesTypeAndOriginalFramesForReleaseRetrace() {
+        val failure = try {
+            PortalProtocol.decode("[")
+            throw AssertionError("Malformed portal request was accepted")
+        } catch (error: PortalFailure) {
+            error
+        }
+        assertEquals("net.weero.measix.pilot.service.portal.PortalFailure", failure.javaClass.name)
+        assertEquals("invalid_request", failure.code)
+        assertEquals("PortalFailure: invalid_request", failure.userVisibleDiagnostic())
+        val originalFrames = failure.stackTrace.toList()
+        assertTrue("Production throw must retain its actual stack", originalFrames.isNotEmpty())
+        // The host retraces these actual optimized application frames with this APK's mapping.
+        logDiagnosticFailure("ReleaseRetraceProbe", "production-parser-failure", failure)
+        assertEquals(originalFrames, failure.stackTrace.toList())
+    }
+
     @Test
     fun nativeLogRetainsLongUnicodeMessageCauseSuppressedAndFinalFrameWithoutSecrets() {
         val tag = "Diag${System.nanoTime()}"

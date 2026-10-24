@@ -40,6 +40,13 @@ internal data class ModelChoiceUiModel(
     val canSelect: Boolean get() = unavailableReason == null
 }
 
+internal data class ModelContextCapacityUiModel(
+    val reference: ConfigurationReference.Enterprise,
+    val name: String,
+    val tokens: Int?,
+    val unavailableReason: ConfigurationUnavailableReason?,
+)
+
 internal data class ModelGroupUiModel(
     val id: String,
     val name: String,
@@ -55,6 +62,7 @@ internal data class ModelCatalogUiModel(
     val storedSelections: ResourceSelections = selections,
     val roleSelections: Map<ResourceSelectionSlot, ConfigurationSelection> = emptyMap(),
     val unresolvedModels: Map<ConfigurationReference, ConfigurationUnavailableReason> = emptyMap(),
+    val contextCapacities: List<ModelContextCapacityUiModel> = emptyList(),
 ) {
     fun find(id: ConfigurationReference?): ModelChoiceUiModel? = groups.asSequence()
         .flatMap { it.models.asSequence() }.firstOrNull { it.model.id == id }
@@ -129,7 +137,16 @@ internal fun ResolvedConfiguration.modelCatalog(selection: RealmSelection): Mode
     return ModelCatalogUiModel(groups, selection, selections, storedSelections,
         modelSlots.associateWith { this.selection(it) },
         catalog.values.filter { it.key.category == ConfigurationCategory.MODEL && it.key.reference !in models }
-            .associate { it.key.reference to requireNotNull(it.access.unavailableReason) })
+            .associate { it.key.reference to requireNotNull(it.access.unavailableReason) },
+        contextCapacities = (models.values.filter { it.model.id is ConfigurationReference.Enterprise && it.model.type == ModelType.CHAT }
+            .map { it.model.id as ConfigurationReference.Enterprise } + modelContextLengthOverrides.keys).distinct().map { reference ->
+            val definition = models[reference]
+            ModelContextCapacityUiModel(reference, definition?.model?.displayName ?: reference.toString(),
+                modelContextLengthOverrides[reference],
+                if (definition == null) ConfigurationUnavailableReason.REFERENCE_MISSING
+                else if (definition.model.type != ModelType.CHAT) ConfigurationUnavailableReason.RESOURCE_CAPABILITY_MISMATCH
+                else access(ConfigurationCategory.MODEL, reference).unavailableReason)
+        })
 }
 
 /** Editing a shared user definition cannot introduce a reference to an enterprise definition. */

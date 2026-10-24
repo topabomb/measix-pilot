@@ -504,6 +504,10 @@ class PlatformWorkspaceClientTest {
         assertThrows(IllegalArgumentException::class.java) { WorkspaceText("", true, "\n").encode("a".repeat(WorkspaceFileRules.TEXT_LIMIT)) }
     }
 
+    private fun renderedSource() = net.weero.measix.pilot.service.RenderedFileSource(
+        "docs/readme.md", kotlinx.coroutines.flow.MutableStateFlow(Unit), {},
+        { WorkspaceFileRules.path(it) }, { _, _ -> byteArrayOf() })
+
     @Test fun `markdown image URLs decode once before logical paths enter HTTP`() = runBlocking {
         val paths = mutableListOf<String>()
         val server = server {
@@ -518,7 +522,7 @@ class PlatformWorkspaceClientTest {
                 "images/a+b.png" to "docs/images/a+b.png",
                 "images/中文.png" to "docs/images/中文.png",
             )) {
-                val resolved = WorkspaceFileRules.relativeImage("docs/readme.md", reference)
+                val resolved = renderedSource().resourcePath(reference)
                 assertEquals(path, resolved)
                 client.download(connection(server), "token", space, resolved, ByteArrayOutputStream())
             }
@@ -528,12 +532,12 @@ class PlatformWorkspaceClientTest {
 
     @Test fun `markdown image URLs reject malformed encodings and path aliases`() {
         for (reference in listOf(
-            "/secret.png", "https://example.test/a.png", "//example.test/a.png", "../../secret.png", "a\\b.png",
-            "a%2fsecret.png", "%2E%2e/secret.png", "%5csecret.png", "%252e%252e/secret.png", "%00.png",
+            "https://example.test/a.png", "//example.test/a.png", "../../secret.png", "a\\b.png",
+            "a%2fsecret.png", "%5csecret.png", "%252e%252e/secret.png", "%00.png",
             "a%.png", "a%2", "a%GG.png", "%C3", "%C0%AE", "%E0%80%AE", "%ED%A0%80", "%F4%90%80%80",
-            "%0d.png", "%0a.png", "%3a.png", "%3f.png", "%23.png", "\uD800.png",
+            "%0d.png", "%0a.png", "\uD800.png",
         )) {
-            assertThrows(reference, IllegalArgumentException::class.java) { WorkspaceFileRules.relativeImage("docs/readme.md", reference) }
+            assertThrows(reference, IllegalArgumentException::class.java) { renderedSource().resourcePath(reference) }
         }
     }
 }

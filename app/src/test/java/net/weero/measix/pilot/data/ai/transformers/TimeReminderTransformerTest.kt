@@ -11,6 +11,25 @@ class TimeReminderTransformerTest {
     private fun user(text: String, time: String) = UIMessage.user(text).copy(createdAt = LocalDateTime.parse(time))
 
     @Test
+    fun `custom intervals use long arithmetic and preserve already admitted text`() {
+        val first = user("first", "2026-02-22T10:00:00")
+        val second = user("second", "2026-02-22T10:01:01")
+        assertEquals(3, applyTimeReminder(listOf(first, second), "UTC").size)
+        assertEquals(4, applyTimeReminder(listOf(first, second), "UTC", intervalMinutes = 1).size)
+        assertEquals(3, applyTimeReminder(listOf(first, second), "UTC", intervalMinutes = Int.MAX_VALUE).size)
+        assertEquals(3, applyTimeReminder(listOf(first, second.copy(createdAt = LocalDateTime.parse("2026-02-22T10:01:00"))),
+            "UTC", intervalMinutes = 1).size)
+        val result = applyTimeReminder(listOf(first, second), "UTC", intervalMinutes = Int.MAX_VALUE,
+            admittedText = { if (it == second.id) "Previously admitted reminder" else null })
+        assertEquals("Previously admitted reminder", result[2].toText())
+        listOf(0, -1).forEach { invalid ->
+            org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                applyTimeReminder(listOf(first, second), "UTC", intervalMinutes = invalid)
+            }
+        }
+    }
+
+    @Test
     fun `first real user uses message time and offset without gap`() {
         val message = user("question", "2026-02-22T10:00:00")
         assertEquals(listOf("<time_reminder>Message time: 2026-02-22T10:00:00+08:00</time_reminder>", "question"),

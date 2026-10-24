@@ -49,7 +49,7 @@ val dataSourceModule = module {
     single {
         EnterpriseAppliedStore(File(get<Context>().noBackupFilesDir, "enterprise"))
     }
-    single { EnterpriseSessionController(get()) }
+    single { EnterpriseSessionController(get(), get()) }
     single { net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(File(get<Context>().noBackupFilesDir, "enterprise-reset")) }
     single { PlatformControlClient(get()) }
     single { net.weero.measix.pilot.data.enterprise.PlatformWorkspaceClient(get()) }

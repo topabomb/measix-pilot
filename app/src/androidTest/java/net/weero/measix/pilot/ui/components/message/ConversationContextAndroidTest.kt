@@ -17,7 +17,7 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.ui.context.LocalNavController
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.Navigator

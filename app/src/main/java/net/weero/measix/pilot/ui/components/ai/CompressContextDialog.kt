@@ -26,9 +26,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import kotlinx.coroutines.Job
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.ui.components.ui.OutlinedNumberInput
 import net.weero.measix.pilot.ui.components.ui.RabbitLoadingIndicator
 
 @Composable
@@ -105,11 +106,9 @@ fun CompressContextDialog(
                     }
 
                     // Keep recent messages input
-                    OutlinedNumberInput(
+                    HistorySummaryRetentionStepper(
                         value = keepRecentMessages,
                         onValueChange = { keepRecentMessages = it },
-                        label = stringResource(R.string.chat_page_compress_keep_recent),
-                        modifier = Modifier.fillMaxWidth(),
                     )
 
                     // Additional context input
@@ -158,4 +157,26 @@ fun CompressContextDialog(
             }
         }
     )
+}
+
+@Composable
+internal fun HistorySummaryRetentionStepper(value: Int, onValueChange: (Int) -> Unit) {
+    val decrease = stringResource(R.string.history_summary_retention_decrease)
+    val increase = stringResource(R.string.history_summary_retention_increase)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(R.string.chat_page_compress_keep_recent), style = MaterialTheme.typography.labelMedium)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            androidx.compose.material3.FilledTonalIconButton(
+                enabled = value > 0,
+                onClick = { if (value > 0) onValueChange(value - 1) },
+                modifier = Modifier.semantics { contentDescription = decrease },
+            ) { Text("\u2212") }
+            Text(value.toString(), style = MaterialTheme.typography.titleMedium)
+            androidx.compose.material3.FilledTonalIconButton(
+                enabled = value < Int.MAX_VALUE,
+                onClick = { if (value < Int.MAX_VALUE) onValueChange(value + 1) },
+                modifier = Modifier.semantics { contentDescription = increase },
+            ) { Text("+") }
+        }
+    }
 }

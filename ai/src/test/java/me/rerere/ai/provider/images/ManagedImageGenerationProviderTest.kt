@@ -24,6 +24,24 @@ import org.junit.Test
 
 class ManagedImageGenerationProviderTest {
     @Test
+    fun `bounded image readers preserve malformed JSON failures`() {
+        for (dashScope in listOf(false, true)) {
+            Response.Builder()
+                .request(Request.Builder().url("https://relay.test/images").build())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body("{".toResponseBody())
+                .build().use { response ->
+                    org.junit.Assert.assertThrows(kotlinx.serialization.SerializationException::class.java) {
+                        if (dashScope) response.readBoundedDashScopeImageGenerationResponse(1)
+                        else response.readBoundedImageGenerationResponse(1)
+                    }
+                }
+        }
+    }
+
+    @Test
     fun `OpenAI request preserves existing typed wire`() = runBlocking {
         val requests = CopyOnWriteArrayList<Request>()
         val client = OkHttpClient.Builder().addInterceptor { chain ->

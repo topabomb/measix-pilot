@@ -2,7 +2,6 @@ package net.weero.measix.pilot.data.db.migrations
 
 import android.content.Context
 import android.content.ContextWrapper
-import androidx.room.Room
 import androidx.core.net.toUri
 import java.io.File
 import java.nio.file.Files
@@ -26,6 +25,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import net.weero.measix.pilot.data.db.AppDatabase
+import net.weero.measix.pilot.data.db.createAppDatabase
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -58,9 +58,7 @@ class Migration_11_12Test {
             db.execSQL("INSERT INTO artifact_reference(artifact_id,node_id,reference_type) VALUES(9,'node','ATTACHMENT')")
         }
         helper.runMigrationsAndValidate(name, 12, true, Migration_11_12).close()
-        val database = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(Migration_12_13, Migration_13_14, Migration_14_15, Migration_15_16)
-            .build()
+        val database = createAppDatabase(context, name)
         val appScope = AppScope()
         try {
             val store = ArtifactStore(

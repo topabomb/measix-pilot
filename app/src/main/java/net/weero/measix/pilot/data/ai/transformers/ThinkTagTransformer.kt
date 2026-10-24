@@ -14,6 +14,10 @@ import kotlin.time.Instant
  * the current assistant-to-tool step is eligible; subsequent Text parts are left untouched.
  */
 private val THINKING_OPEN_REGEX = Regex("\\A\\s*<think>([\\s\\S]*?)(?:</think>|\\z)", RegexOption.DOT_MATCHES_ALL)
+/** Uses the same anchored fallback as chat projection; literal tags inside an answer are preserved. */
+internal fun stripLeadingThinkTag(text: String): String =
+    THINKING_OPEN_REGEX.find(text)?.let { text.substring(it.range.last + 1).trimStart() } ?: text
+
 private const val THINKING_OPEN_TAG = "<think>"
 
 // 部分供应商不会返回reasoning parts, 所以需要这个transformer
@@ -36,7 +40,7 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
             return PhaseContent(hasReasoning = false, hasAnswer = false, undecided = true)
         }
         val match = THINKING_OPEN_REGEX.find(text) ?: return null
-        val strippedText = text.substring(match.range.last + 1).trimStart()
+        val strippedText = stripLeadingThinkTag(text)
         return PhaseContent(hasReasoning = true, hasAnswer = strippedText.isNotEmpty())
     }
 
@@ -109,7 +113,7 @@ object ThinkTagTransformer : OutputMessageTransformer, StreamingMessageTransform
         val match = THINKING_OPEN_REGEX.find(firstTextPart.text) ?: return message
 
         val reasoningText = match.groupValues.getOrNull(1)?.trim().orEmpty()
-        val strippedText = firstTextPart.text.substring(match.range.last + 1).trimStart()
+        val strippedText = stripLeadingThinkTag(firstTextPart.text)
         val effectiveFinishedAt = if (match.value.contains("</think>")) {
             previousClosedAt ?: Clock.System.now()
         } else {

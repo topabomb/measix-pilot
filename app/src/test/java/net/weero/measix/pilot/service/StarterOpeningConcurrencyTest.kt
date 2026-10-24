@@ -90,7 +90,7 @@ class StarterOpeningConcurrencyTest {
         val a = original.configuration.starters.first { it.enabled }
         val b = a.copy(id = "str_00000000-0000-4000-8000-000000000099", title = "Choice B", prompt = "prompt B")
         val packet = original.copy(configuration = original.configuration.copy(starters = listOf(a, b)))
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())).apply { enrollFixture(packet) }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).apply { enrollFixture(packet) }
         return Fixture(packet, sessions, requireNotNull(sessions.readPresentation().selection), AppScope(StandardTestDispatcher(testScheduler))).apply { initialize() }
     }
 

@@ -18,7 +18,12 @@ import net.weero.measix.pilot.utils.StrictJsonValue
 
 /** Core responses may add fields; only the Android projection is interpreted and validated. */
 internal object PlatformWireCodec {
-    val json = Json { encodeDefaults = true; explicitNulls = false; ignoreUnknownKeys = true }
+    val json = Json {
+        exceptionsWithDebugInfo = false
+        encodeDefaults = true
+        explicitNulls = false
+        ignoreUnknownKeys = true
+    }
     private val commandJson = Json(json) { ignoreUnknownKeys = false }
     private val commandSchemas = setOf(
         PlatformEnrollmentExchangeRequest.serializer().descriptor.serialName,

@@ -40,7 +40,7 @@ import net.weero.measix.pilot.service.runtime.toPresentationSnapshot
 import net.weero.measix.pilot.service.runtime.toSnapshot
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.utils.userVisibleDiagnostic

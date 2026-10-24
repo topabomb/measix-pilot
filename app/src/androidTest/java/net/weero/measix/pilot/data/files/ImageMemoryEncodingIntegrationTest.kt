@@ -21,6 +21,7 @@ import me.rerere.ai.util.EncodedImage
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.encodeImageBytes
 import me.rerere.ai.util.encodeNativeImage
+import me.rerere.ai.util.withPreparedStaticImage
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -56,6 +57,13 @@ class ImageMemoryEncodingIntegrationTest {
         assertDimensions(encoded, 40, 20)
         assertEquals(listOf("source.png"), root.list()!!.toList())
         assertArrayEquals(bytes, file.readBytes())
+        var borrowed: Bitmap? = null
+        val png = withPreparedStaticImage(bytes) { bitmap ->
+            borrowed = bitmap
+            ByteArrayOutputStream().also { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }.toByteArray()
+        }
+        assertTrue(requireNotNull(borrowed).isRecycled)
+        assertEquals(encoded, encodeImageBytes(png))
     }
 
     @Test
@@ -72,6 +80,10 @@ class ImageMemoryEncodingIntegrationTest {
             assertEquals(UIMessagePart.Image(android.net.Uri.fromFile(file).toString()).encodeNativeImage(), encoded)
             val swapsAxes = orientation in 5..8
             assertDimensions(encoded, if (swapsAxes) 20 else 40, if (swapsAxes) 40 else 20)
+            val prepared = withPreparedStaticImage(file.readBytes()) { bitmap ->
+                ByteArrayOutputStream().also { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }.toByteArray()
+            }
+            assertEquals(encoded, encodeImageBytes(prepared))
         }
     }
 
@@ -84,6 +96,32 @@ class ImageMemoryEncodingIntegrationTest {
         assertEquals("image/gif", encoded.mimeType)
         assertArrayEquals(gif, java.util.Base64.getDecoder().decode(encoded.base64))
         assertEquals(UIMessagePart.Image(android.net.Uri.fromFile(file).toString()).encodeNativeImage(withPrefix = false), encoded)
+        val rejected = runCatching { withPreparedStaticImage(gif) { throw AssertionError("GIF cannot enter annotation") } }
+        assertEquals("animated_image_annotation_not_supported", rejected.exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun staticPixelBorrowPreservesTransparencyAndRecyclesOnFailureOrCancellation() = runBlocking {
+        val source = Bitmap.createBitmap(32, 16, Bitmap.Config.ARGB_8888)
+        source.eraseColor(Color.TRANSPARENT)
+        source.setPixel(3, 4, Color.argb(128, 255, 0, 0))
+        val bytes = ByteArrayOutputStream().also { check(source.compress(Bitmap.CompressFormat.PNG, 100, it)) }.toByteArray()
+        source.recycle()
+        for (failure in listOf(java.io.IOException("PNG output failed"), CancellationException("editor closed"))) {
+            var borrowed: Bitmap? = null
+            val result = runCatching {
+                withPreparedStaticImage(bytes) { bitmap ->
+                    borrowed = bitmap
+                    assertEquals(32, bitmap.width)
+                    assertEquals(16, bitmap.height)
+                    assertEquals(0, Color.alpha(bitmap.getPixel(0, 0)))
+                    assertEquals(128, Color.alpha(bitmap.getPixel(3, 4)))
+                    throw failure
+                }
+            }
+            assertEquals(failure.message, result.exceptionOrNull()?.message)
+            assertTrue(requireNotNull(borrowed).isRecycled)
+        }
     }
 
     @Test

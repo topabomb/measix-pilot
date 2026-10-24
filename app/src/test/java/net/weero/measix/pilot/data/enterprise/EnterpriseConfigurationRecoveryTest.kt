@@ -20,13 +20,13 @@ class EnterpriseConfigurationRecoveryTest {
             val root = temporary.newFolder()
             val store = enterpriseTestStore(root)
             val packet = exampleEnterprisePackage()
-            val original = EnterpriseSessionController(store).enrollFixture(packet)
+            val original = EnterpriseSessionController(store, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).enrollFixture(packet)
             val candidate = packet.toCandidate().let {
                 it.copy(execution = (it.execution as EnterpriseExecution.Platform).copy(snapshotSchemaVersion = schema))
             }
             val manifest = original.manifest.copy(applied = store.prepare(candidate))
             assertEquals(schema, store.commit(manifest).toAvailable().snapshotSchemaVersion)
-            val recovered = EnterpriseSessionController(enterpriseTestStore(root)).recover() as EnterpriseState.Available
+            val recovered = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).recover() as EnterpriseState.Available
             assertEquals(schema, recovered.snapshotSchemaVersion)
             val resolved = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
                 net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope, recovered)
@@ -40,7 +40,7 @@ class EnterpriseConfigurationRecoveryTest {
         val originalManifest = """{"schemaVersion":3,"phase":"READY","identity":{"sourceNamespace":"local:example"}}"""
         File(root, "manifest.json").writeText(originalManifest)
         val originalPayload = File(root, "old-local-payload").apply { writeText("kept local source") }
-        val controller = EnterpriseSessionController(enterpriseTestStore(root))
+        val controller = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         assertTrue(controller.recover() is EnterpriseState.Failed)
         assertTrue(controller.withRealmAccess(RealmAccess.Personal) { true })
         assertEquals(originalManifest, File(root, "manifest.json").readText())
@@ -52,7 +52,7 @@ class EnterpriseConfigurationRecoveryTest {
             EnterpriseConfigurationCodec.validateIdentity(identity)
         }
         assertEquals("retired_local_enterprise_identity", error.reason)
-        val fresh = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+        val fresh = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         try {
             fresh.enrollFixture(packet.copy(identity = identity))
             fail("Retired principal must not acquire a Session")
@@ -68,11 +68,11 @@ class EnterpriseConfigurationRecoveryTest {
     @Test
     fun `unreadable configuration preserves identity data access navigation and local exit`() = runTest {
         val root = temporary.newFolder()
-        val original = EnterpriseSessionController(enterpriseTestStore(root))
+        val original = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
             .enrollFixture(exampleEnterprisePackage())
         File(root, "revisions/${original.manifest.applied!!.revision}/configuration.json").writeText("broken")
 
-        val controller = EnterpriseSessionController(enterpriseTestStore(root))
+        val controller = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val recovered = controller.recover()
         assertTrue("Configuration failure must not discard identity: $recovered", recovered is EnterpriseState.Available)
         recovered as EnterpriseState.Available
@@ -98,9 +98,9 @@ class EnterpriseConfigurationRecoveryTest {
     fun `full synchronization repairs an unreadable configuration at the same generation`() = runTest {
         val root = temporary.newFolder()
         val packet = exampleEnterprisePackage()
-        val original = EnterpriseSessionController(enterpriseTestStore(root)).enrollFixture(packet)
+        val original = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).enrollFixture(packet)
         File(root, "revisions/${original.manifest.applied!!.revision}/configuration.json").writeText("broken")
-        val controller = EnterpriseSessionController(enterpriseTestStore(root))
+        val controller = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         controller.recover()
         val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
         assertNull(controller.platformConfiguration(access).candidate)
@@ -116,7 +116,7 @@ class EnterpriseConfigurationRecoveryTest {
     @Test
     fun `synchronization detects corruption without restarting and retains verified release conflicts`() = runTest {
         val root = temporary.newFolder()
-        val controller = EnterpriseSessionController(enterpriseTestStore(root))
+        val controller = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         val original = controller.enrollFixture(packet)
         File(root, "revisions/${original.manifest.applied!!.revision}/configuration.json").writeText("broken")
@@ -140,13 +140,13 @@ class EnterpriseConfigurationRecoveryTest {
             val root = temporary.newFolder()
             val store = enterpriseTestStore(root)
             val packet = exampleEnterprisePackage()
-            val original = EnterpriseSessionController(store).enrollFixture(packet)
+            val original = EnterpriseSessionController(store, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).enrollFixture(packet)
             val candidate = packet.toCandidate().let {
                 it.copy(execution = (it.execution as EnterpriseExecution.Platform).copy(snapshotSchemaVersion = version))
             }
             val manifest = original.manifest.copy(applied = store.prepare(candidate))
             store.commit(manifest)
-            val controller = EnterpriseSessionController(store)
+            val controller = EnterpriseSessionController(store, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
             assertTrue(controller.recover() is EnterpriseState.Available)
             val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
             assertTrue(controller.withRealmAccess(access) { true })
@@ -181,7 +181,7 @@ class EnterpriseConfigurationRecoveryTest {
         val root = temporary.newFolder()
         val store = enterpriseTestStore(root)
         val candidate = exampleEnterprisePackage().toCandidate()
-        val original = EnterpriseSessionController(store).enrollFixture(exampleEnterprisePackage()).manifest
+        val original = EnterpriseSessionController(store, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).enrollFixture(exampleEnterprisePackage()).manifest
         val staged = store.prepare(candidate)
         File(root, "revisions/${staged.revision}/configuration.json").writeText("broken")
         assertThrows(EnterpriseStorageException::class.java) {

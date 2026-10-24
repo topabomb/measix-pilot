@@ -11,6 +11,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -47,10 +48,11 @@ data class GeneratedMediaCleanupResult(
     val failed: Int,
 )
 
-private sealed interface GeneratedMediaDeleteResult {
+sealed interface GeneratedMediaDeleteResult {
     data object Completed : GeneratedMediaDeleteResult
-    data object CleanupPending : GeneratedMediaDeleteResult
-    data object Failed : GeneratedMediaDeleteResult
+    data object AlreadyAbsent : GeneratedMediaDeleteResult
+    data class CleanupPending(val cause: Throwable) : GeneratedMediaDeleteResult
+    data class Failed(val cause: Throwable) : GeneratedMediaDeleteResult
 }
 
 class GeneratedMediaStore(
@@ -220,11 +222,16 @@ class GeneratedMediaStore(
         return file
     }
 
-    suspend fun delete(scope: ConfigurationScope, id: Int): Boolean = withPersistLock {
+    suspend fun delete(scope: ConfigurationScope, id: Int): Boolean = when (deleteDetailed(scope, id)) {
+        GeneratedMediaDeleteResult.Completed, is GeneratedMediaDeleteResult.CleanupPending -> true
+        GeneratedMediaDeleteResult.AlreadyAbsent, is GeneratedMediaDeleteResult.Failed -> false
+    }
+
+    suspend fun deleteDetailed(scope: ConfigurationScope, id: Int): GeneratedMediaDeleteResult = withPersistLock {
         withContext(Dispatchers.IO) {
             val entity = genMediaRepository.getMediaById(id)?.takeIf { it.scope == scope }
-                ?: return@withContext false
-            deleteEntityLocked(entity) != GeneratedMediaDeleteResult.Failed
+                ?: return@withContext GeneratedMediaDeleteResult.AlreadyAbsent
+            deleteEntityLocked(entity)
         }
     }
 
@@ -242,8 +249,9 @@ class GeneratedMediaStore(
             entities.forEach { entity ->
                 when (deleteEntityLocked(entity)) {
                     GeneratedMediaDeleteResult.Completed -> deleted++
-                    GeneratedMediaDeleteResult.CleanupPending -> cleanupPending++
-                    GeneratedMediaDeleteResult.Failed -> failed++
+                    is GeneratedMediaDeleteResult.CleanupPending -> cleanupPending++
+                    is GeneratedMediaDeleteResult.Failed -> failed++
+                    GeneratedMediaDeleteResult.AlreadyAbsent -> Unit
                 }
             }
             GeneratedMediaCleanupResult(deleted, cleanupPending, failed)
@@ -271,8 +279,11 @@ class GeneratedMediaStore(
                 reconcileDeletingFile(it, recordedNames)
             }
             genMediaRepository.listInScope(scope).forEach { entity ->
-                check(deleteEntityLocked(entity) == GeneratedMediaDeleteResult.Completed) {
-                    "enterprise_generated_media_cleanup_pending"
+                when (val result = deleteEntityLocked(entity)) {
+                    GeneratedMediaDeleteResult.Completed, GeneratedMediaDeleteResult.AlreadyAbsent -> Unit
+                    is GeneratedMediaDeleteResult.CleanupPending -> throw IllegalStateException(
+                        "enterprise_generated_media_cleanup_pending", result.cause)
+                    is GeneratedMediaDeleteResult.Failed -> throw result.cause
                 }
             }
         }
@@ -280,6 +291,18 @@ class GeneratedMediaStore(
 
     /** 只读投影：设置页通过 query port 消费，不把实体当页面协议。 */
     fun observe(scope: ConfigurationScope): Flow<List<GenMediaEntity>> = genMediaRepository.observeAllMedia(scope)
+
+    internal suspend fun existingIds(scope: ConfigurationScope, ids: Set<Int>): Set<Int> = withPersistLock {
+        withContext(Dispatchers.IO) {
+            buildSet {
+                // Leave room for scope and remain below older Android SQLite parameter limits.
+                ids.toList().chunked(500).forEach { chunk ->
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    addAll(genMediaRepository.existingIds(scope, chunk))
+                }
+            }
+        }
+    }
 
     /** Gallery paging remains owned by this store; UI consumes only the query-port projection. */
     fun pagingSource(scope: ConfigurationScope): PagingSource<Int, GenMediaEntity> = genMediaRepository.getAllMedia(scope)
@@ -291,12 +314,15 @@ class GeneratedMediaStore(
     private suspend fun deleteEntityLocked(entity: GenMediaEntity): GeneratedMediaDeleteResult {
         val original = canonicalFile(entity)
         if (original.name.endsWith(PENDING_SUFFIX) || original.name.endsWith(DELETING_SUFFIX)) {
-            return GeneratedMediaDeleteResult.Failed
+            return GeneratedMediaDeleteResult.Failed(IllegalStateException("generated_media_delete_reserved_path: $original"))
         }
-        if (original.exists() && !original.isFile) return GeneratedMediaDeleteResult.Failed
+        if (original.exists() && !original.isFile) return GeneratedMediaDeleteResult.Failed(
+            IllegalStateException("generated_media_delete_not_a_file: $original"))
         val deleting = File(original.parentFile, "${original.name}$DELETING_SUFFIX")
-        if (deleting.exists()) return GeneratedMediaDeleteResult.Failed
-        if (original.exists() && !original.renameTo(deleting)) return GeneratedMediaDeleteResult.Failed
+        if (deleting.exists()) return GeneratedMediaDeleteResult.Failed(
+            IllegalStateException("generated_media_delete_receipt_exists: $deleting"))
+        if (original.exists() && !original.renameTo(deleting)) return GeneratedMediaDeleteResult.Failed(
+            java.io.IOException("generated_media_delete_rename_failed: $original -> $deleting"))
         try {
             genMediaRepository.deleteMedia(entity.id)
         } catch (cancelled: CancellationException) {
@@ -305,13 +331,19 @@ class GeneratedMediaStore(
         } catch (error: Exception) {
             restoreDeletingFile(original, deleting)?.let(error::addSuppressed)
             Log.e(TAG, "failed to delete gallery row ${entity.id}", error)
-            return GeneratedMediaDeleteResult.Failed
+            return GeneratedMediaDeleteResult.Failed(error)
         }
-        return if (deleting.exists() && !deleteCommittedPayload(deleting)) {
-            Log.w(TAG, "gallery row deleted; payload cleanup deferred: $deleting")
-            GeneratedMediaDeleteResult.CleanupPending
-        } else {
-            GeneratedMediaDeleteResult.Completed
+        return try {
+            if (deleting.exists() && !deleteCommittedPayload(deleting)) {
+                val failure = java.io.IOException("generated_media_payload_cleanup_pending: $deleting")
+                Log.w(TAG, "gallery row deleted; payload cleanup deferred", failure)
+                GeneratedMediaDeleteResult.CleanupPending(failure)
+            } else GeneratedMediaDeleteResult.Completed
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "gallery row deleted; payload cleanup deferred: $deleting", error)
+            GeneratedMediaDeleteResult.CleanupPending(error)
         }
     }
 

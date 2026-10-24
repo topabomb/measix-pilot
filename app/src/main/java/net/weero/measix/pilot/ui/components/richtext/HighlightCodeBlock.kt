@@ -76,7 +76,7 @@ import net.weero.measix.pilot.utils.toDp
 import kotlin.time.Clock
 
 private const val COLLAPSE_LINES = 10
-private val PREVIEWABLE_LANGUAGES = setOf("html", "svg")
+private val PREVIEWABLE_LANGUAGES = setOf("html", "svg", "mermaid")
 
 @Composable
 fun HighlightCodeBlock(
@@ -89,9 +89,12 @@ fun HighlightCodeBlock(
         lineHeight = 16.sp,
     ),
     source: net.weero.measix.pilot.service.RenderedContentSource? = null,
+    originalCode: String = code,
+    blockIdentity: Any? = null,
 ) {
     if (source != null) {
-        RichTextHost(source) { HighlightCodeBlock(code, language, modifier, completeCodeBlock, style) }
+        RichTextHost(source) { HighlightCodeBlock(code, language, modifier, completeCodeBlock, style,
+            originalCode = originalCode, blockIdentity = blockIdentity) }
         return
     }
     val darkMode = LocalDarkMode.current
@@ -114,7 +117,7 @@ fun HighlightCodeBlock(
     ) {
         if (!allowPreview || !completeCodeBlock) {
             null
-        } else if (normalizedLanguage in PREVIEWABLE_LANGUAGES) {
+        } else if (normalizedLanguage in setOf("html", "svg")) {
             buildCodePreviewHtml(code = code, language = normalizedLanguage)
         } else if (normalizedLanguage == "mermaid") {
             buildMermaidHtml(code = code, colorScheme = colorScheme)
@@ -122,9 +125,11 @@ fun HighlightCodeBlock(
             null
         }
     }
-    var previewMode by remember(canInlinePreview, code, normalizedLanguage) {
-        mutableStateOf(false)
-    }
+    val inheritedPreferences = LocalCodePreviewPreferences.current
+    val preferences = inheritedPreferences ?: remember { CodePreviewPreferences() }
+    if (inheritedPreferences == null) preferences.observe(code, streaming = !completeCodeBlock)
+    val preferenceIdentity = blockIdentity ?: normalizedLanguage
+    val previewMode = preferences.showPreview(preferenceIdentity, canInlinePreview)
     var mermaidExportRequestKey by remember(code) { mutableIntStateOf(0) }
 
     var isExpanded by remember(settings.displaySetting.codeBlockAutoCollapse) {
@@ -151,20 +156,20 @@ fun HighlightCodeBlock(
                 language = language,
                 scope = scope,
                 clipboardManager = clipboardManager,
-                code = code,
-                onExport = actions?.exportText?.let { export -> { name -> export(code, name, "text/plain") } },
+                code = originalCode,
+                onExport = actions?.exportText?.let { export -> { name -> export(originalCode, name, "text/plain") } },
                 fullScreenPreviewContent = fullScreenPreviewContent,
                 previewMode = previewMode,
                 canInlinePreview = canInlinePreview,
                 onExportRenderedPreview = if (
-                    allowPreview && activity != null && completeCodeBlock && normalizedLanguage == "mermaid"
+                    previewMode && activity != null && completeCodeBlock && normalizedLanguage == "mermaid"
                 ) {
                     { mermaidExportRequestKey++ }
                 } else {
                     null
                 },
                 onTogglePreviewMode = {
-                    previewMode = !previewMode
+                    preferences.choose(preferenceIdentity, !previewMode)
                 },
             )
         }
@@ -172,6 +177,13 @@ fun HighlightCodeBlock(
             modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 8.dp)
         ) {
             when {
+                canInlinePreview && previewMode && normalizedLanguage == "mermaid" -> {
+                    Mermaid(
+                        code = code,
+                        exportRequestKey = mermaidExportRequestKey,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 canInlinePreview && previewMode -> {
                     CodeBlockPreview(
                         code = code,
@@ -179,13 +191,6 @@ fun HighlightCodeBlock(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(200.dp),
-                    )
-                }
-                allowPreview && completeCodeBlock && normalizedLanguage == "mermaid" -> {
-                    Mermaid(
-                        code = code,
-                        exportRequestKey = mermaidExportRequestKey,
-                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 else -> {
@@ -452,7 +457,7 @@ private fun HighlightCodeActions(
             if (canInlinePreview) {
                 Icon(
                     imageVector = if (previewMode) HugeIcons.Code else HugeIcons.View,
-                    contentDescription = if (previewMode) "Code" else stringResource(id = R.string.code_block_preview),
+                    contentDescription = stringResource(if (previewMode) R.string.file_preview_source else R.string.code_block_preview),
                     tint = iconTint,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
@@ -464,10 +469,10 @@ private fun HighlightCodeActions(
                 )
             }
 
-            if (fullScreenPreviewContent != null) {
+            if (fullScreenPreviewContent != null && actions != null) {
                 Icon(
                     imageVector = HugeIcons.Eye,
-                    contentDescription = stringResource(id = R.string.code_block_preview),
+                    contentDescription = stringResource(id = R.string.code_block_fullscreen_preview),
                     tint = iconTint,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))

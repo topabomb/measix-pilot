@@ -49,6 +49,23 @@ import kotlin.uuid.Uuid
 class ConversationCommandAccessTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `invalid summary limits reject before starting work or changing history`() = runTest {
+        fixture { f ->
+            val before = f.runtime.durable
+            for ((tokens, retained) in listOf(100 to -1, 0 to 0)) {
+                try {
+                    f.application.compress(f.page.commandTarget, "", tokens, retained)
+                    fail("Expected invalid summary limits")
+                } catch (error: IllegalArgumentException) {
+                    assertEquals(if (retained < 0) "invalid_history_summary_retention" else "invalid_history_summary_token_target", error.message)
+                }
+            }
+            assertEquals(before, f.runtime.durable)
+            io.mockk.verify(exactly = 0) { f.effects.launchCompression(any(), any(), any(), any(), any(), any()) }
+            coVerify(exactly = 0) { f.repository.commit(any()) }
+        }
+    }
+
     @Test fun `regenerating a history summary rejects before truncating later history`() = runTest {
         fixture { f ->
             val base = f.runtime.durable
@@ -419,6 +436,447 @@ class ConversationCommandAccessTest {
         }
     }
 
+    @Test fun `stop pauses queued input and awaits a worker already retired from active ownership`() = runTest {
+        fixture { f ->
+            val item = f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("next")), true, null)
+            val turnId = Uuid.random()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val worker = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) {
+                    f.runtime.releaseTurnWorker(turnId)
+                    entered.complete(Unit)
+                    release.await()
+                } }
+            }
+            f.runtime.installTurnWorker(turnId, worker)
+            worker.cancel()
+            entered.await()
+            assertNull(f.runtime.currentWorker())
+            val stop = async { f.application.stopGeneration(f.page.commandTarget) }
+            runCurrent()
+            assertFalse(stop.isCompleted)
+            assertEquals(InputQueuePauseReason.USER_STOP, f.runtime.inputQueue.value.pauseReason)
+            assertEquals(listOf(item), f.runtime.inputQueue.value.items)
+            release.complete(Unit)
+            stop.await()
+            assertTrue(worker.isCompleted)
+            assertEquals(listOf(item), f.runtime.inputQueue.value.items)
+        }
+    }
+
+    @Test fun `realm switch pauses only original realm queue inside the session boundary`() = runTest {
+        fixture { f ->
+            f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("enterprise pending")), true, null)
+            val personalId = f.put(ConfigurationScope.Personal)
+            val personal = f.registry.registerSnapshot(f.rows.getValue(personalId))
+            personal.enqueueInput(RealmSelection(RealmAccess.Personal, f.page.commandTarget.selection.revision),
+                DEFAULT_ASSISTANT_ID, listOf(UIMessagePart.Text("personal pending")), true, null)
+            f.sessions.switchRealm(RealmSwitchRequest(f.page.commandTarget.selection, RealmAccess.Personal)) { previous ->
+                f.application.pauseInputQueuesForRealmSwitch(previous)
+            }
+            assertEquals(InputQueuePauseReason.REALM_CHANGED, f.runtime.inputQueue.value.pauseReason)
+            assertEquals(1, f.runtime.inputQueue.value.items.size)
+            assertNull(personal.inputQueue.value.pauseReason)
+        }
+    }
+
+    @Test fun `reset stops residual enterprise worker before releasing queued resources and preserves personal queue`() = runTest {
+        fixture { f ->
+            val selection = f.page.commandTarget.selection
+            val submission = mockk<ArtifactSubmission>(relaxed = true)
+            f.runtime.enqueueInput(selection, DEFAULT_ASSISTANT_ID, listOf(UIMessagePart.Text("enterprise")), true, submission)
+            val personalId = f.put(ConfigurationScope.Personal)
+            val personal = f.registry.registerSnapshot(f.rows.getValue(personalId))
+            personal.enqueueInput(RealmSelection(RealmAccess.Personal, selection.revision), DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("personal")), true, null)
+            val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
+            f.sessions.finishExit(token)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val worker = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) { entered.complete(Unit); release.await() } }
+            }
+            f.runtime.installTurnWorker(Uuid.random(), worker)
+            val clearing = async { f.application.clearEnterpriseInputQueuesAfterResetStop() }
+            entered.await()
+            assertFalse(clearing.isCompleted)
+            io.mockk.verify(exactly = 0) { submission.close() }
+            release.complete(Unit)
+            clearing.await()
+            io.mockk.verify(exactly = 1) { submission.close() }
+            assertTrue(f.runtime.inputQueue.value.items.isEmpty())
+            assertEquals(1, personal.inputQueue.value.items.size)
+            assertTrue(f.rows.containsKey(f.rootId))
+        }
+    }
+
+    @Test fun `reset preview includes residual enterprise queues but discloses only original selected scope`() = runTest {
+        fixture { f ->
+            val selection = f.page.commandTarget.selection
+            val item = f.runtime.enqueueInput(selection, DEFAULT_ASSISTANT_ID, listOf(UIMessagePart.Text("enterprise")), true, null)
+            var preview: EnterpriseResetPreview? = null
+            f.sessions.captureLocalDataResetAdmission { admission ->
+                preview = EnterpriseResetPreview(EnterpriseDataResetRequest(Uuid.random(), EnterpriseDataResetMode.KEEP_HISTORY),
+                    admission, f.application.captureEnterpriseResetInputs())
+            }
+            assertEquals(1, requireNotNull(preview).pendingInputCount)
+            f.sessions.selectPersonalFixture()
+            f.sessions.captureLocalDataResetAdmission { admission ->
+                preview = EnterpriseResetPreview(EnterpriseDataResetRequest(Uuid.random(), EnterpriseDataResetMode.KEEP_HISTORY),
+                    admission, f.application.captureEnterpriseResetInputs())
+            }
+            val personalPreview = requireNotNull(preview)
+            assertNull(personalPreview.pendingInputCount)
+            assertEquals(1, personalPreview.queues.values.sumOf { it.size })
+            val editing = f.runtime.beginQueuedInputEdit(item.id, item.version)
+            f.runtime.replaceQueuedInputContents(editing.id, editing.version, requireNotNull(editing.editToken),
+                listOf(UIMessagePart.Text("new content")), null)
+            assertEquals("enterprise_pending_inputs_changed", runCatching {
+                f.sessions.acceptLocalDataResetAdmission(personalPreview.admission) {
+                    f.application.requireEnterpriseResetInputs(personalPreview)
+                }
+            }.exceptionOrNull()?.message)
+        }
+    }
+
+    @Test fun `shared assistant deletion counts only current realm but confirms every affected queue`() = runTest {
+        fixture { f ->
+            val selection = f.page.commandTarget.selection
+            f.runtime.enqueueInput(selection, DEFAULT_ASSISTANT_ID, listOf(UIMessagePart.Text("enterprise")), true, null)
+            val personalId = f.put(ConfigurationScope.Personal)
+            val personal = f.registry.registerSnapshot(f.rows.getValue(personalId))
+            val personalSelection = RealmSelection(RealmAccess.Personal, selection.revision)
+            personal.enqueueInput(personalSelection, DEFAULT_ASSISTANT_ID, listOf(UIMessagePart.Text("personal")), true, null)
+            val preview = f.sessions.withSelectedRealmSelection(selection) {
+                AssistantDeletionPreview(DEFAULT_ASSISTANT_ID, selection,
+                    f.application.captureAssistantDeletionInputs(DEFAULT_ASSISTANT_ID))
+            }
+            assertEquals(1, preview.pendingInputCount)
+            assertEquals(2, preview.queues.values.sumOf { it.size })
+            assertEquals("assistant_pending_inputs_confirmation_required", runCatching {
+                f.sessions.withSelectedRealmSelection(selection) {
+                    f.application.requireAssistantDeletionInputs(DEFAULT_ASSISTANT_ID, null)
+                }
+            }.exceptionOrNull()?.message)
+            personal.enqueueInput(personalSelection, DEFAULT_ASSISTANT_ID, listOf(UIMessagePart.Text("new hidden input")), true, null)
+            assertEquals("assistant_pending_inputs_changed", runCatching {
+                f.sessions.withSelectedRealmSelection(selection) {
+                    f.application.requireAssistantDeletionInputs(DEFAULT_ASSISTANT_ID, preview)
+                }
+            }.exceptionOrNull()?.message)
+            assertEquals(1, preview.pendingInputCount)
+        }
+    }
+
+    @Test fun `shared assistant deletion rejects edited contents and accepts withdrawn items`() = runTest {
+        fixture { f ->
+            val selection = f.page.commandTarget.selection
+            val item = f.runtime.enqueueInput(selection, DEFAULT_ASSISTANT_ID, listOf(UIMessagePart.Text("before")), true, null)
+            val preview = f.sessions.withSelectedRealmSelection(selection) {
+                AssistantDeletionPreview(DEFAULT_ASSISTANT_ID, selection,
+                    f.application.captureAssistantDeletionInputs(DEFAULT_ASSISTANT_ID))
+            }
+            val editing = f.runtime.beginQueuedInputEdit(item.id, item.version)
+            f.runtime.replaceQueuedInputContents(editing.id, editing.version, requireNotNull(editing.editToken),
+                listOf(UIMessagePart.Text("after")), null)
+            assertEquals("assistant_pending_inputs_changed", runCatching {
+                f.sessions.withSelectedRealmSelection(selection) {
+                    f.application.requireAssistantDeletionInputs(DEFAULT_ASSISTANT_ID, preview)
+                }
+            }.exceptionOrNull()?.message)
+            val replaced = f.runtime.inputQueue.value.items.single()
+            f.runtime.removeQueuedInput(replaced.id, replaced.version)
+            f.sessions.withSelectedRealmSelection(selection) {
+                f.application.requireAssistantDeletionInputs(DEFAULT_ASSISTANT_ID, preview)
+            }
+            assertTrue(f.runtime.inputQueue.value.items.isEmpty())
+        }
+    }
+
+    @Test fun `enterprise exit preview discloses only selected enterprise queue count`() = runTest {
+        fixture { f ->
+            f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("enterprise pending")), true, null)
+            var preview: EnterpriseExitPreview? = null
+            f.sessions.captureExitRequest { request ->
+                preview = EnterpriseExitPreview(request, f.application.captureEnterpriseExitInputs(request.access))
+            }
+            assertEquals(1, requireNotNull(preview).pendingInputCount)
+            f.sessions.selectPersonalFixture()
+            f.sessions.captureExitRequest { request ->
+                preview = EnterpriseExitPreview(request, f.application.captureEnterpriseExitInputs(request.access))
+            }
+            assertNull(requireNotNull(preview).pendingInputCount)
+            assertEquals(1, requireNotNull(preview).queues.values.sumOf { it.size })
+        }
+    }
+
+    @Test fun `enterprise exit confirmation rejects added or edited input before closing`() = runTest {
+        for (edit in listOf(false, true)) fixture { f ->
+            val item = f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("reviewed")), true, null)
+            var preview: EnterpriseExitPreview? = null
+            f.sessions.captureExitRequest { request ->
+                preview = EnterpriseExitPreview(request, f.application.captureEnterpriseExitInputs(request.access))
+            }
+            if (edit) {
+                val editing = f.runtime.beginQueuedInputEdit(item.id, item.version)
+                f.runtime.replaceQueuedInputContents(editing.id, editing.version, requireNotNull(editing.editToken),
+                    listOf(UIMessagePart.Text("new content")), null)
+            } else f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("new item")), true, null)
+            val approved = requireNotNull(preview)
+            assertEquals("enterprise_pending_inputs_changed", runCatching {
+                f.sessions.beginExit(approved.request) { f.application.requireEnterpriseExitInputs(approved) }
+            }.exceptionOrNull()?.message)
+            assertEquals(EnterpriseSessionPhase.READY,
+                (f.sessions.state.value as EnterpriseState.Available).manifest.phase)
+            assertTrue(f.runtime.inputQueue.value.items.isNotEmpty())
+        }
+    }
+
+    @Test fun `enterprise exit approval may narrow after pending input withdrawal`() = runTest {
+        fixture { f ->
+            val item = f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("reviewed")), true, null)
+            var preview: EnterpriseExitPreview? = null
+            f.sessions.captureExitRequest { request ->
+                preview = EnterpriseExitPreview(request, f.application.captureEnterpriseExitInputs(request.access))
+            }
+            f.runtime.removeQueuedInput(item.id, item.version)
+            val approved = requireNotNull(preview)
+            f.sessions.beginExit(approved.request) { f.application.requireEnterpriseExitInputs(approved) }
+            assertEquals(EnterpriseSessionPhase.CLOSING,
+                (f.sessions.state.value as EnterpriseState.Available).manifest.phase)
+        }
+    }
+
+    @Test fun `enterprise stop releases queued attachments only after request worker exits`() = runTest {
+        fixture { f ->
+            val submission = mockk<ArtifactSubmission>(relaxed = true)
+            f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("queued")), true, submission)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val worker = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) { entered.complete(Unit); release.await() } }
+            }
+            f.runtime.installTurnWorker(Uuid.random(), worker)
+            val token = f.sessions.beginExit(requireNotNull(f.sessions.captureExitRequest()))
+            val stop = async { f.application.stopEnterpriseWork(token) }
+            entered.await()
+            io.mockk.verify(exactly = 0) { submission.close() }
+            assertFalse(stop.isCompleted)
+            release.complete(Unit)
+            stop.await()
+            io.mockk.verify(exactly = 1) { submission.close() }
+            assertTrue(f.runtime.inputQueue.value.items.isEmpty())
+            f.application.requireEnterpriseStopped(token)
+        }
+    }
+
+    @Test fun `deleting idle conversation closes its pending queue before runtime eviction`() = runTest {
+        fixture { f ->
+            val submission = mockk<ArtifactSubmission>(relaxed = true)
+            f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("not sent")), true, submission)
+            val preview = f.application.prepareDeletion(listOf(f.page.commandTarget))
+            assertEquals(1, preview.pendingInputCount)
+            f.application.delete(f.page.commandTarget, preview)
+            io.mockk.verify(exactly = 1) { submission.close() }
+            assertTrue(f.runtime.inputQueue.value.items.isEmpty())
+            assertNull(f.registry.findRuntime(f.rootId))
+            assertFalse(f.rows.containsKey(f.rootId))
+        }
+    }
+
+    @Test fun `pending deletion requires confirmation before stopping an active request`() = runTest {
+        fixture { f ->
+            val submission = mockk<ArtifactSubmission>(relaxed = true)
+            f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("pending")), true, submission)
+            val before = f.runtime.inputQueue.value
+            val worker = Job()
+            f.runtime.installTurnWorker(Uuid.random(), worker)
+            try {
+                assertEquals("conversation_pending_inputs_confirmation_required", runCatching {
+                    f.application.delete(f.page.commandTarget)
+                }.exceptionOrNull()?.message)
+                assertFalse(worker.isCancelled)
+                assertEquals(before, f.runtime.inputQueue.value)
+                io.mockk.verify(exactly = 0) { submission.close() }
+                coVerify(exactly = 0) { f.repository.deleteConversation(any()) }
+            } finally { worker.cancelAndJoin() }
+        }
+    }
+
+    @Test fun `confirmation cannot consume newly queued or edited input`() = runTest {
+        for (edit in listOf(false, true)) fixture { f ->
+            val item = f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("reviewed")), true, null)
+            val preview = f.application.prepareDeletion(listOf(f.page.commandTarget))
+            if (edit) {
+                val editing = f.runtime.beginQueuedInputEdit(item.id, item.version)
+                f.runtime.replaceQueuedInputContents(editing.id, editing.version, requireNotNull(editing.editToken),
+                    listOf(UIMessagePart.Text("not reviewed")), null)
+            } else f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("not reviewed")), true, null)
+            val before = f.runtime.inputQueue.value
+            assertEquals("conversation_pending_inputs_changed", runCatching {
+                f.application.delete(f.page.commandTarget, preview)
+            }.exceptionOrNull()?.message)
+            assertEquals(before, f.runtime.inputQueue.value)
+            assertTrue(f.rows.containsKey(f.rootId))
+        }
+    }
+
+    @Test fun `new input while deletion awaits stopped worker rejects final deletion`() = runTest {
+        fixture { f ->
+            f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("reviewed")), true, null)
+            val preview = f.application.prepareDeletion(listOf(f.page.commandTarget))
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val worker = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) { entered.complete(Unit); release.await() } }
+            }
+            f.runtime.installTurnWorker(Uuid.random(), worker)
+            val deleting = async { runCatching { f.application.delete(f.page.commandTarget, preview) } }
+            entered.await()
+            try {
+                f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                    listOf(UIMessagePart.Text("arrived while joining")), true, null)
+            } finally { release.complete(Unit) }
+            assertEquals("conversation_pending_inputs_changed", deleting.await().exceptionOrNull()?.message)
+            assertTrue(f.rows.containsKey(f.rootId))
+            assertEquals(2, f.runtime.inputQueue.value.items.size)
+            coVerify(exactly = 0) { f.repository.deleteConversation(any()) }
+        }
+    }
+
+    @Test fun `withdrawal narrows deletion confirmation and same conversation new target cannot reuse it`() = runTest {
+        fixture { f ->
+            val item = f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("reviewed")), true, null)
+            val preview = f.application.prepareDeletion(listOf(f.page.commandTarget))
+            val reopened = ConversationViewLease(f.rootId, f.page.access, f.page.selectionRevision) {}
+            try {
+                assertEquals("conversation_deletion_preview_mismatch", runCatching {
+                    f.application.delete(reopened.commandTarget, preview)
+                }.exceptionOrNull()?.message)
+            } finally { reopened.close() }
+            f.runtime.removeQueuedInput(item.id, item.version)
+            f.application.delete(f.page.commandTarget, preview)
+            assertFalse(f.rows.containsKey(f.rootId))
+        }
+    }
+
+    @Test fun `batch rejects unconfirmed later target before stopping or deleting earlier target`() = runTest {
+        fixture { f ->
+            val otherId = f.put(f.scope)
+            val other = f.registry.registerSnapshot(f.rows.getValue(otherId))
+            val otherPage = ConversationViewLease(otherId, f.page.access, f.page.selectionRevision) {}
+            other.enqueueInput(otherPage.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("pending in second chat")), true, null)
+            val worker = Job()
+            f.runtime.installTurnWorker(Uuid.random(), worker)
+            try {
+                assertEquals("conversation_pending_inputs_confirmation_required", runCatching {
+                    f.application.deleteConversations(listOf(f.page.commandTarget, otherPage.commandTarget))
+                }.exceptionOrNull()?.message)
+                assertFalse(worker.isCancelled)
+                assertTrue(f.rows.keys.containsAll(listOf(f.rootId, otherId)))
+                coVerify(exactly = 0) { f.repository.deleteConversation(any()) }
+            } finally { otherPage.close(); worker.cancelAndJoin() }
+        }
+    }
+
+    @Test fun `queued USER already committed is not counted as unsubmitted input`() = runTest {
+        fixture { f ->
+            val item = f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("already submitted")), false, null)
+            f.coordinator.executeOrThrow(f.rootId, AppendUserMessage(UIMessage(
+                id = item.userMessageId, role = me.rerere.ai.core.MessageRole.USER, parts = item.parts)))
+            val preview = f.application.prepareDeletion(listOf(f.page.commandTarget))
+            assertEquals(0, preview.pendingInputCount)
+            f.application.delete(f.page.commandTarget)
+            assertFalse(f.rows.containsKey(f.rootId))
+        }
+    }
+
+    @Test fun `undo deletion also requires reviewed pending versions and never restores the queue`() = runTest {
+        fixture { f ->
+            f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("unsent")), true, null)
+            assertEquals("conversation_pending_inputs_confirmation_required", runCatching {
+                f.application.deleteForUndo(f.page.commandTarget)
+            }.exceptionOrNull()?.message)
+            val preview = f.application.prepareDeletion(listOf(f.page.commandTarget))
+            val undo = f.application.deleteForUndo(f.page.commandTarget, preview)
+            assertTrue(f.runtime.inputQueue.value.items.isEmpty())
+            assertFalse(f.rows.containsKey(f.rootId))
+            f.application.restore(undo)
+            assertTrue(f.rows.containsKey(f.rootId))
+            assertTrue(f.registry.findRuntime(f.rootId)?.inputQueue?.value?.items.orEmpty().isEmpty())
+        }
+    }
+
+    @Test fun `failed deletion or undo retention preserves paused pending input and attachment ownership`() = runTest {
+        for (undo in listOf(false, true)) fixture { f ->
+            val submission = mockk<ArtifactSubmission>(relaxed = true)
+            val queued = f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("retain on failure")), true, submission)
+            val preview = f.application.prepareDeletion(listOf(f.page.commandTarget))
+            val failure = java.io.IOException(if (undo) "retention failed" else "delete transaction failed")
+            if (undo) coEvery { f.artifactStore.retainNodesForUndo(any(), any()) } throws failure
+            else coEvery { f.repository.deleteConversation(any()) } throws failure
+            val rejected = runCatching {
+                if (undo) f.application.deleteForUndo(f.page.commandTarget, preview)
+                else f.application.delete(f.page.commandTarget, preview)
+            }.exceptionOrNull()
+            assertEquals(failure.message, rejected?.message)
+            assertTrue(f.rows.containsKey(f.rootId))
+            assertSame(f.runtime, f.registry.findRuntime(f.rootId))
+            assertEquals(listOf(queued), f.runtime.inputQueue.value.items)
+            assertEquals(InputQueuePauseReason.USER_STOP, f.runtime.inputQueue.value.pauseReason)
+            io.mockk.verify(exactly = 0) { submission.close() }
+        }
+    }
+
+    @Test fun `undo transaction failure releases only undo retention and keeps queued attachments`() = runTest {
+        fixture { f ->
+            val submission = mockk<ArtifactSubmission>(relaxed = true)
+            val queued = f.runtime.enqueueInput(f.page.commandTarget.selection, DEFAULT_ASSISTANT_ID,
+                listOf(UIMessagePart.Text("still pending")), true, submission)
+            val preview = f.application.prepareDeletion(listOf(f.page.commandTarget))
+            coEvery { f.repository.deleteConversation(any()) } throws java.io.IOException("delete failed")
+            assertTrue(runCatching { f.application.deleteForUndo(f.page.commandTarget, preview) }.isFailure)
+            assertEquals(1, f.retentionReleased)
+            assertEquals(listOf(queued), f.runtime.inputQueue.value.items)
+            assertTrue(f.rows.containsKey(f.rootId))
+            io.mockk.verify(exactly = 0) { submission.close() }
+        }
+    }
+
+    @Test fun `deletion preview rejects mixed original realm selections without exposing counts`() = runTest {
+        fixture { f ->
+            val personalId = f.put(ConfigurationScope.Personal)
+            val personal = ConversationViewLease(personalId, RealmAccess.Personal, f.page.selectionRevision) {}
+            try {
+                assertEquals("conversation_selection_mismatch", runCatching {
+                    f.application.prepareDeletion(listOf(f.page.commandTarget, personal.commandTarget))
+                }.exceptionOrNull()?.message)
+            } finally { personal.close() }
+        }
+    }
+
     @Test fun `delete rechecks original authorization after joining and leaves the conversation when revoked`() = runTest {
         fixture { f ->
             val entered = CompletableDeferred<Unit>()
@@ -666,6 +1124,103 @@ class ConversationCommandAccessTest {
             assertTrue(worker.isActive)
             coVerify(exactly = 0) { f.repository.commit(any()) }
             worker.cancel()
+        }
+    }
+
+    @Test fun `chat submission atomically chooses queue without cancelling active worker`() = runTest {
+        fixture { f ->
+            val turn = Uuid.random()
+            val worker = Job()
+            f.runtime.installTurnWorker(turn, worker)
+            val target = ConversationAssistantTarget(f.page.commandTarget, DEFAULT_ASSISTANT_ID)
+            val result = f.turns.submitChatInput(target, listOf(UIMessagePart.Text("queued")), false)
+            assertTrue(result is ChatInputSubmissionReceipt.Queued)
+            runCurrent()
+            assertFalse(worker.isCancelled)
+            assertSame(worker, f.runtime.currentWorker())
+            assertEquals(listOf("original"), f.runtime.durable.currentMessages().map { it.toText() })
+            assertEquals(1, f.runtime.inputQueue.value.items.size)
+            worker.complete()
+            f.runtime.releaseTurnWorker(turn, worker)
+            f.turns.resumeInputQueue(target)
+            runCurrent()
+            assertEquals(listOf("original", "queued"), f.runtime.durable.currentMessages().map { it.toText() })
+        }
+        fixture { f ->
+            val target = ConversationAssistantTarget(f.page.commandTarget, DEFAULT_ASSISTANT_ID)
+            val result = f.turns.submitChatInput(target, listOf(UIMessagePart.Text("immediate")), false)
+            assertTrue(result is ChatInputSubmissionReceipt.Sent)
+            assertEquals("immediate", f.runtime.durable.currentMessages().last().toText())
+            assertTrue(f.runtime.inputQueue.value.items.isEmpty())
+        }
+    }
+
+    @Test fun `ordinary request completion dispatches queued inputs in order after page closes`() = runTest {
+        fixture { f ->
+            val release = CompletableDeferred<Unit>()
+            val cleanup = CompletableDeferred<Unit>()
+            val original = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try { awaitCancellation() }
+                finally { withContext(NonCancellable) { cleanup.complete(Unit); release.await() } }
+            }
+            f.runtime.installTurnWorker(Uuid.random(), original)
+            val first = async { f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("A")), false) }
+            cleanup.await()
+            val target = ConversationAssistantTarget(f.page.commandTarget, DEFAULT_ASSISTANT_ID)
+            val second = requireNotNull(f.turns.enqueueMessage(target, listOf(UIMessagePart.Text("B")), false, null))
+            val third = requireNotNull(f.turns.enqueueMessage(target, listOf(UIMessagePart.Text("C")), false, null))
+            assertNotEquals(second.itemId, third.itemId)
+            f.page.close()
+            runCurrent()
+            assertEquals(listOf("original"), f.runtime.durable.currentMessages().map { it.toText() })
+            release.complete(Unit)
+            runCurrent()
+            assertNotNull(first.await())
+            assertEquals(f.errors.errors.value.toString(), listOf("original", "A", "B", "C"),
+                f.runtime.durable.currentMessages().map { it.toText() })
+            assertTrue(f.runtime.inputQueue.value.items.isEmpty())
+            assertNull(f.runtime.currentWorker())
+            assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.isEmpty())
+        }
+    }
+
+    @Test fun `queued precommit failure retains stable message identity and resumes without duplicates`() = runTest {
+        fixture { f ->
+            var reject = true
+            coEvery { f.repository.commit(any()) } answers {
+                if (reject) throw java.io.IOException("queue transaction rejected")
+                true
+            }
+            val target = ConversationAssistantTarget(f.page.commandTarget, DEFAULT_ASSISTANT_ID)
+            f.turns.enqueueMessage(target, listOf(UIMessagePart.Text("B")), false, null)
+            f.turns.enqueueMessage(target, listOf(UIMessagePart.Text("C")), false, null)
+            val messages = f.runtime.inputQueue.value.items.map { it.userMessageId }
+            runCurrent()
+            assertEquals(listOf("original"), f.runtime.durable.currentMessages().map { it.toText() })
+            assertEquals(messages, f.runtime.inputQueue.value.items.map { it.userMessageId })
+            assertEquals(InputQueuePauseReason.REQUEST_FAILED, f.runtime.inputQueue.value.pauseReason)
+            assertTrue(f.errors.errors.value.any { it.detail.contains("queue transaction rejected") })
+            reject = false
+            f.turns.resumeInputQueue(target)
+            runCurrent()
+            assertEquals(listOf("original", "B", "C"), f.runtime.durable.currentMessages().map { it.toText() })
+            assertEquals(messages, f.runtime.durable.currentMessages().drop(1).map { it.id })
+            assertTrue(f.runtime.inputQueue.value.items.isEmpty())
+        }
+    }
+
+    @Test fun `stop before queued admission prevents dispatch until explicit resume`() = runTest {
+        fixture { f ->
+            val target = ConversationAssistantTarget(f.page.commandTarget, DEFAULT_ASSISTANT_ID)
+            f.turns.enqueueMessage(target, listOf(UIMessagePart.Text("B")), false, null)
+            f.application.stopGeneration(f.page.commandTarget)
+            f.turns.enqueueMessage(target, listOf(UIMessagePart.Text("C")), false, null)
+            runCurrent()
+            assertEquals(listOf("original"), f.runtime.durable.currentMessages().map { it.toText() })
+            assertEquals(2, f.runtime.inputQueue.value.items.size)
+            f.turns.resumeInputQueue(target)
+            runCurrent()
+            assertEquals(listOf("original", "B", "C"), f.runtime.durable.currentMessages().map { it.toText() })
         }
     }
 
@@ -975,7 +1530,7 @@ class ConversationCommandAccessTest {
 
     private inner class Fixture(test: TestScope) {
         val appScope = AppScope(StandardTestDispatcher(test.testScheduler))
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val scope = exampleEnterprisePackage().identity.scope
         val repository = mockk<ConversationRepository>()
         val settings = mockk<SettingsStore>()

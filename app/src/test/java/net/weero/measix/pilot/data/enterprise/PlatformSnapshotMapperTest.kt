@@ -409,7 +409,7 @@ class PlatformSnapshotMapperTest {
             PlatformSessionDetails(execution.connection, "dev_12345678-1234-4234-8234-123456789012", credential))
         store.commit(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY,
             session, version, identity.scope, identity))
-        val controller = EnterpriseSessionController(store) { 1000L }
+        val controller = EnterpriseSessionController(store, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
         controller.recover()
         val altered = candidate.copy(execution = candidate.execution.copy(snapshotHash = "sha256:" + "0".repeat(64)))
         try {

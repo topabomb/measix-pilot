@@ -17,6 +17,22 @@ import org.junit.Test
  */
 class TurnUsageTest {
     @Test
+    fun `missing usage after failure or cancellation uses current estimate and capacity`() {
+        for (outcome in listOf(ProviderRequestOutcome.FAILED, ProviderRequestOutcome.CANCELLED)) {
+            val accumulator = TurnUsageAccumulator.from(null)
+            accumulator.apply(completed(1, 100, 10, 0, 110, 5), 1000)
+            accumulator.recordRequestStarted(250, 2000)
+            val closed = accumulator.apply(RequestUsageReducer(2).close(outcome, 5), 2000).usage
+            assertNull(closed.latestRequestContextTokens)
+            assertEquals(250L, closed.latestRequestEstimatedContextTokens)
+            assertEquals(2000L, closed.latestRequestContextCapacityTokens)
+            val next = accumulator.recordRequestStarted(300, null)
+            assertNull(next.latestRequestContextCapacityTokens)
+            assertEquals(300L, next.latestRequestEstimatedContextTokens)
+        }
+    }
+
+    @Test
     fun `turn accumulator sums independent provider requests exactly once`() {
         val accumulator = TurnUsageAccumulator.from(null)
         val first = completed(
@@ -302,6 +318,24 @@ class TurnUsageTest {
         val usage = accumulator.apply(completed(2, 20, 3, 0, 23, 5)).usage
         assertEquals(30L, usage.inputTokens)
         assertEquals(2, usage.observedProviderRequestCount)
+    }
+
+    @Test
+    fun `capacity remains paired with displayed context across requests`() {
+        val accumulator = TurnUsageAccumulator.from(null)
+        accumulator.recordRequestStarted(90, 1000)
+        accumulator.apply(completed(1, 100, 10, 0, 110, 5), 1000)
+        val active = accumulator.recordRequestStarted(150, 2000)
+        assertEquals(100L, active.latestRequestContextTokens)
+        assertEquals(1000L, active.latestRequestContextCapacityTokens)
+        assertEquals(150L, active.latestRequestEstimatedContextTokens)
+        val closed = accumulator.apply(completed(2, 200, 10, 0, 210, 5), 2000).usage
+        assertEquals(200L, closed.latestRequestContextTokens)
+        assertEquals(2000L, closed.latestRequestContextCapacityTokens)
+        accumulator.recordRequestStarted(250, null)
+        val unknown = accumulator.apply(completed(3, 0, 10, 0, 10, 5), null).usage
+        assertEquals(0L, unknown.latestRequestContextTokens)
+        assertNull(unknown.latestRequestContextCapacityTokens)
     }
 
     private fun completed(

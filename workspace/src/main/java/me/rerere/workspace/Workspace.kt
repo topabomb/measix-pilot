@@ -22,6 +22,12 @@ enum class WorkspaceStorageArea {
     LINUX,
 }
 
+sealed interface WorkspaceGuestPath {
+    data class Available(val path: String) : WorkspaceGuestPath
+    data class Unavailable(val reason: Reason) : WorkspaceGuestPath
+    enum class Reason { MOUNT_SHADOWED, SYMBOLIC_PARENT }
+}
+
 enum class RootfsInstallStage {
     DOWNLOADING,
     EXTRACTING,

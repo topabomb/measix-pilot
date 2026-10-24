@@ -2,8 +2,6 @@ package net.weero.measix.pilot.data.ai.tools.local
 
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
-import me.rerere.ai.core.ToolArgumentsException
-import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.service.runtime.ToolLivePhase
@@ -18,8 +16,7 @@ import kotlin.uuid.Uuid
 class ChartDisplayToolTest {
     private val valid = """{"style":"bar","series":[{"values":[-3,0,8]}]}"""
 
-    @Test fun `invalid chart is rejected by pure parsing before interaction`() {
-        val tool = buildChartDisplayTool()
+    @Test fun `invalid historical chart is rejected before rendering`() {
         val invalid = listOf(
             """{"style":"line","series":[]}""",
             """{"style":"line","series":[{"values":[]}]}""",
@@ -35,7 +32,7 @@ class ChartDisplayToolTest {
             valid.replace("\"series\"", "\"title\":\"${"a".repeat(161)}\",\"series\""),
             """{"style":"scatter","y_axis":{"scale":"log","max":0},"series":[{"points":[{"x":1,"y":2}]}]}""",
         )
-        invalid.forEach { raw -> assertThrows(raw.take(150), ToolArgumentsException::class.java) { tool.parseArguments(raw, Json) } }
+        invalid.forEach { raw -> assertThrows(raw.take(150), IllegalArgumentException::class.java) { ChartSpec.parse(Json.parseToJsonElement(raw)) } }
     }
 
     @Test fun `bounded scales preserve zero baseline and represent constant and extreme accepted domains`() {
@@ -93,11 +90,8 @@ class ChartDisplayToolTest {
     }
 
     @Test fun `only committed completed result renders the validated chart`() = runTest {
-        val tool = buildChartDisplayTool()
-        assertEquals(ToolOutputPolicy.PRESERVE, tool.outputPolicy)
-        val args = tool.parseArguments(valid, Json)
-        val result = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", tool.name, valid,
-            output = tool.execute(args), resultStatus = ToolResultStatus.COMPLETED)
+        val result = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", "chart_display", valid,
+            output = listOf(UIMessagePart.Text("""{"status":"completed","message":"Chart displayed to the user."}""")), resultStatus = ToolResultStatus.COMPLETED)
         for (phase in ToolLivePhase.entries) {
             if (phase == ToolLivePhase.COMPLETED) assertNotNull(completedChart(result, phase))
             else assertNull(completedChart(result, phase))
@@ -107,8 +101,8 @@ class ChartDisplayToolTest {
         assertNull(completedChart(result.copy(input = "broken"), ToolLivePhase.COMPLETED))
         assertNull(completedChart(result.copy(output = listOf(UIMessagePart.Text("{}"))), ToolLivePhase.COMPLETED))
         val spaced = " ".repeat(70_000) + valid
-        tool.parseArguments(spaced, Json)
+        ChartSpec.parse(Json.parseToJsonElement(spaced))
         assertNotNull(completedChart(result.copy(input = spaced), ToolLivePhase.COMPLETED))
-        tool.parseArguments(valid.replace("[-3,0,8]", "[0,0.0,-0,0e-999]"), Json)
+        ChartSpec.parse(Json.parseToJsonElement(valid.replace("[-3,0,8]", "[0,0.0,-0,0e-999]")))
     }
 }

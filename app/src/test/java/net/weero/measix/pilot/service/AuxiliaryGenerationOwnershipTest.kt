@@ -244,7 +244,7 @@ class AuxiliaryGenerationOwnershipTest {
 
     private inner class Fixture(test: TestScope) {
         val appScope = AppScope(StandardTestDispatcher(test.testScheduler))
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val repository = mockk<ConversationRepository>()
         val settings = mockk<SettingsStore>()
         val artifacts = mockk<ArtifactStore>()

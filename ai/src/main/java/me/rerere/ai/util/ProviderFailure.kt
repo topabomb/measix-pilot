@@ -1,5 +1,7 @@
 package me.rerere.ai.util
 
+import me.rerere.common.util.ThrowableDiagnosticText
+
 import java.io.InterruptedIOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -229,6 +231,7 @@ private enum class NetworkKind {
 }
 
 private fun collectFailureSignals(error: Throwable): FailureSignals {
+    val diagnostics = ThrowableDiagnosticText(error)
     val texts = ArrayList<String>()
     val classNames = ArrayList<String>()
     var statusCode: Int? = null
@@ -253,7 +256,7 @@ private fun collectFailureSignals(error: Throwable): FailureSignals {
                 else -> null
             }
         }
-        current.message?.trim()?.takeIf { it.isNotEmpty() }?.let { message ->
+        diagnostics.message(current)?.trim()?.takeIf { it.isNotEmpty() }?.let { message ->
             texts += message
             if (statusCode == null) {
                 HTTP_STATUS_IN_MESSAGE.find(message)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {

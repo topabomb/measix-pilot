@@ -13,6 +13,7 @@ def test_load_glossary_limits_without_accessing_credentials(tmp_path, monkeypatc
 modules:
   - name: app
     res_path: res
+    keep_keys: [dynamic_label]
 languages:
   - code: values
     name: English
@@ -31,6 +32,7 @@ translation:
     getenv = os.getenv
     monkeypatch.setattr("config.os.getenv", lambda name, default=None: "" if name in ("OPENAI_API_KEY", "OPENAI_BASE_URL") else getenv(name, default))
     config = Config.load(path)
+    assert config.modules[0].keep_keys == ["dynamic_label"]
     assert config.openai_api_key == ""
     assert (config.concurrency, config.retries, config.batch_size) == (2, 4, 3)
     assert config.glossary == {"values-zh": {"prompt": "提示词"}}
@@ -52,3 +54,10 @@ def test_repository_configuration_only_lists_existing_modules_and_five_languages
     for module in data["modules"]:
         assert (root / module["res_path"]).is_dir()
         assert all(list(root.glob(pattern)) for pattern in module["source_patterns"])
+
+
+@pytest.mark.parametrize("keys", ["not a list", [123], [""]])
+def test_invalid_dynamic_keep_list_is_rejected(config, keys):
+    config.modules[0].keep_keys = keys
+    with pytest.raises(ValueError, match="keep_keys"):
+        config.validate()

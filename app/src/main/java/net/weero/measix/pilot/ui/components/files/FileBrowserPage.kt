@@ -83,7 +83,6 @@ import net.weero.measix.pilot.ui.components.files.fileType
 import net.weero.measix.pilot.ui.components.files.MediaPreview
 import net.weero.measix.pilot.service.files.MediaPreviewSource
 import net.weero.measix.pilot.ui.components.files.PdfPreview
-import net.weero.measix.pilot.ui.components.richtext.RestrictedMarkdown
 import net.weero.measix.pilot.ui.components.files.FileTextEditor
 import net.weero.measix.pilot.ui.components.files.fileTextFormat
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -815,12 +814,9 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
     LaunchedEffect(result) {
         if (result?.outcome == BrowserOutcome.SUCCEEDED) finish()
     }
-    val images = remember(handle, file) { mutableSetOf<String>() }
-    val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = remember(handle, file) { { reference ->
-        val path = handle.relativeImage(file.path, reference)
-        synchronized(images) { require(path in images || images.size < 20) { "workspace_markdown_image_limit" }; images += path }
-        handle.imageSource(BrowserFile(path, false, null, null, null), 4L * 1024 * 1024)
-    } }
+    val renderedFile = remember(handle, file) {
+        if (isRenderedFile(file.name)) handle.renderedSource(file.path, vm.source.changes) else null
+    }
     fun save(destination: String) {
         val original = document ?: return
         if (saving || state.running || loading) return
@@ -839,10 +835,10 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
             })
         return
     }
-    if (image || (type == FileType.SVG && !sourceView && !editing && document != null)) {
+    if (image) {
         val source = remember(file, handle) { handle.imageSource(file) }
-        ImagePreviewDialog(listOf(source), onDismissRequest = { if (type == FileType.SVG) sourceView = true else onClose() },
-            showSaveAction = type != FileType.SVG,
+        ImagePreviewDialog(listOf(source), onDismissRequest = onClose,
+            showSaveAction = true,
             onInfoRetry = { handle.refresh() }, extraActions = listOf(
             net.weero.measix.pilot.ui.components.ui.ImagePreviewAction(HugeIcons.SquareArrowUpRight,
                 stringResource(R.string.remote_workspace_open_external)) { _, _ -> if (!state.running) onShare(true) },
@@ -859,7 +855,7 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
     Scaffold(topBar = { TopAppBar(title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium) },
         navigationIcon = { IconButton({ close() }, enabled = !saving) { Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back)) } },
         actions = {
-            if (document != null && !editing && (markdown || type == FileType.SVG)) TextButton({ sourceView = !sourceView }) {
+            if (document != null && !editing && isRenderedFile(file.name)) TextButton({ sourceView = !sourceView }) {
                 Text(stringResource(if (sourceView) R.string.file_preview_rendered else R.string.file_preview_source))
             }
             if (document != null && !editing) Tooltip(tooltip = { Text(stringResource(R.string.edit)) }) {
@@ -905,12 +901,8 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
             }
             if (editing && document?.file?.versioned == false) Text(stringResource(R.string.remote_workspace_no_version))
             when {
-                document != null && markdown && !editing && !sourceView -> RestrictedMarkdown(requireNotNull(document).content.text,
-                    Modifier.weight(1f).verticalScroll(rememberScrollState()), imageResolver) { uri ->
-                    scope.launch { try { if (handle.isValid()) context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri))) }
-                    catch (cancelled: CancellationException) { throw cancelled }
-                    catch (failure: Exception) { error = failure.userVisibleDiagnostic() } }
-                }
+                document != null && isRenderedFile(file.name) && !editing && !sourceView -> FileDocumentPreview(
+                    requireNotNull(renderedFile), document.content.text, file.name, Modifier.weight(1f).fillMaxWidth())
                 document != null -> FileTextEditor(
                     state = editor,
                     modifier = Modifier.weight(1f).fillMaxWidth(),

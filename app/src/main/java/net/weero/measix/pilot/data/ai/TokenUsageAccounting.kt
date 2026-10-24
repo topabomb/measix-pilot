@@ -168,11 +168,14 @@ internal class TurnUsageAccumulator private constructor(
     fun nextRequestOrdinal(): Int = Math.addExact(lastAppliedOrdinal, 1)
 
     /** 请求发出前更新最终请求投影的估算长度；不把尚未关闭的请求计入累计值。 */
-    fun recordRequestStarted(estimatedContextTokens: Long): TokenUsage {
+    fun recordRequestStarted(estimatedContextTokens: Long, contextCapacityTokens: Long? = null): TokenUsage {
         require(estimatedContextTokens >= 0) { "estimated context tokens must be non-negative" }
+        require(contextCapacityTokens == null || contextCapacityTokens > 0) { "model_context_length_must_be_positive" }
         return updateSummary { baseline ->
             baseline.copy(
                 latestRequestEstimatedContextTokens = estimatedContextTokens,
+                latestRequestContextCapacityTokens = if (baseline.latestRequestContextTokens != null)
+                    baseline.latestRequestContextCapacityTokens else contextCapacityTokens,
                 semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION,
             )
         }
@@ -189,11 +192,12 @@ internal class TurnUsageAccumulator private constructor(
         }
     }
 
-    fun apply(request: CompletedRequestUsage): AppliedTurnUsage {
+    fun apply(request: CompletedRequestUsage, contextCapacityTokens: Long? = null): AppliedTurnUsage {
+        require(contextCapacityTokens == null || contextCapacityTokens > 0) { "model_context_length_must_be_positive" }
         check(request.requestOrdinal == nextRequestOrdinal()) {
             "unexpected request usage ordinal: expected=${nextRequestOrdinal()}, actual=${request.requestOrdinal}"
         }
-        val updated = aggregate(summary, request)
+        val updated = aggregate(summary, request, contextCapacityTokens)
         summary = updated.usage
         lastAppliedOrdinal = request.requestOrdinal
         return updated
@@ -202,6 +206,7 @@ internal class TurnUsageAccumulator private constructor(
     private fun aggregate(
         baseline: TokenUsage?,
         request: CompletedRequestUsage,
+        contextCapacityTokens: Long?,
     ): AppliedTurnUsage {
         var coreOverflowed = false
         var inputOverflowed = false
@@ -311,6 +316,7 @@ internal class TurnUsageAccumulator private constructor(
             latestRequestCacheReadInputTokens = snapshot?.cacheReadInputTokens,
             latestRequestOutputDurationMillis = requestOutputDurationMillis,
             latestRequestEstimatedContextTokens = baseline?.latestRequestEstimatedContextTokens,
+            latestRequestContextCapacityTokens = contextCapacityTokens,
             latestRequestTimeToFirstOutputMillis = request.timeToFirstOutputMillis
                 ?: baseline?.latestRequestTimeToFirstOutputMillis,
             // 命中率与吞吐率只属于最近一次已关闭请求：缺字段写 null，不能继承上一请求。

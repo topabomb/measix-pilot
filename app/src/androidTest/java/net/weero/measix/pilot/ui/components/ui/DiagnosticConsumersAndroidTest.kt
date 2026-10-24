@@ -13,7 +13,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk

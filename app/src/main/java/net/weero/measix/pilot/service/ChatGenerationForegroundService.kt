@@ -9,6 +9,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -54,14 +55,17 @@ class ChatGenerationForegroundService : Service() {
     private val applicationService: ConversationApplicationService by inject()
     private val appScope: AppScope by inject()
 
-    private val serviceScope = CoroutineScope(SupervisorJob())
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var monitorJob: Job? = null
+    private var observation: Any? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        publishForeground()
-        startMonitoring()
+        val token = Any()
+        observation = token
+        monitorJob?.cancel()
+        if (publishForeground(startId)) startMonitoring(startId, token)
         // 进程被杀后不自动重启：重新拉起会把"没有活跃生成"伪装成需要保活
         return START_NOT_STICKY
     }
@@ -69,33 +73,38 @@ class ChatGenerationForegroundService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) {
         // Android 15+ dataSync 共享配额：系统只给数秒 stopSelf，不能先等待投影或网络取消。
         // 停止 turn 的 command 交给 AppScope 继续收口；service 本身立即释放平台配额。
+        observation = null
+        monitorJob?.cancel()
         stopSelf(startId)
         stopProjectedGenerations()
     }
 
     override fun onDestroy() {
+        observation = null
         monitorJob?.cancel()
         serviceScope.cancel()
         super.onDestroy()
     }
 
-    private fun startMonitoring() {
-        if (monitorJob?.isActive == true) return
+    private fun startMonitoring(startId: Int, token: Any) {
         monitorJob = serviceScope.launch {
             queryService.conversationActivities()
                 .map { activities -> shouldKeepGenerationForeground(activities) }
                 .distinctUntilChanged()
                 .collect { keepAlive ->
+                    // Lifecycle callbacks and projection consumption share Main. A retired observer
+                    // must never use a newer start's ID, including when the system has queued it.
+                    if (observation !== token) return@collect
                     if (!keepAlive) {
-                        stopSelf()
+                        stopSelfResult(startId)
                     } else {
-                        publishForeground()
+                        publishForeground(startId)
                     }
                 }
         }
     }
 
-    private fun publishForeground() {
+    private fun publishForeground(startId: Int): Boolean {
         // 保活通知只表达"正在后台继续生成"，不承载内容与进度；
         // 流式/完成通知仍由 ChatNotificationManager 拥有，事件不得反向推断生成是否活跃。
         val config = NotificationConfig().apply {
@@ -125,8 +134,10 @@ class ChatGenerationForegroundService : Service() {
             // 不能取消或伪装 turn 失败；生成仍由 Runtime 按现有终态收口。
             Log.w(TAG, "foreground service launch rejected by the platform", security)
             GenerationForegroundDiagnostics.reportRejected(security)
-            stopSelf()
+            stopSelfResult(startId)
+            return false
         }
+        return true
     }
 
     private fun stopProjectedGenerations() {

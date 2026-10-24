@@ -214,6 +214,7 @@ android {
         buildConfig = true
     }
     androidResources {
+        localeFilters += listOf("en", "zh", "ja", "ko", "ko-rKR", "ru")
         generateLocaleConfig = true
     }
     packaging {
@@ -266,8 +267,15 @@ ksp {
 }
 
 androidComponents.finalizeDsl {
+    // Record original methods; formal Release keeps optimization enabled.
+    it.buildTypes.findByName("nonMinifiedRelease")?.optimization?.enable = false
+    it.sourceSets.getByName("nonMinifiedRelease").apply {
+        kotlin.srcDir("$projectDir/src/profileFixture/java")
+        manifest.srcFile("$projectDir/src/nonMinifiedRelease/AndroidManifest.xml")
+    }
     // Baseline Profile copies release source sets during DSL finalization; configure the workload after that copy.
     it.sourceSets.getByName("benchmarkRelease").apply {
+        kotlin.srcDir("$projectDir/src/profileFixture/java")
         assets.srcDirs("$projectDir/schemas")
         manifest.srcFile("$projectDir/src/benchmarkRelease/AndroidManifest.xml")
     }
@@ -358,10 +366,12 @@ dependencies {
     // zxing
     implementation(libs.zxing.core)
 
-    // quickie (qrcode scanner)
-    implementation(libs.quickie.bundled)
-    implementation(libs.barcode.scanning)
+    // Shared CameraX QR scanner; Exif is also used by attachment normalization.
     implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.compose)
+    implementation(libs.androidx.exifinterface)
 
     // Room
     implementation(libs.androidx.room.runtime)
@@ -376,9 +386,6 @@ dependencies {
 
     // Apache Commons Text
     implementation(libs.commons.text)
-
-    // Toast (Sonner)
-    implementation(libs.sonner)
 
     // Reorderable (https://github.com/Calvin-LL/Reorderable/)
     implementation(libs.reorderable)
@@ -420,7 +427,6 @@ dependencies {
     implementation(project(":material3"))
     implementation(project(":workspace"))
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar"))))
-    implementation(kotlin("reflect"))
 
     // Leak Canary
     // debugImplementation(libs.leakcanary.android)
@@ -430,6 +436,7 @@ dependencies {
     testImplementation(libs.mockk)
     testImplementation("io.mockk:mockk-agent-jvm:1.14.5")
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(kotlin("reflect")) // Architecture tests inspect Kotlin member contracts.
     testImplementation(libs.kotlinx.serialization.json)
     // SLF4J simple for JVM tests: MockK uses SLF4J, but slf4j-android provider
     // cannot initialize in JVM test context. slf4j-simple provides a lightweight fallback.

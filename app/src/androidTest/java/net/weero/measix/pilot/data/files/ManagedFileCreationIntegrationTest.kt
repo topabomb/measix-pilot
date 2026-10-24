@@ -76,6 +76,25 @@ class ManagedFileCreationIntegrationTest {
     private lateinit var preferences: DataStore<Preferences>
     private lateinit var settingsCoordinator: ArtifactSettingsCoordinator
 
+    @Test
+    fun selectedGalleryIdsRemainScopedAndReflectExternalDeletion() = runBlocking {
+        withContext(Dispatchers.IO) {
+            val dao = database.genMediaDao()
+            val enterprise = ConfigurationScope.Enterprise(
+                me.rerere.common.configuration.EnterpriseAuthority("gallery-test"), "user")
+            val personalId = dao.insert(GenMediaEntity(path = "images/personal.png", modelId = "m", prompt = "p", createAt = 1)).toInt()
+            val enterpriseId = dao.insert(GenMediaEntity(path = "images/enterprise.png", modelId = "m", prompt = "p", createAt = 1,
+                scope = enterprise)).toInt()
+            val media = GeneratedMediaStore(root, GenMediaRepository(dao), store)
+            val selected = setOf(personalId, enterpriseId)
+            assertEquals(setOf(personalId), media.existingIds(ConfigurationScope.Personal, selected))
+            assertEquals(setOf(enterpriseId), media.existingIds(enterprise, selected))
+            dao.delete(personalId)
+            assertTrue(media.existingIds(ConfigurationScope.Personal, selected).isEmpty())
+            assertEquals(setOf(enterpriseId), media.existingIds(enterprise, selected))
+        }
+    }
+
     @Before
     fun setUp() {
         val application = ApplicationProvider.getApplicationContext<Context>()
@@ -118,7 +137,7 @@ class ManagedFileCreationIntegrationTest {
     @OptIn(coil3.annotation.DelicateCoilApi::class)
     @Test
     fun mountedInputThumbnailRecoversWhenRejectedSubmissionReturnsOwnership() {
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "input-painter")))
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "input-painter")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val selected = runBlocking { sessions.recover(); requireNotNull(sessions.observeSelectedRealmSelection().first()) }
         val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selected.access, selected.revision) {}
         val draft = ArtifactUseCase(store, ApplicationRecoveryGate().apply { ready() }, sessions).openDraftScope(view)
@@ -191,9 +210,9 @@ class ManagedFileCreationIntegrationTest {
 
     @Test fun renderedDocumentsReadOnlyTheirSourceAndNeverShareBrowserStorage() = runBlocking {
         store.ensureReferenceProjection()
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "rendered-session")))
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "rendered-session")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         sessions.recover()
-        val files = FileManagementApplicationService(store, GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store),
+        val files = FileManagementApplicationService(io.mockk.mockk(), store, GeneratedMediaStore(root, GenMediaRepository(database.genMediaDao()), store),
             ApplicationRecoveryGate().apply { ready() }, sessions)
         val own = store.createFromBytes(ConfigurationScope.Personal, pngBytes(), "configuration.png", "image/png", origin = ArtifactOrigin.USER)
         val foreign = store.createFromBytes(scopeFor(1), pngBytes(), "foreign.png", "image/png", origin = ArtifactOrigin.USER)

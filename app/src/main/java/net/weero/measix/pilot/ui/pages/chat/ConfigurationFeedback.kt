@@ -20,6 +20,7 @@ internal fun AssistantPreferenceChange.affectsNextSend(): Boolean = when (this) 
             enableWebSearch != edited.enableWebSearch || builtInSearch != edited.builtInSearch ||
             workspaceId != edited.workspaceId || modeInjectionIds != edited.modeInjectionIds ||
             enabledSkills != edited.enabledSkills || enableTimeReminder != edited.enableTimeReminder ||
+            timeReminderIntervalMinutes != edited.timeReminderIntervalMinutes ||
             allowConversationSystemPrompt != edited.allowConversationSystemPrompt ||
             allowConversationPromptInjection != edited.allowConversationPromptInjection
     }

@@ -248,3 +248,20 @@ async def test_explicitly_revised_generated_draft_becomes_manual(config, monkeyp
         assert not screen.automatic_sources
         screen.action_save_all()
         assert StringsXmlParser.parse(target)["a"] == "manual"
+
+
+async def test_failed_reference_refresh_removes_stale_deletion_advice(config, monkeypatch):
+    seed(config, "values", '<resources><string name="unused">A</string></resources>')
+    screen, notices = create_screen(config, monkeypatch)
+    async with TableApp(screen).run_test() as pilot:
+        await pilot.pause()
+        assert screen.entries[0].is_dead
+        screen.action_toggle_dead_filter()
+        source = config.project_root / "library" / "src" / "main" / "Use.kt"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"\xff")
+        screen.load_entries()
+        assert not screen.entries[0].is_dead
+        assert not screen.show_dead_only
+        assert any("scan unavailable" in notice and str(source) in notice for notice in notices)
+        assert not screen.load_failed  # Editing readable resource XML remains available.

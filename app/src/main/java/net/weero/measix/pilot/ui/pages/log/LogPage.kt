@@ -60,7 +60,7 @@ import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
 import net.weero.measix.pilot.utils.JsonInstantPretty
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

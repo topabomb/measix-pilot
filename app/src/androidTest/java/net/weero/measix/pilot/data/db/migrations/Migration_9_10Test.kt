@@ -19,6 +19,7 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.db.AppDatabase
+import net.weero.measix.pilot.data.db.createAppDatabase
 import net.weero.measix.pilot.data.db.dao.ModelContextConflictException
 import net.weero.measix.pilot.data.db.entity.ConversationEntity
 import net.weero.measix.pilot.data.db.entity.MessageNodeEntity
@@ -362,18 +363,14 @@ class Migration_9_10Test {
         artifactStore = mockk<ArtifactStore>(relaxed = true),
     )
 
-    /** 真实旧版本到当前版本的迁移产物，再按生产前提启用 FK，用于验证当前 schema 上的装载语义。 */
+    /** Historical schema validation followed by the production driver, migration chain and callbacks. */
     private suspend fun withMigratedToCurrentSchemaDatabase(block: suspend (AppDatabase) -> Unit) {
         val name = "migration-v9-current-repository-load"
         context.deleteDatabase(name)
         helper.createDatabase(name, 9).close()
         helper.runMigrationsAndValidate(name, 10, true, Migration_9_10).close()
-        val db = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(Migration_9_10, Migration_10_11, Migration_11_12, Migration_12_13, Migration_13_14, Migration_14_15, Migration_15_16)
-            .allowMainThreadQueries()
-            .build()
+        val db = createAppDatabase(context, name)
         try {
-            db.openHelper.writableDatabase.execSQL("PRAGMA foreign_keys = ON")
             assertEquals(net.weero.measix.pilot.data.db.APP_DATABASE_VERSION, db.openHelper.readableDatabase.version)
             block(db)
         } finally {

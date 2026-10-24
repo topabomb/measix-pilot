@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.components.richtext
 
+import net.weero.measix.pilot.utils.MarkdownSource
+import net.weero.measix.pilot.utils.prepareMarkdownSource
+import net.weero.measix.pilot.utils.markdownFence
 import android.content.ClipData
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -119,49 +122,12 @@ private val parser by lazy {
     MarkdownParser(flavour)
 }
 
-private val INLINE_LATEX_REGEX = Regex("\\\\\\((.+?)\\\\\\)")
-private val BLOCK_LATEX_REGEX = Regex("\\\\\\[(.+?)\\\\\\]", RegexOption.DOT_MATCHES_ALL)
 val THINKING_REGEX = Regex("<think>([\\s\\S]*?)(?:</think>|$)", RegexOption.DOT_MATCHES_ALL)
-private val CODE_BLOCK_REGEX = Regex("```[\\s\\S]*?```|`[^`\n]*`", RegexOption.DOT_MATCHES_ALL)
 private val BREAK_LINE_REGEX = Regex("(?i)<br\\s*/?>")
-private val LATEX_BLOCK_LINE_BREAK_REGEX = Regex("""[ \t]*\r?\n[ \t]*""")
 
-// 预处理markdown内容
-private fun preProcess(content: String): String {
-    // 先找出所有代码块的位置
-    val codeBlocks = mutableListOf<IntRange>()
-    CODE_BLOCK_REGEX.findAll(content).forEach { match ->
-        codeBlocks.add(match.range)
-    }
+internal val LocalMarkdownSource = androidx.compose.runtime.staticCompositionLocalOf<MarkdownSource?> { null }
 
-    // 检查位置是否在代码块内
-    fun isInCodeBlock(position: Int): Boolean {
-        return codeBlocks.any { range -> position in range }
-    }
-
-    // 替换行内公式 \( ... \) 到 $ ... $，但跳过代码块内的内容
-    var result = INLINE_LATEX_REGEX.replace(content) { matchResult ->
-        if (isInCodeBlock(matchResult.range.first)) {
-            matchResult.value // 保持原样
-        } else {
-            "$" + matchResult.groupValues[1] + "$"
-        }
-    }
-
-    // 替换块级公式 \[ ... \] 到 $$ ... $$，但跳过代码块内的内容
-    result = BLOCK_LATEX_REGEX.replace(result) { matchResult ->
-        if (isInCodeBlock(matchResult.range.first)) {
-            matchResult.value // 保持原样
-        } else {
-            val formula = matchResult.groupValues[1]
-                .trim()
-                .replace(LATEX_BLOCK_LINE_BREAK_REGEX, " ")
-            "$$" + formula + "$$"
-        }
-    }
-
-    return result
-}
+internal val LocalMarkdownHtmlAllowed = androidx.compose.runtime.staticCompositionLocalOf { true }
 
 @Preview(showBackground = true)
 @Composable
@@ -214,6 +180,7 @@ private fun MarkdownPreview() {
 
 private data class MarkdownParseResult(
     val preprocessed: String,
+    val source: MarkdownSource,
     val astTree: ASTNode,
     val hasHtml: Boolean,
 )
@@ -224,9 +191,10 @@ private fun ASTNode.containsHtml(): Boolean {
 }
 
 private fun parseMarkdown(content: String): MarkdownParseResult {
-    val preprocessed = preProcess(content)
+    val source = prepareMarkdownSource(content)
+    val preprocessed = source.text
     val astTree = parser.buildMarkdownTreeFromString(preprocessed)
-    return MarkdownParseResult(preprocessed, astTree, astTree.containsHtml())
+    return MarkdownParseResult(preprocessed, source, astTree, astTree.containsHtml())
 }
 
 /** Text-only previews share the Markdown parser and inline styles, without media or link actions. */
@@ -291,11 +259,16 @@ fun MarkdownBlock(
     if (source != null) {
         RichTextHost(source) { MarkdownBlock(content, modifier, style, onClickCitation, allowHtml = allowHtml) }
     } else {
-        CompositionLocalProvider(androidx.compose.ui.platform.LocalUriHandler provides
-            (LocalRichTextActions.current?.uriHandler ?: UnavailableContentUriHandler)) {
-            CompositionLocalProvider(LocalMarkdownHtmlAllowed provides allowHtml) {
-                MarkdownContent(content, modifier, style, onClickCitation)
-            }
+        val inheritedPreferences = LocalCodePreviewPreferences.current
+        val preferences = inheritedPreferences ?: remember { CodePreviewPreferences() }
+        if (inheritedPreferences == null) preferences.observe(content, streaming = true)
+        CompositionLocalProvider(
+            LocalCodePreviewPreferences provides preferences,
+            androidx.compose.ui.platform.LocalUriHandler provides
+                (LocalRichTextActions.current?.uriHandler ?: UnavailableContentUriHandler),
+            LocalMarkdownHtmlAllowed provides allowHtml,
+        ) {
+            MarkdownContent(content, modifier, style, onClickCitation)
         }
     }
 }
@@ -324,14 +297,12 @@ private fun MarkdownContent(content: String, modifier: Modifier, style: TextStyl
             onClickCitation = onClickCitation,
         )
     } else {
-        ProvideTextStyle(style) {
-            Column(
-                modifier = modifier.padding(horizontal = MarkdownContentInset)
-            ) {
-                data.astTree.children.fastForEach { child ->
-                    MarkdownNode(
-                        node = child, content = data.preprocessed, onClickCitation = onClickCitation
-                    )
+        CompositionLocalProvider(LocalMarkdownSource provides data.source) {
+            ProvideTextStyle(style) {
+                Column(modifier = modifier.padding(horizontal = MarkdownContentInset)) {
+                    data.astTree.children.fastForEach { child ->
+                        MarkdownNode(node = child, content = data.preprocessed, onClickCitation = onClickCitation)
+                    }
                 }
             }
         }
@@ -657,30 +628,18 @@ private fun MarkdownNode(
 
         // 代码块
         MarkdownElementTypes.CODE_FENCE -> {
-            // 这里不能直接取CODE_FENCE_CONTENT的内容，因为首行indent没有包含在内
-            // 因此，需要往上找到最后一个EOL元素，用它来作为代码块的起始offset
-            val contentStartIndex = node.children.indexOfFirst { it.type == MarkdownTokenTypes.CODE_FENCE_CONTENT }
-            if (contentStartIndex == -1) return
-            val eolElement =
-                node.children.subList(0, contentStartIndex).findLast { it.type == MarkdownTokenTypes.EOL } ?: return
-            val codeContentStartOffset = eolElement.endOffset
-            val codeContentEndOffset =
-                node.children.findLast { it.type == MarkdownTokenTypes.CODE_FENCE_CONTENT }?.endOffset ?: return
-            val code = content.substring(
-                codeContentStartOffset, codeContentEndOffset
-            ).trimIndent()
-
-            val language =
-                node.findChildOfTypeRecursive(MarkdownTokenTypes.FENCE_LANG)?.getTextInNode(content) ?: "plaintext"
-            val hasEnd = node.findChildOfTypeRecursive(MarkdownTokenTypes.CODE_FENCE_END) != null
+            val source = LocalMarkdownSource.current ?: prepareMarkdownSource(content)
+            val fence = markdownFence(node, source)
 
             HighlightCodeBlock(
-                code = code,
-                language = language,
+                code = fence.code,
+                originalCode = fence.originalCode,
+                blockIdentity = MarkdownFenceIdentity(fence.startOffset, fence.language),
+                language = fence.language,
                 modifier = Modifier
                     .padding(bottom = 4.dp)
                     .fillMaxWidth(),
-                completeCodeBlock = hasEnd
+                completeCodeBlock = fence.closed
             )
         }
 
@@ -1154,7 +1113,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                                         }
                                         .fillMaxSize()
                                         .clip(CircleShape)
-                                        .background(colorScheme.tertiaryContainer.copy(0.2f)),
+                                        .background(colorScheme.tertiaryContainer),
                                     contentAlignment = Alignment.Center) {
                                     Text(
                                         text = domain,
@@ -1164,7 +1123,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                                             lineHeight = 10.sp,
                                             fontFamily = JetbrainsMono,
                                             color = colorScheme.onTertiaryContainer,
-                                            fontWeight = FontWeight.Thin
+                                            fontWeight = FontWeight.Medium
                                         ),
                                     )
                                 }

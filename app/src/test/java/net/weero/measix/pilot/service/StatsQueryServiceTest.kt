@@ -34,7 +34,7 @@ class StatsQueryServiceTest {
     @Test
     fun `expiry during aggregation does not return enterprise counts`() = runTest {
         var now = 1000L
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
         val ready = sessions.enrollFixture(exampleEnterprisePackage())
         val access = sessions.captureSelectedRealmAccess()
         val conversationDao = mockk<ConversationDAO>()
@@ -79,7 +79,7 @@ class StatsQueryServiceTest {
         )
 
         val result = StatsQueryService(conversationDao, messageNodeDao, settingsStore,
-            EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())),
+            EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))),
             ApplicationRecoveryGate().apply { ready() })
             .load(RealmAccess.Personal, LocalDate.of(2026, 1, 1))
 

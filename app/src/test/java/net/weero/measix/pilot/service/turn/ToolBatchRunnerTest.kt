@@ -46,6 +46,76 @@ import org.junit.Test
  * 契约拒绝只落失败结果不建执行事实、暂停经 [TurnPause] 交回且不经流式通道、审批派生与恢复恰好一次。
  */
 class ToolBatchRunnerTest {
+    @Test fun `execution duration excludes preparation and started commit and measures normal failures`() = runTest {
+        for (fails in listOf(false, true)) {
+            val nanos = java.util.concurrent.atomic.AtomicLong(10_000_000_000L)
+            val harness = createProviderHarness(nanoTime = nanos::get)
+            val checkpoints = mutableListOf<TurnCheckpoint>()
+            val tool = Tool(name = "duration", description = "duration",
+                interactionRequirement = { ToolInteractionRequirement.Approval }, execute = {
+                nanos.addAndGet(234_000_000L)
+                if (fails) throw java.io.IOException("execution failed")
+                listOf(UIMessagePart.Text("ok"))
+            })
+            val call = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", tool.name, "{}",
+                interactionState = ToolInteractionState.Approved)
+            harness.handler.run(turnRunInputsFixture(conversationId = Uuid.random(), settings = harness.settings,
+                model = harness.model, mediaCapabilities = RequestMediaCapabilities.NONE,
+                messages = listOf(UIMessage.user("run"), UIMessage(role = MessageRole.ASSISTANT, parts = listOf(call))),
+                assistant = harness.assistant, promptInputs = testPromptInputs(), tools = listOf(tool), maxSteps = 2,
+                onCheckpoint = { checkpoint ->
+                    checkpoints += checkpoint
+                    if (checkpoint is net.weero.measix.pilot.service.runtime.ToolExecutionStartedCheckpoint) {
+                        assertEquals(null, checkpoint.toolExecution.durationMillis)
+                        nanos.addAndGet(90_000_000_000L)
+                    }
+                }))
+            val completed = requireNotNull(checkpoints.filterIsInstance<ToolResultCheckpoint>().single().toolExecution) {
+                "An approved execution must publish its terminal execution fact"
+            }
+            assertEquals(234L, completed.durationMillis)
+            assertEquals(if (fails) ToolExecutionStatus.FAILED else ToolExecutionStatus.COMPLETED, completed.status)
+        }
+    }
+
+    @Test fun `started commit failure does not start execution timing`() = runTest {
+        var clockReads = 0
+        var executed = false
+        var startedCommitAttempted = false
+        val harness = createProviderHarness(nanoTime = { clockReads++; 0L })
+        val tool = Tool(name = "duration", description = "duration", execute = { executed = true; emptyList() })
+        val call = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", tool.name, "{}")
+        runCatching { harness.handler.run(turnRunInputsFixture(conversationId = Uuid.random(), settings = harness.settings,
+            model = harness.model, mediaCapabilities = RequestMediaCapabilities.NONE,
+            messages = listOf(UIMessage.user("run"), UIMessage(role = MessageRole.ASSISTANT, parts = listOf(call))),
+            assistant = harness.assistant, promptInputs = testPromptInputs(), tools = listOf(tool), maxSteps = 2,
+            onCheckpoint = { if (it is net.weero.measix.pilot.service.runtime.ToolExecutionStartedCheckpoint) {
+                startedCommitAttempted = true
+                error("commit failed")
+            } })) }
+        assertTrue(startedCommitAttempted)
+        assertFalse(executed)
+        assertEquals(0, clockReads)
+    }
+
+    @Test fun `cancelled execution leaves no guessed terminal duration`() = runTest {
+        val checkpoints = mutableListOf<TurnCheckpoint>()
+        var clockReads = 0
+        val harness = createProviderHarness(nanoTime = { clockReads++; 0L })
+        val tool = Tool(name = "duration", description = "duration", execute = {
+            throw kotlinx.coroutines.CancellationException("cancelled")
+        })
+        val call = UIMessagePart.Tool(Uuid.random(), Uuid.random(), "call", tool.name, "{}")
+        val failure = runCatching { harness.handler.run(turnRunInputsFixture(conversationId = Uuid.random(), settings = harness.settings,
+            model = harness.model, mediaCapabilities = RequestMediaCapabilities.NONE,
+            messages = listOf(UIMessage.user("run"), UIMessage(role = MessageRole.ASSISTANT, parts = listOf(call))),
+            assistant = harness.assistant, promptInputs = testPromptInputs(), tools = listOf(tool), maxSteps = 2,
+            onCheckpoint = checkpoints::add)) }.exceptionOrNull()
+        assertTrue(failure is kotlinx.coroutines.CancellationException)
+        assertEquals(1, clockReads)
+        assertTrue(checkpoints.filterIsInstance<ToolExecutionCheckpoint>().all { it.toolExecution?.durationMillis == null })
+        assertTrue(checkpoints.none { it is ToolResultCheckpoint })
+    }
     @Test fun `full client failure is committed with tool result survives reload and is excluded from the next request`() = runTest {
         val detail = "reading /workspace/resource.csv " + "x".repeat(500) + " retained-tail token=private-token"
         val tool = Tool(name = "failure_probe", description = "probe",
@@ -650,6 +720,7 @@ class ToolBatchRunnerTest {
                         checkpoints += checkpoint
                         val fact = (checkpoint as? net.weero.measix.pilot.service.runtime.ToolExecutionUpdatedCheckpoint)?.toolExecution
                         if (fact != null) {
+                            assertEquals(null, fact.durationMillis)
                             assertEquals(link.childConversationId.toString(), fact.childConversationId)
                             assertEquals(link.childTurnId.toString(), fact.childTurnId)
                             assertEquals(link.subAssistantRunId, fact.subAssistantRunId)
@@ -665,6 +736,7 @@ class ToolBatchRunnerTest {
                 .any { it.toolExecution?.childTurnId == link.childTurnId.toString() })
             if (!failCommit) {
                 val terminal = checkpoints.filterIsInstance<ToolResultCheckpoint>().last().toolExecution!!
+                assertTrue(terminal.durationMillis != null)
                 assertEquals(link.childTurnId.toString(), terminal.childTurnId)
                 assertEquals(link.subAssistantRunId, terminal.subAssistantRunId)
             }

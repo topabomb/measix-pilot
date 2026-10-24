@@ -15,7 +15,10 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -34,12 +37,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -70,11 +76,13 @@ sealed class ConversationListItem {
 }
 
 @Composable
-fun ColumnScope.ConversationList(
+fun ConversationList(
     currentConversationId: Uuid,
     conversations: LazyPagingItems<ConversationListItem>,
     conversationActivities: Map<Uuid, Set<ConversationActivity>>,
     listState: LazyListState,
+    header: @Composable () -> Unit,
+    footer: @Composable () -> Unit,
     modifier: Modifier = Modifier,
     onClick: (ConversationSummary) -> Unit = {},
     onDelete: (ConversationSummary) -> Unit = {},
@@ -84,88 +92,131 @@ fun ColumnScope.ConversationList(
     onMoveToFolder: (ConversationSummary) -> Unit = {}
 ) {
     var hasScrolledToCurrent by remember(currentConversationId) { mutableStateOf(false) }
-
-    LaunchedEffect(currentConversationId, conversations.itemCount, hasScrolledToCurrent) {
-        if (hasScrolledToCurrent) return@LaunchedEffect
-        val currentIndex = conversations.itemSnapshotList.items.indexOfFirst {
-            (it as? ConversationListItem.Item)?.conversation?.id == currentConversationId
+    BoxWithConstraints(modifier) {
+        val density = LocalDensity.current
+        var headerHeight by remember(maxWidth, density) { mutableIntStateOf(0) }
+        var footerHeight by remember(maxWidth, density) { mutableIntStateOf(0) }
+        val lineHeight = MaterialTheme.typography.bodyLarge.lineHeight
+        val minimumListHeight = with(density) {
+            2 * maxOf(48.dp.roundToPx(), (lineHeight.toPx() + 10.dp.toPx()).toInt())
         }
-        if (currentIndex >= 0) {
-            val isVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == currentIndex }
-            if (!isVisible) {
-                listState.scrollToItem(currentIndex)
-            }
-            hasScrolledToCurrent = true
+        val pinHeader = constraints.maxHeight - headerHeight - footerHeight >= minimumListHeight
+        var previouslyPinned by remember { mutableStateOf<Boolean?>(null) }
+        // Capture the old layout during composition, before moving the header changes measurement.
+        val layoutAnchor = remember(pinHeader) {
+            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index in 1..conversations.itemCount }
         }
-    }
-
-    LazyColumn(
-        state = listState,
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        if (conversations.itemCount == 0) {
-            item {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow
-                ) {
-                    Text(
-                        text = stringResource(id = R.string.chat_page_no_conversations),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
+        LaunchedEffect(pinHeader) {
+            val previous = previouslyPinned
+            previouslyPinned = pinHeader
+            if (previous != null && previous != pinHeader && layoutAnchor != null) {
+                listState.scrollToItem(layoutAnchor.index, maxOf(0, -layoutAnchor.offset))
             }
         }
+        LaunchedEffect(currentConversationId, conversations.itemSnapshotList, headerHeight, footerHeight) {
+            if (hasScrolledToCurrent || (pinHeader && (headerHeight == 0 || footerHeight == 0))) return@LaunchedEffect
+            val snapshot = conversations.itemSnapshotList
+            val loadedIndex = snapshot.items.indexOfFirst {
+                (it as? ConversationListItem.Item)?.conversation?.id == currentConversationId
+            }
+            if (loadedIndex >= 0) {
+                // The drawer header always has one slot, empty when fixed outside. Paging's
+                // loaded snapshot excludes leading placeholders; lazy item indices do not.
+                val currentIndex = snapshot.placeholdersBefore + loadedIndex + 1
+                val isVisible = listState.layoutInfo.visibleItemsInfo.any {
+                    it.index == currentIndex && it.offset >= 0 &&
+                        it.offset + it.size <= listState.layoutInfo.viewportEndOffset
+                }
+                if (!isVisible) listState.scrollToItem(currentIndex)
+                hasScrolledToCurrent = true
+            }
+        }
+        val measuredHeader: @Composable () -> Unit = {
+            Box(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true)
+                .onSizeChanged { headerHeight = it.height }) { header() }
+        }
+        val measuredFooter: @Composable () -> Unit = {
+            Box(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true)
+                .onSizeChanged { footerHeight = it.height }) { footer() }
+        }
+        Column(Modifier.fillMaxSize()) {
+            if (pinHeader) measuredHeader()
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                item(key = "drawer_header", contentType = "drawer_header") {
+                    if (!pinHeader) measuredHeader()
+                }
+                if (conversations.itemCount == 0) {
+                    item {
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow
+                        ) {
+                            Text(
+                                text = stringResource(id = R.string.chat_page_no_conversations),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+                    }
+                }
 
-        items(
-            count = conversations.itemCount,
-            key = conversations.itemKey { item ->
-                when (item) {
-                    is ConversationListItem.DateHeader -> "date_${item.date}"
-                    is ConversationListItem.PinnedHeader -> "pinned_header"
-                    is ConversationListItem.Item -> item.conversation.id.toString()
+                items(
+                    count = conversations.itemCount,
+                    key = conversations.itemKey { item ->
+                        when (item) {
+                            is ConversationListItem.DateHeader -> "date_${item.date}"
+                            is ConversationListItem.PinnedHeader -> "pinned_header"
+                            is ConversationListItem.Item -> item.conversation.id.toString()
+                        }
+                    }
+                ) { index ->
+                    when (val item = conversations[index]) {
+                        is ConversationListItem.DateHeader -> {
+                            DateHeaderItem(
+                                label = item.label,
+                                modifier = Modifier.animateItem()
+                            )
+                        }
+
+                        is ConversationListItem.PinnedHeader -> {
+                            PinnedHeader(
+                                modifier = Modifier.animateItem()
+                            )
+                        }
+
+                        is ConversationListItem.Item -> {
+                            ConversationItem(
+                                conversation = item.conversation,
+                                selected = item.conversation.id == currentConversationId,
+                                activities = conversationActivities[item.conversation.id].orEmpty(),
+                                onClick = onClick,
+                                onDelete = onDelete,
+                                onRegenerateTitle = onRegenerateTitle,
+                                onPin = onPin,
+                                onMoveToAssistant = onMoveToAssistant,
+                                onMoveToFolder = onMoveToFolder,
+                                modifier = Modifier.animateItem()
+                            )
+                        }
+
+                        null -> {
+                            // Placeholder for loading state
+                        }
+                    }
+                }
+                if (!pinHeader) {
+                    item(key = "drawer_footer", contentType = "drawer_footer") { measuredFooter() }
                 }
             }
-        ) { index ->
-            when (val item = conversations[index]) {
-                is ConversationListItem.DateHeader -> {
-                    DateHeaderItem(
-                        label = item.label,
-                        modifier = Modifier.animateItem()
-                    )
-                }
-
-                is ConversationListItem.PinnedHeader -> {
-                    PinnedHeader(
-                        modifier = Modifier.animateItem()
-                    )
-                }
-
-                is ConversationListItem.Item -> {
-                    ConversationItem(
-                        conversation = item.conversation,
-                        selected = item.conversation.id == currentConversationId,
-                        activities = conversationActivities[item.conversation.id].orEmpty(),
-                        onClick = onClick,
-                        onDelete = onDelete,
-                        onRegenerateTitle = onRegenerateTitle,
-                        onPin = onPin,
-                        onMoveToAssistant = onMoveToAssistant,
-                        onMoveToFolder = onMoveToFolder,
-                        modifier = Modifier.animateItem()
-                    )
-                }
-
-                null -> {
-                    // Placeholder for loading state
-                }
-            }
+            if (pinHeader) measuredFooter()
         }
     }
 }

@@ -222,7 +222,12 @@ Settings、Catalog DataStore flow 和 UI 不再形成第二条 runtime 读写路
 
 历史非法配置不会在 `connectionFingerprint`、`mcpDefinitionDigest` 或 `resolvedConnectionHeaders` 身份投影中抛出新校验异常。`McpServerRuntime.runConnectionOperation` 在原异常处理边界内、OAuth refresh 前校验静态头；`McpProtocolClientFactory.createTransport` 在 transport override 和 HTTP client 创建前再次校验最终 resolved headers。错误只影响原 server 的状态，不打断其他 server 的协调。`ManagedPlatform.requestHeaders` 每次取得认证凭据后复验，避免初次通过后轮换出非法请求头；受管错误不借用户 Settings 修补。
 
-MCP 编辑器仅忽略本次新增且完全空的草稿行，已存空行仍需明确修正或删除。保存等待 application 成功才关闭；行校验和写入失败保留草稿、错误行与可复制的完整诊断。JSON 导入分别显示解析错误与配置业务错误，失败保留输入，不把 header 校验包装成 JSON 解析失败。取消沿原协程传播。
+MCP 配置通过 `McpServerConfigPage` 全屏编辑，基础配置与工具目录分 tab，复用原表单与 query，不再使用配置底部弹窗。
+编辑器仅忽略本次新增且完全空的草稿行，已存空行仍需明确修正或删除。保存等待 application 成功才返回列表；
+行校验和写入失败保留草稿、错误行与可复制的完整诊断。已有定义由 `McpApplicationService.saveConfiguration`
+比较打开时基线，只合并实际编辑字段及工具策略，保留最新 OAuth 和未修改配置；同字段冲突返回 `mcp_edit_conflict`，
+已删除定义返回 `mcp_definition_removed`，不会由旧编辑器重新创建。新草稿仍经原 upsert 接纳，取消不写入。
+JSON 导入分别显示解析错误与配置业务错误，失败保留输入，不把 header 校验包装成 JSON 解析失败。取消沿原协程传播。
 
 启动时先从 `McpCatalogStore` 恢复与当前 `definitionDigest` 匹配的 durable LKG。恢复目录不需要网络，也不会把全部
 已登记 server 排进连接队列。新对话开始时只激活该 Assistant 选择的 server；新建、重新启用或修改 definition 的

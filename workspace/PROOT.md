@@ -2,7 +2,7 @@
 
 ## Sources and local patch
 
-- PRoot: `v5.1.107.92`, commit `7266fb3e8516535682f5a9c8f3a7e70f6506eddb`.
+- PRoot: `v5.1.107.96`, commit `a179d3e8a4e045aaa1fb8cc3284f23509d96d353`.
 - Source archive and dependency checksums: `workspace/proot-lock.json`.
 - Termux recipe reference: commit `08b49b3ce00b1e14a3a0365200f30e50f8dfafe1`,
   [PRoot](https://github.com/termux/termux-packages/blob/08b49b3ce00b1e14a3a0365200f30e50f8dfafe1/packages/proot/build.sh)
@@ -37,6 +37,10 @@ The patch also handles Android's SIGSYS rejection of musl's raw `fork` by restar
 register restoration; the new child restores only its original argument registers before its first
 resume, preserving its return value and syscall state. A failed restoration terminates that child
 and leaves reaping to the same tracee lifecycle. Normal clone/thread creation is unchanged.
+The fork event captures a separate argument snapshot before `PTRACE_GETEVENTMSG`. When the kernel
+omits the child's PID, the snapshot travels with the pending-child record, including the vfork
+adoption path. Delayed registration never reads the parent's subsequently restored registers.
+Consumption clears the pending restore flag, including invalid-PID and already-registered exits.
 
 `workspace/tools/build-proot.py` requires Python 3.12+, make, patch, gawk, and the Linux x86_64 Android
 NDK r29 (`29.0.14206865`). The NDK revision, API 24, source/dependency hashes, patch hash and final
@@ -65,6 +69,14 @@ using the finalized compiler and linker flags. All four hashes match the shipped
 Both rebuilt loader companions also match their earlier imported bytes. Host builds and ELF checks
 do not replace Android device verification.
 
+On 2026-10-25, `.96` with the updated pending-child snapshot patch was built in two independent
+source/build directories using the verified r29 Linux archive. All four resulting files were
+byte-identical between builds; both loader hashes stayed unchanged. The manifest records the new
+exec hashes and patch hash. `tools/test-proot-child-snapshot.py` compiles the actual child-registration
+branches with host fault injection and validates snapshot capture/dispatch under missing PID and
+delayed-parent scenarios. Its ptrace, process identity and attach substitutes do not prove kernel
+register restoration or Android process cleanup.
+
 ## Runtime contract and device acceptance
 
 Both ABIs retain the shared ProotLaunchSpec: root-id, link2symlink, kill-on-exit, `-k 4.14.0`, existing
@@ -72,17 +84,46 @@ bind mounts, PWD and explicit environment. `PROOT_LOADER` selects the separately
 `--kill-on-exit` terminates remaining tracees when the initial guest exits; terminating the tracer
 with SIGKILL bypasses its cleanup and is not the workspace shutdown protocol.
 
-The current x86_64 pair passed Android API 30 / 4 KiB Alpine 3.22.6 and Ubuntu 24.04.3 acceptance: shell/file operations, distinct
+The previous `.92` x86_64 pair passed Android API 30 / 4 KiB Alpine 3.22.6 and Ubuntu 24.04.3 acceptance: shell/file operations, distinct
 stdin/stdout/stderr, long output, bounded timeout and cancellation, cancellation during startup,
 background process disappearance, and two independently closed PTYs. Tests on x86_64 AVDs do not
 prove arm64 physical-device interoperability. The 16 KiB host rejection of an incompatible 4 KiB
 guest archive passed on API 37.1 and is separate from successful execution of compatible guests.
+Those results do not validate the `.96` upgrade. The `.96` build with the Android creat SIGSYS
+fallback separately passed API 36 / x86_64 / 4 KiB Ubuntu 26.04.1 shell, PTY, cancellation,
+fork, executable/descriptor and offline dpkg installation/upgrade/removal checks. Its memfd
+result was native permission-refusal equivalence, not successful reopening. Arm64, older API
+and fault-kernel runtime validation remain separate requirements.
 
 `tools/proot-fork-registers-x86_64.S` is a libc-independent Linux probe. Build it with the command
 in its header and supply its URL as `prootForkProbeUrl` alongside `prootRootfsUrl` to
 `WorkspaceProotAndroidTest`. The acceptance test runs it 32 times: both fork return paths retain
 all six argument registers, the child can make a subsequent syscall, and the parent observes its
 child's successful exit through waitpid. This complements the ordinary shell/PTY cancellation cases.
+
+`workspace/tools/build-proot-behavior-probe.py --ndk /path/to/android-ndk-r29 --output-dir /outside/repo`
+builds static Bionic probes for both ABIs. Supply the matching file as `prootBehaviorProbeUrl` and
+its companion dynamic PIE as `prootNativeProbeUrl`, plus
+the matching guest archive as `prootRootfsUrl` to
+`WorkspaceProotAndroidTest.matchingNativeProbeChecksL2sExecutableNamesDescriptorsAndChildExecution`.
+The independent test checks PRoot-created fake hard links, initial executable lookup, shell exec,
+execveat, O_NOFOLLOW/O_PATH descriptor names, regular-file/memfd access-mode changes and vfork/spawn.
+It also checks raw creat creation, permissions and truncation through the Android SIGSYS fallback.
+Descriptor reopening is compared with the dynamic PIE under the same application UID and SELinux
+domain. Only complete success or the exact native memfd first-readonly EACCES refusal is accepted;
+other failures, mismatched access modes and unexpected successful permission expansion fail.
+A matched refusal proves policy preservation, not successful memfd reopening on that device.
+It requires API 28 for Bionic posix_spawn; missing fixtures or older hosts are reported as skipped.
+This does not replace Ubuntu 26.04 dpkg/rust-coreutils acceptance, API 24–27 testing or fault-kernel
+interoperability. The product itself retains its API 24 build floor.
+
+`WorkspaceProotAndroidTest.ubuntu2604InstallsReplacesAndPurgesLocalPackageUsingRustCoreutils`
+requires `prootUbuntu2604=true` and a matching official Ubuntu 26.04 `prootRootfsUrl`.
+It checks the distribution and the shipped `/usr/bin/coreutils` implementations of `ls`, `cp`, `rm`, `ln`, builds two versions
+of a local package, installs/upgrades them with dpkg, verifies post-install copy/link contents,
+and purges the package. Post-install actions explicitly select those Rust subcommands because
+the distribution may still select GNU cp/rm by default. The random temporary workspace must be deleted successfully.
+It does not fetch packages or claim other ABIs passed; missing opt-in is an explicit skip.
 
 ## Distribution materials
 

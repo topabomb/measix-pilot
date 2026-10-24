@@ -12,6 +12,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.db.AppDatabase
+import net.weero.measix.pilot.data.db.APP_DATABASE_VERSION
 import net.weero.measix.pilot.data.db.dao.LightConversationEntity
 import org.junit.Assert.*
 import org.junit.Rule
@@ -52,7 +53,7 @@ class Migration_15_16Test {
     @Test fun actualRoomPagingOrdersBeforePageLimitsAndKeepsPinsTiesFoldersAndScope() = runBlocking {
         val name = "batch17-sort-paging"
         context.deleteDatabase(name)
-        helper.createDatabase(name, 16).use(::seed)
+        helper.createDatabase(name, APP_DATABASE_VERSION).use(::seed)
         val database = Room.databaseBuilder(context, AppDatabase::class.java, name).build()
         try {
             val dao = database.conversationDao()

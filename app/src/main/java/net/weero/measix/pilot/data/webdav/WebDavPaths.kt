@@ -37,24 +37,6 @@ internal class WebDavPaths(rootUrl: String) {
         return logical(if (parent.isEmpty()) name else "$parent/$name")
     }
 
-    fun relativeImage(document: String, reference: String): String {
-        logical(document)
-        val uri = try { URI(reference) } catch (_: Exception) { error("webdav_image_reference_invalid") }
-        require(uri.scheme == null && uri.rawAuthority == null && uri.rawQuery == null && uri.rawFragment == null &&
-            !uri.path.orEmpty().startsWith('/') && !Regex("%2f|%5c", RegexOption.IGNORE_CASE).containsMatchIn(reference)) {
-            "webdav_image_reference_invalid"
-        }
-        val segments = document.substringBeforeLast('/', "").split('/').filter(String::isNotEmpty).toMutableList()
-        uri.path.orEmpty().split('/').forEach {
-            when (it) {
-                "." -> Unit
-                ".." -> { require(segments.isNotEmpty()) { "webdav_image_outside_root" }; segments.removeAt(segments.lastIndex) }
-                else -> { require(it.isNotEmpty()); segments += it }
-            }
-        }
-        return logical(segments.joinToString("/"))
-    }
-
     fun pathFromHref(href: String, relativeTo: HttpUrl = root): String {
         val parsed = try { URI(href) } catch (_: Exception) { error("webdav_href_invalid") }
         require(parsed.rawUserInfo == null && parsed.rawQuery == null && parsed.rawFragment == null &&

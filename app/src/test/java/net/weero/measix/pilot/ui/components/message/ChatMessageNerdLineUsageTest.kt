@@ -15,6 +15,18 @@ import java.util.Locale
 
 class ChatMessageNerdLineUsageTest {
     @Test
+    fun `saved capacity displays exact or estimated ratio without clamping`() {
+        val usage = TokenUsage(latestRequestContextTokens = 1500, latestRequestContextCapacityTokens = 1000,
+            semanticsVersion = CURRENT_TOKEN_USAGE_SEMANTICS_VERSION)
+        assertTrue(usage.toNerdLineDisplay()!!.summaryText("1s").contains("150.0%"))
+        val estimated = usage.copy(latestRequestContextTokens = null, latestRequestEstimatedContextTokens = 500)
+        assertTrue(estimated.toNerdLineDisplay()!!.summaryText("1s").contains("50.0%"))
+        assertFalse(estimated.toNerdLineDisplay()!!.context!!.exact)
+        assertFalse(usage.copy(latestRequestContextCapacityTokens = null).toNerdLineDisplay()!!.summaryText("1s").contains("%"))
+        assertFalse(usage.copy(latestRequestContextCapacityTokens = 0).toNerdLineDisplay()!!.summaryText("1s").contains("%"))
+    }
+
+    @Test
     fun `first request in flight shows estimated context and no turn totals yet`() {
         val display = TokenUsage(
             latestRequestEstimatedContextTokens = 30_000,

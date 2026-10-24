@@ -44,7 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
@@ -242,20 +242,6 @@ internal fun AssistantLocalToolContent(
         }
 
         CardGroup {
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_chart_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_chart_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.ChartDisplay),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.ChartDisplay, it) }
-                    )
-                }
-            )
             item(
                 headlineContent = {
                     Text(stringResource(R.string.assistant_page_local_tools_time_info_title))

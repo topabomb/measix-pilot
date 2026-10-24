@@ -14,6 +14,20 @@ import org.junit.Test
 
 class ShareSheetTest {
     @Test
+    fun `malformed imported configuration does not include custom credentials in diagnostics`() {
+        val secret = "custom-credential-without-known-prefix"
+        val json = """{"type":"openai","customHeaders":[{"name":"x-api-key","value":"$secret"}],"enabled":[]} """
+        val encoded = "ai-provider:v1:" + kotlin.io.encoding.Base64.encode(json.encodeToByteArray())
+        val failure = runCatching { decodeProviderSetting(encoded) }.exceptionOrNull()
+            ?: error("Malformed configuration must fail")
+        val diagnostic = failure.stackTraceToString()
+        org.junit.Assert.assertFalse(diagnostic, diagnostic.contains(secret))
+        org.junit.Assert.assertFalse(diagnostic, diagnostic.contains("JSON input:"))
+        assertTrue(diagnostic, diagnostic.contains("Exception"))
+        assertTrue(diagnostic, diagnostic.contains("enabled"))
+    }
+
+    @Test
     fun `decode should restore OpenAI provider correctly`() {
         val originalId = ConfigurationReference.random()
         val original = ProviderSetting.OpenAI(

@@ -26,6 +26,8 @@ data class ConversationPresentationSnapshot(
     val nodes: List<MessageNode>,
     val stream: TurnStreamProjection?,
     val context: net.weero.measix.pilot.service.ConversationContextSummary = net.weero.measix.pilot.service.ConversationContextSummary(),
+    /** Read-only elapsed execution facts; absent for unmeasured or recovered calls. */
+    val toolDurationsMillis: Map<ToolCallLocator, Long> = emptyMap(),
 ) {
     /**
      * 与 aggregate 的 internal currentMessages() 逐项等价：末节点在 [nodes] 里已被

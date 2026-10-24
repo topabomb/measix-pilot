@@ -21,6 +21,7 @@ sealed interface ConversationOpenRequest {
         override val access: RealmAccess,
         val assistantId: ConfigurationReference,
         val starter: StarterOpeningReference? = null,
+        val folderId: Uuid? = null,
     ) : ConversationOpenRequest
 
     @Serializable

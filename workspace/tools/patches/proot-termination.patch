@@ -26,7 +26,7 @@
  static bool seccomp_after_ptrace_enter = false;
  static bool seccomp_ptrace_event_supported = false;
  
-@@ -98,6 +117,9 @@
+@@ -106,6 +125,9 @@
  		return -errno;
  
  	case 0: /* child */
@@ -36,7 +36,7 @@
  		/* SIG_IGN survives fork(2) and execve(2), so an ignored
  		 * SIGPIPE anywhere above proot is inherited by every
  		 * process of the guest: write(2) then fails with EPIPE
-@@ -151,15 +173,19 @@
+@@ -159,15 +181,19 @@
   * signal.  */
  static void kill_all_tracees2(int signum, siginfo_t *siginfo UNUSED, void *ucontext UNUSED)
  {
@@ -61,7 +61,7 @@
  }
  
  /* Interrupt waitpid(2) so the event loop gets a chance to run its
-@@ -319,6 +345,7 @@
+@@ -327,6 +353,7 @@
  	/* Handle all signals.  */
  	for (signum = 0; signum < SIGRTMAX; signum++) {
  		switch (signum) {
@@ -69,7 +69,7 @@
  		case SIGQUIT:
  		case SIGILL:
  		case SIGABRT:
-@@ -375,6 +402,14 @@
+@@ -383,6 +410,14 @@
  	if (status < 0)
  		note(NULL, WARNING, SYSTEM, "sigaction(SIGALRM)");
  
@@ -84,7 +84,7 @@
  	while (1) {
  		int tracee_status;
  		Tracee *tracee;
-@@ -417,6 +452,9 @@
+@@ -425,6 +460,9 @@
  		tracee = get_tracee(NULL, pid, true);
  		assert(tracee != NULL);
  
@@ -94,7 +94,7 @@
  		tracee->running = false;
  
  		status = notify_extensions(tracee, NEW_STATUS, tracee_status, 0);
-@@ -433,7 +471,7 @@
+@@ -441,7 +479,7 @@
  		(void) restart_tracee(tracee, signal);
  	}
  
@@ -103,115 +103,7 @@
  }
  
  /**
---- a/src/tracee/event.h
-+++ b/src/tracee/event.h
-@@ -27,6 +27,7 @@
- 
- #include "tracee/tracee.h"
- 
-+extern int block_termination_signals(void);
- extern int launch_process(Tracee *tracee, char *const argv[]);
- extern int event_loop();
- extern int handle_tracee_event(Tracee *tracee, int tracee_status);
---- a/src/cli/cli.c
-+++ b/src/cli/cli.c
-@@ -461,6 +461,11 @@
- 		sysvipc_shm_helper_main();
- 	}
- 
-+	if (block_termination_signals() < 0) {
-+		note(NULL, ERROR, SYSTEM, "sigprocmask()");
-+		return EXIT_FAILURE;
-+	}
-+
- 	/* Pre-create the first tracee (pid == 0).  */
- 	tracee = get_tracee(NULL, 0, true);
- 	if (tracee == NULL)
---- a/src/tracee/tracee.c
-+++ b/src/tracee/tracee.c
-@@ -697,7 +697,8 @@
- 	Tracee *tracee;
- 
- 	LIST_FOREACH(tracee, &tracees, link)
--		kill(tracee->pid, SIGKILL);
-+		if (!tracee->terminated)
-+			kill(tracee->pid, SIGKILL);
- }
- 
- Tracees *get_tracees_list_head() {
---- a/src/extension/ashmem_memfd/ashmem_memfd.c
-+++ b/src/extension/ashmem_memfd/ashmem_memfd.c
-@@ -1,6 +1,7 @@
- #if defined(__ANDROID__) || defined(__BIONIC__)
- 
- #include <stdlib.h>
-+#include <string.h>
- #include <signal.h>
- #include <unistd.h>
- #include <sys/syscall.h>  /* __NR_memfd_create,  */
---- a/src/tracee/seccomp.c
-+++ b/src/tracee/seccomp.c
-@@ -155,6 +155,20 @@
- 	}
- 
- 	switch (sysnum) {
-+	case PR_fork:
-+		/* musl uses fork(2) on x86_64, while Android permits the
-+		 * equivalent clone(2) used by bionic. Restart through the
-+		 * existing SIGSYS path so child tracking and register restore
-+		 * remain owned by the normal syscall/tracee lifecycle. */
-+		set_sysnum(tracee, PR_clone);
-+		poke_reg(tracee, SYSARG_1, SIGCHLD);
-+		poke_reg(tracee, SYSARG_2, 0);
-+		poke_reg(tracee, SYSARG_3, 0);
-+		poke_reg(tracee, SYSARG_4, 0);
-+		poke_reg(tracee, SYSARG_5, 0);
-+		restart_syscall_after_seccomp(tracee);
-+		break;
-+
- 	case PR_open:
- 		set_sysnum(tracee, PR_openat);
- 		poke_reg(tracee, SYSARG_4, peek_reg(tracee, CURRENT, SYSARG_3));
---- a/src/tracee/tracee.h
-+++ b/src/tracee/tracee.h
-@@ -217,6 +217,7 @@
- 	bool _regs_were_changed;
- 	bool restore_original_regs;
- 	bool restore_original_regs_after_seccomp_event;
-+	bool restore_fork_child_regs;
- 
- 	/* State for the special handling of SIGSTOP.  */
- 	enum {
---- a/src/tracee/tracee.c
-+++ b/src/tracee/tracee.c
-@@ -405,6 +405,10 @@
-                 // contains the usual clone flags.
-                 clone_flags = peek_word(parent, peek_reg(parent, CURRENT, SYSARG_1));
- 
-+	bool restore_fork_child_regs = status >= 0
-+		&& parent->restore_original_regs_after_seccomp_event
-+		&& get_sysnum(parent, CURRENT) == PR_clone && clone_flags == SIGCHLD;
-+
- 	/* Get the pid of the parent's new child.  */
- 	status = ptrace(PTRACE_GETEVENTMSG, parent->pid, NULL, &pid);
- 	if (status < 0 || pid == 0) {
-@@ -433,6 +437,13 @@
- 	child->verbose = parent->verbose;
- 	child->seccomp = parent->seccomp;
- 	child->sysexit_pending = parent->sysexit_pending;
-+	/* A SIGSYS fork rewrite changes arguments in both return paths.
-+	 * Restore the child's arguments before its first resume, without
-+	 * inheriting the parent's return value or syscall-stage state. */
-+	if (restore_fork_child_regs) {
-+		child->_regs[ORIGINAL_SECCOMP_REWRITE] = parent->_regs[ORIGINAL_SECCOMP_REWRITE];
-+		child->restore_fork_child_regs = true;
-+	}
- 	child->execfn_addr = parent->execfn_addr;
- 	child->auxv_fd = parent->auxv_fd;
- 	child->no_new_privs = parent->no_new_privs;
---- a/src/tracee/event.c
-+++ b/src/tracee/event.c
-@@ -922,6 +922,30 @@
+@@ -931,6 +969,30 @@
  	if (tracee->as_ptracer.wait_pid != 0 || signal == -1)
  		return false;
  
@@ -242,3 +134,223 @@
  	/* Restart the tracee and stop it at the next instruction, or
  	 * at the next entry or exit of a system call. */
  	assert(tracee->restart_how != 0);
+--- a/src/tracee/event.h
++++ b/src/tracee/event.h
+@@ -27,6 +27,7 @@
+ 
+ #include "tracee/tracee.h"
+ 
++extern int block_termination_signals(void);
+ extern int launch_process(Tracee *tracee, char *const argv[]);
+ extern int event_loop();
+ extern int handle_tracee_event(Tracee *tracee, int tracee_status);
+--- a/src/cli/cli.c
++++ b/src/cli/cli.c
+@@ -461,6 +461,11 @@
+ 		sysvipc_shm_helper_main();
+ 	}
+ 
++	if (block_termination_signals() < 0) {
++		note(NULL, ERROR, SYSTEM, "sigprocmask()");
++		return EXIT_FAILURE;
++	}
++
+ 	/* Pre-create the first tracee (pid == 0).  */
+ 	tracee = get_tracee(NULL, 0, true);
+ 	if (tracee == NULL)
+--- a/src/tracee/tracee.c
++++ b/src/tracee/tracee.c
+@@ -377,7 +377,17 @@
+ 	}
+ }
+ 
+-static int attach_child(Tracee *parent, word_t clone_flags, pid_t pid);
++static int attach_child(Tracee *parent, word_t clone_flags, pid_t pid,
++		const struct user_regs_struct *fork_child_regs);
++
++/* Consume only the flag; the captured registers stay valid during attach. */
++static const struct user_regs_struct *take_pending_fork_child_regs(Tracee *parent)
++{
++	const struct user_regs_struct *regs = parent->pending_restore_fork_child_regs
++		? &parent->pending_fork_child_regs : NULL;
++	parent->pending_restore_fork_child_regs = false;
++	return regs;
++}
+ 
+ /**
+  * Read the Tgid, PPid and TracerPid fields of /proc/@pid/status.  This
+@@ -519,7 +529,8 @@
+ 				continue;
+ 
+ 			parent->pending_child = false;
+-			(void) attach_child(parent, parent->pending_clone_flags, child->pid);
++			(void) attach_child(parent, parent->pending_clone_flags, child->pid,
++				take_pending_fork_child_regs(parent));
+ 			break;
+ 		}
+ 	}
+@@ -533,6 +544,7 @@
+  */
+ void resolve_pending_child(Tracee *parent)
+ {
++	const struct user_regs_struct *fork_child_regs;
+ 	pid_t tgid, ppid, tracer;
+ 	Tracee *child;
+ 	pid_t pid;
+@@ -551,6 +563,7 @@
+ 	}
+ 
+ 	parent->pending_child = false;
++	fork_child_regs = take_pending_fork_child_regs(parent);
+ 
+ 	pid = (pid_t) (int) peek_reg(parent, CURRENT, SYSARG_RESULT);
+ 
+@@ -572,7 +585,7 @@
+ 		return;
+ 	}
+ 
+-	(void) attach_child(parent, parent->pending_clone_flags, pid);
++	(void) attach_child(parent, parent->pending_clone_flags, pid, fork_child_regs);
+ }
+ 
+ /**
+@@ -582,6 +595,8 @@
+  */
+ int new_child(Tracee *parent, word_t clone_flags)
+ {
++	struct user_regs_struct fork_child_regs;
++	bool restore_fork_child_regs;
+ 	unsigned long pid = 0;
+ 	int status;
+ 
+@@ -603,6 +618,14 @@
+                 // contains the usual clone flags.
+                 clone_flags = peek_word(parent, peek_reg(parent, CURRENT, SYSARG_1));
+ 
++	/* Capture before GETEVENTMSG and before a deferred parent sysexit can
++	 * restore or overwrite its seccomp rewrite registers. */
++	restore_fork_child_regs = status >= 0
++		&& parent->restore_original_regs_after_seccomp_event
++		&& get_sysnum(parent, CURRENT) == PR_clone && clone_flags == SIGCHLD;
++	if (restore_fork_child_regs)
++		fork_child_regs = parent->_regs[ORIGINAL_SECCOMP_REWRITE];
++
+ 	/* Get the pid of the parent's new child.  Some kernels (seen
+ 	 * on aarch64 4.14.357 builds) clear the message of the last
+ 	 * ptrace event on every ptrace request, so the PID reads as 0,
+@@ -616,19 +639,24 @@
+ 		VERBOSE(parent, 1, "vpid %" PRIu64 ": fork event without the child's pid",
+ 			parent->vpid);
+ 		parent->pending_child = true;
++		parent->pending_restore_fork_child_regs = restore_fork_child_regs;
++		if (restore_fork_child_regs)
++			parent->pending_fork_child_regs = fork_child_regs;
+ 		parent->pending_clone_flags = clone_flags;
+ 		parent->pending_child_sp = new_child_stack(parent);
+ 		adopt_held_children();
+ 		return 0;
+ 	}
+ 
+-	return attach_child(parent, clone_flags, (pid_t) pid);
++	return attach_child(parent, clone_flags, (pid_t) pid,
++		restore_fork_child_regs ? &fork_child_regs : NULL);
+ }
+ 
+ /**
+  * Register @pid as the new child of @parent, see new_child().
+  */
+-static int attach_child(Tracee *parent, word_t clone_flags, pid_t pid)
++static int attach_child(Tracee *parent, word_t clone_flags, pid_t pid,
++		const struct user_regs_struct *fork_child_regs)
+ {
+ 	int ptrace_options;
+ 	Tracee *child;
+@@ -654,6 +682,13 @@
+ 	child->verbose = parent->verbose;
+ 	child->seccomp = parent->seccomp;
+ 	child->sysexit_pending = parent->sysexit_pending;
++	/* A SIGSYS fork rewrite changes arguments in both return paths.
++	 * Restore the child's arguments before its first resume, without
++	 * inheriting the parent's return value or syscall-stage state. */
++	if (fork_child_regs != NULL) {
++		child->_regs[ORIGINAL_SECCOMP_REWRITE] = *fork_child_regs;
++		child->restore_fork_child_regs = true;
++	}
+ 	child->execfn_addr = parent->execfn_addr;
+ 	child->auxv_fd = parent->auxv_fd;
+ 	child->no_new_privs = parent->no_new_privs;
+@@ -918,7 +953,8 @@
+ 	Tracee *tracee;
+ 
+ 	LIST_FOREACH(tracee, &tracees, link)
+-		kill(tracee->pid, SIGKILL);
++		if (!tracee->terminated)
++			kill(tracee->pid, SIGKILL);
+ }
+ 
+ Tracees *get_tracees_list_head() {
+--- a/src/extension/ashmem_memfd/ashmem_memfd.c
++++ b/src/extension/ashmem_memfd/ashmem_memfd.c
+@@ -1,6 +1,7 @@
+ #if defined(__ANDROID__) || defined(__BIONIC__)
+ 
+ #include <stdlib.h>
++#include <string.h>
+ #include <signal.h>
+ #include <unistd.h>
+ #include <sys/syscall.h>  /* __NR_memfd_create,  */
+--- a/src/tracee/seccomp.c
++++ b/src/tracee/seccomp.c
+@@ -155,6 +155,31 @@
+ 	}
+ 
+ 	switch (sysnum) {
++	case PR_fork:
++		/* musl uses fork(2) on x86_64, while Android permits the
++		 * equivalent clone(2) used by bionic. Restart through the
++		 * existing SIGSYS path so child tracking and register restore
++		 * remain owned by the normal syscall/tracee lifecycle. */
++		set_sysnum(tracee, PR_clone);
++		poke_reg(tracee, SYSARG_1, SIGCHLD);
++		poke_reg(tracee, SYSARG_2, 0);
++		poke_reg(tracee, SYSARG_3, 0);
++		poke_reg(tracee, SYSARG_4, 0);
++		poke_reg(tracee, SYSARG_5, 0);
++		restart_syscall_after_seccomp(tracee);
++		break;
++
++	case PR_creat:
++		/* Android traps legacy creat(2); preserve its creation/truncation
++		 * semantics through the existing openat restart and path translation. */
++		set_sysnum(tracee, PR_openat);
++		poke_reg(tracee, SYSARG_4, peek_reg(tracee, CURRENT, SYSARG_2));
++		poke_reg(tracee, SYSARG_3, O_WRONLY | O_CREAT | O_TRUNC);
++		poke_reg(tracee, SYSARG_2, peek_reg(tracee, CURRENT, SYSARG_1));
++		poke_reg(tracee, SYSARG_1, AT_FDCWD);
++		restart_syscall_after_seccomp(tracee);
++		break;
++
+ 	case PR_open:
+ 		set_sysnum(tracee, PR_openat);
+ 		poke_reg(tracee, SYSARG_4, peek_reg(tracee, CURRENT, SYSARG_3));
+--- a/src/tracee/tracee.h
++++ b/src/tracee/tracee.h
+@@ -217,6 +217,7 @@
+ 	bool _regs_were_changed;
+ 	bool restore_original_regs;
+ 	bool restore_original_regs_after_seccomp_event;
++	bool restore_fork_child_regs;
+ 
+ 	/* State for the special handling of SIGSTOP.  */
+ 	enum {
+@@ -328,6 +329,10 @@
+ 	bool pending_child;
+ 	word_t pending_clone_flags;
+ 	word_t pending_child_sp;
++	/* A fork rewritten after SIGSYS needs its original arguments in both
++	 * return paths, even if child registration waits for the parent exit. */
++	bool pending_restore_fork_child_regs;
++	struct user_regs_struct pending_fork_child_regs;
+ 
+ 	/* If true, syscall entry was handled by seccomp and next SIGTRAP | 0x80
+ 	 * has to be ignored as it's same syscall entry */

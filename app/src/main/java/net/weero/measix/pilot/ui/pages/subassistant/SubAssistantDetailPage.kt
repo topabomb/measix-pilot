@@ -332,6 +332,7 @@ private fun DetailContent(
                         detailSource = source,
                         contextConversationId = state.child.conversationId,
                         contextSummary = state.child.context.messages[node.currentMessage.id],
+                        toolDurationsMillis = state.child.toolDurationsMillis,
                         modifier = Modifier.padding(horizontal = 8.dp),
                         loading = false,
                         turnFinished = state.child.stream?.assistantMessageId != node.currentMessage.id,

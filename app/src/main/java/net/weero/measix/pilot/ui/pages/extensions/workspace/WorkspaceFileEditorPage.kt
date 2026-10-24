@@ -12,9 +12,6 @@ import net.weero.measix.pilot.service.workspace.WorkspaceExportRequest
 import net.weero.measix.pilot.service.workspace.WorkspaceExportItem
 import net.weero.measix.pilot.service.workspace.WorkspaceDocumentTreeDestination
 import net.weero.measix.pilot.ui.components.files.*
-import net.weero.measix.pilot.ui.components.richtext.RestrictedMarkdown
-import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
-import net.weero.measix.pilot.service.ImageSource
 import net.weero.measix.pilot.service.files.MediaPreviewSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -48,7 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.R
@@ -103,9 +100,8 @@ private fun WorkspaceFileEditorContent(
     var editing by remember(id, area, path) { mutableStateOf(false) }
     var sourceView by remember(id, area, path) { mutableStateOf(false) }
     var media by remember(id, area, path) { mutableStateOf<MediaPreviewSource?>(null) }
-    var svg by remember(id, area, path) { mutableStateOf<ImageSource?>(null) }
+    var renderedFile by remember(id, area, path) { mutableStateOf<net.weero.measix.pilot.service.RenderedFileSource?>(null) }
     val context = LocalContext.current
-    val images = remember(id, area, path) { mutableSetOf<String>() }
     val savedText = stringResource(R.string.workspace_file_editor_saved)
     val saveButtonText = stringResource(R.string.common_save)
     val tooLargeText = stringResource(R.string.workspace_file_editor_too_large)
@@ -183,7 +179,7 @@ private fun WorkspaceFileEditorContent(
                 }
             }
             }
-            if (type == FileType.SVG) svg = applicationService.previewImageSource(id, area, path)
+            if (isRenderedFile(fileName)) renderedFile = applicationService.renderedSource(id, area, path)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
@@ -211,17 +207,6 @@ private fun WorkspaceFileEditorContent(
             remember(detail) { net.weero.measix.pilot.service.ChatError(detail = detail) }, onDismiss = { saveError = null }) }
         return
     }
-    if (type == FileType.SVG && !editing && !sourceView && svg != null) {
-        ImagePreviewDialog(listOf(requireNotNull(svg)), onDismissRequest = { sourceView = true }, showSaveAction = false,
-            extraActions = listOf(net.weero.measix.pilot.ui.components.ui.ImagePreviewAction(
-                me.rerere.hugeicons.HugeIcons.Download01, stringResource(R.string.remote_workspace_download)) { _, _ -> download() }),
-            overlay = { if (exporting) androidx.compose.material3.Surface {
-                Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator()
-                    TextButton({ exportJob?.cancel() }) { Text(stringResource(R.string.common_cancel)) }
-                }
-            } })
-    }
     val showSaveAction = editable && editing && !loading && loadError == null
     Scaffold(
         topBar = {
@@ -240,15 +225,12 @@ private fun WorkspaceFileEditorContent(
                     }
                 },
                 actions = {
-                    if (editing && (type == FileType.MARKDOWN || type == FileType.SVG)) {
+                    if (editing && isRenderedFile(fileName)) {
                         TextButton(enabled = !dirty && !saving && !preparingPreview, onClick = {
                             preparingPreview = true
                             scope.launch {
                                 try {
-                                    // SVG sources pin file attributes; a saved file needs a new source.
-                                    val refreshed = if (type == FileType.SVG)
-                                        applicationService.previewImageSource(id, area, path) else null
-                                    svg = refreshed
+                                    renderedFile = applicationService.renderedSource(id, area, path)
                                     sourceView = false
                                     editing = false
                                 } catch (cancelled: CancellationException) { throw cancelled }
@@ -258,7 +240,7 @@ private fun WorkspaceFileEditorContent(
                         }) { Text(stringResource(R.string.file_preview_rendered)) }
                     }
                     if (publishedText != null && !editing) {
-                        if (type == FileType.MARKDOWN || type == FileType.SVG) TextButton({ sourceView = !sourceView }) {
+                        if (isRenderedFile(fileName)) TextButton({ sourceView = !sourceView }) {
                             Text(stringResource(if (sourceView) R.string.file_preview_rendered else R.string.file_preview_source))
                         }
                         if (editable) TextButton({ editing = true }) { Text(stringResource(R.string.edit)) }
@@ -331,18 +313,9 @@ private fun WorkspaceFileEditorContent(
 
             type == FileType.PDF -> PdfPreview("$id:$area:$path", { applicationService.openPreview(id, area, path) },
                 Modifier.fillMaxSize().padding(innerPadding)) { loadError = it.userVisibleDiagnostic() }
-            type == FileType.MARKDOWN && !editing && !sourceView -> RestrictedMarkdown(publishedText.orEmpty(),
-                Modifier.fillMaxSize().padding(innerPadding).padding(12.dp).verticalScroll(rememberScrollState()),
-                images = { reference ->
-                    synchronized(images) {
-                        require(reference in images || images.size < 20) { "workspace_markdown_image_limit" }
-                        images += reference
-                    }
-                    applicationService.relativeImageSource(id, area, path, reference)
-                }, openLink = { uri ->
-                    try { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(uri))) }
-                    catch (failure: Exception) { saveError = failure.userVisibleDiagnostic() }
-                })
+            isRenderedFile(fileName) && !editing && !sourceView && renderedFile != null -> FileDocumentPreview(
+                requireNotNull(renderedFile), publishedText.orEmpty(), fileName,
+                Modifier.fillMaxSize().padding(innerPadding))
             else -> FileTextEditor(
                 state = textState,
                 modifier = Modifier

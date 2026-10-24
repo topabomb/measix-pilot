@@ -21,6 +21,59 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class GenerationSideEffectsTest {
+    private fun summaryResult(message: UIMessage, reason: String? = "stop") = me.rerere.ai.ui.MessageChunk(
+        id = "summary", model = "model", choices = listOf(me.rerere.ai.ui.UIMessageChoice(
+            index = 0, delta = null, message = message, finishReason = reason)))
+
+    @Test fun `summary discards leading reasoning but preserves literal tags in code`() {
+        assertEquals("## User Goals\nContinue", historySummaryText(summaryResult(
+            UIMessage.assistant("<think>private reasoning</think>\n## User Goals\nContinue"))))
+        val literal = "Example: `<think>literal</think>`"
+        assertEquals(literal, historySummaryText(summaryResult(UIMessage.assistant(literal))))
+        val native = UIMessage.assistant("Summary").copy(parts = listOf(
+            UIMessagePart.Reasoning("private"), UIMessagePart.Text("Summary")))
+        assertEquals("Summary", historySummaryText(summaryResult(native)))
+    }
+
+    @Test fun `summary strips reasoning across text blocks and rejects an unclosed section`() {
+        fun blocks(vararg text: String) = summaryResult(UIMessage.assistant("").copy(
+            parts = text.map { UIMessagePart.Text(it) }))
+        assertEquals("Summary\nExample: `<think>literal</think>`", historySummaryText(blocks(
+            "  ", "<think>first reasoning", "remaining reasoning</think>\nSummary",
+            "Example: `<think>literal</think>`")))
+        val failure = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            historySummaryText(blocks("<think>first reasoning", "remaining reasoning"))
+        }
+        assertEquals("empty_history_summary_chunk", failure.message)
+        assertEquals("Summary\nLiteral <think>example</think>", historySummaryText(blocks(
+            "Summary", "Literal <think>example</think>")))
+    }
+
+    @Test fun `summary rejects tools even when explanatory text is present`() {
+        val message = UIMessage.assistant("I will inspect the file").copy(parts = listOf(
+            UIMessagePart.Text("I will inspect the file"),
+            UIMessagePart.Tool(localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call",
+                toolName = "read_file", input = "{}")))
+        val failure = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            historySummaryText(summaryResult(message, "tool_calls"))
+        }
+        assertEquals("history_summary_tool_call_response", failure.message)
+    }
+
+    @Test fun `summary rejects incomplete terminal states and reasoning-only output`() {
+        listOf("length", "max_tokens", "MAX_TOKENS", "SAFETY", "content_filter", "incomplete", "pause_turn").forEach { reason ->
+            org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+                historySummaryText(summaryResult(UIMessage.assistant("partial summary"), reason))
+            }
+        }
+        listOf("", " ", "<think>unfinished", "<think>reasoning</think>").forEach { text ->
+            val failure = org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+                historySummaryText(summaryResult(UIMessage.assistant(text)))
+            }
+            assertEquals("empty_history_summary_chunk", failure.message)
+        }
+    }
+
     @Test
     fun `approval sound follows committed pending state and is not replayed`() {
         var steps = 0

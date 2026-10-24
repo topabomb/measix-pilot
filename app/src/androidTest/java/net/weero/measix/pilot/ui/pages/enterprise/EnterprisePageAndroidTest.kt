@@ -28,8 +28,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelStore
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.dokar.sonner.Toaster
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.Toaster
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import io.mockk.Runs
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -51,7 +51,7 @@ import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
-import net.weero.measix.pilot.data.enterprise.EnterpriseExitRequest
+import net.weero.measix.pilot.service.EnterpriseExitPreview
 import net.weero.measix.pilot.data.enterprise.EnterpriseAddressChangeRequest
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -670,13 +670,20 @@ class EnterprisePageAndroidTest {
             resetPath = net.weero.measix.pilot.service.EnterpriseResetPath.STORAGE_FAILURE,
         ))
         coEvery { fixture.service.localDataReset(any()) } returns Unit
+        val preview = mockk<EnterpriseResetPreview>()
+        every { preview.request } returns net.weero.measix.pilot.data.enterprise.EnterpriseDataResetRequest(
+            Uuid.random(), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetMode.KEEP_HISTORY)
+        every { preview.pendingInputCount } returns null
+        coEvery { fixture.service.prepareLocalDataReset(any()) } returns preview
         fixture.show()
         compose.onNodeWithTag("enterprise-page-menu").performClick()
         compose.onNodeWithText(text(R.string.enterprise_reset_repair)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_reset_option_notice)).assertIsDisplayed()
         coVerify(exactly = 0) { fixture.service.localDataReset(any()) }
         click(R.string.enterprise_reset_keep_history)
+        compose.waitUntil(5_000) { fixture.vm.resetConfirmation.value != null }
         compose.onNodeWithText(text(R.string.enterprise_reset_repair_confirm)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_reset_queue_all_spaces)).performScrollTo().assertIsDisplayed()
         coVerify(exactly = 0) { fixture.service.localDataReset(any()) }
         compose.onNodeWithText(text(R.string.cancel)).performClick()
         compose.waitUntil(5_000) { fixture.vm.resetConfirmation.value == null }
@@ -689,16 +696,24 @@ class EnterprisePageAndroidTest {
             resetPath = net.weero.measix.pilot.service.EnterpriseResetPath.CONNECTED,
         ))
         coEvery { fixture.service.localDataReset(any()) } coAnswers { fixture.state.value = overview(access = null) }
+        val preview = mockk<EnterpriseResetPreview>()
+        every { preview.request } returns net.weero.measix.pilot.data.enterprise.EnterpriseDataResetRequest(
+            Uuid.random(), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetMode.CLEAR_ALL)
+        every { preview.pendingInputCount } returns 2
+        coEvery { fixture.service.prepareLocalDataReset(any()) } returns preview
         fixture.show()
         compose.onNodeWithTag("enterprise-page-menu").performClick()
         compose.onNodeWithText(text(R.string.enterprise_reset_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_reset_clear_all)).assertIsDisplayed()
         click(R.string.enterprise_reset_clear_all)
+        compose.waitUntil(5_000) { fixture.vm.resetConfirmation.value != null }
         compose.onNodeWithText(text(R.string.enterprise_reset_clear_all_confirm)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_reset_queue_count, 2)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_reset_queue_all_spaces)).performScrollTo().assertIsDisplayed()
         coVerify(exactly = 0) { fixture.service.localDataReset(any()) }
         compose.onNodeWithText(text(R.string.confirm)).performClick()
         compose.waitUntil(5_000) { !fixture.vm.busy.value }
-        coVerify(exactly = 1) { fixture.service.localDataReset(any()) }
+        coVerify(exactly = 1) { fixture.service.localDataReset(preview) }
     }
 
     @Test
@@ -821,7 +836,10 @@ class EnterprisePageAndroidTest {
     fun exitConfirmationKeepsTheOriginalSessionSelectionAndEnterpriseName() {
         val original = overview(name = "Original enterprise")
         val fixture = Fixture(original)
-        val frozen = EnterpriseExitRequest(requireNotNull(original.access), requireNotNull(original.selection))
+        val frozen = mockk<EnterpriseExitPreview>()
+        every { frozen.access } returns requireNotNull(original.access)
+        every { frozen.selection } returns requireNotNull(original.selection)
+        every { frozen.pendingInputCount } returns 2
         val exitStarted = CompletableDeferred<Unit>()
         val releaseExit = CompletableDeferred<Unit>()
         coEvery { fixture.service.captureExitRequest() } returns frozen
@@ -837,6 +855,7 @@ class EnterprisePageAndroidTest {
             compose.waitUntil(5_000) { fixture.vm.exitRequest.value != null }
             val confirmation = text(R.string.enterprise_exit_confirm, "Original enterprise")
             compose.onNodeWithText(confirmation).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.enterprise_queue_loss_count, 2)).assertIsDisplayed()
             capturePage("enterprise-exit-confirmation.png")
             coVerify(exactly = 0) { fixture.service.exit(any()) }
 

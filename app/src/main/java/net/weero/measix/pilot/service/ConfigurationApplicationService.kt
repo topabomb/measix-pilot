@@ -118,6 +118,31 @@ internal class ConfigurationApplicationService(
     suspend fun setSuggestionEnabled(selection: RealmSelection, enabled: Boolean) =
         updateSelectedPreferences(selection) { it.copy(enableSuggestion = enabled) }
 
+    suspend fun setTavilyIncludeAnswer(reference: ConfigurationReference.User, expected: Boolean, enabled: Boolean) {
+        recoveryGate.awaitReady()
+        settings.updateLocal { current ->
+            val original = current.searchServices.singleOrNull { it.id == reference }
+                as? me.rerere.search.SearchServiceOptions.TavilyOptions
+                ?: error("tavily_configuration_missing")
+            check(original.includeAnswer == expected) { "tavily_answer_setting_changed" }
+            current.copy(searchServices = current.searchServices.map {
+                if (it.id == reference) original.copy(includeAnswer = enabled) else it
+            })
+        }
+    }
+
+    suspend fun setModelContextLengthOverride(selection: RealmSelection, reference: ConfigurationReference.Enterprise,
+        expectedTokens: Int?, tokens: Int?) {
+        recoveryGate.awaitReady()
+        val access = requireNotNull(selection.access as? RealmAccess.Enterprise) { "model_context_override_requires_enterprise_scope" }
+        enterpriseSessions.withSelectedRealmSelection(selection) {
+            val state = enterpriseSessions.state.value as net.weero.measix.pilot.data.enterprise.EnterpriseState.Available
+            settings.setModelContextLengthOverride(access.scope, state, reference, expectedTokens, tokens) {
+                enterpriseSessions.requirePublishedSelection(selection)
+            }
+        }
+    }
+
     suspend fun setModelFavorite(selection: RealmSelection?, reference: ConfigurationReference, favorite: Boolean) =
         updateSelectedPreferences(selection) { current ->
             current.copy(favoriteModels = if (favorite) (current.favoriteModels + reference).distinct()

@@ -307,6 +307,41 @@ class ConversationCommandCoordinatorTest {
     }
 
     @Test
+    fun `failed folder validation preserves draft until explicit relocation and retry`() = runTest {
+        val id = Uuid.random()
+        val missingFolder = Uuid.random()
+        val repository = mockk<ConversationRepository>()
+        coEvery { repository.existsConversationById(id) } returns false
+        coEvery { repository.commit(any()) } coAnswers {
+            val write = firstArg<ConversationWrite.MaterializeDraft>()
+            require(write.snapshot.header.folderId != missingFolder) { "draft_folder_not_found" }
+            true
+        }
+        val locks = ConversationOperationLocks()
+        val appScope = AppScope(Dispatchers.Default)
+        try {
+            val registry = ConversationRuntimeRegistry(appScope, repository, locks)
+            val coordinator = ConversationCommandCoordinator(registry, repository,
+                ApplicationRecoveryGate().apply { ready() }, locks)
+            val draft = registry.installDraft(Conversation.ofId(id, newConversation = true).copy(folderId = missingFolder))
+            val message = UIMessage.user("retained input")
+            val failure = runCatching { coordinator.executeOrThrow(id, AppendUserMessage(message)) }.exceptionOrNull()
+            assertEquals("draft_folder_not_found", failure?.message)
+            assertTrue(registry.isDraft(id))
+            assertTrue(draft.durable.nodes.isEmpty())
+            assertEquals(missingFolder, draft.durable.header.folderId)
+            coordinator.executeOrThrow(id, UpdateHeader(folderId = OptionalFolderId.Clear))
+            assertTrue(registry.isDraft(id))
+            coVerify(exactly = 1) { repository.commit(any()) }
+            coordinator.executeOrThrow(id, AppendUserMessage(message))
+            assertFalse(registry.isDraft(id))
+            assertNull(draft.durable.header.folderId)
+            assertEquals(listOf(message.id), draft.durable.nodes.map { it.currentMessage.id })
+            coVerify(exactly = 2) { repository.commit(any()) }
+        } finally { appScope.cancel() }
+    }
+
+    @Test
     fun `draft rejects structural commands without persistence or promotion`() = runTest {
         val id = Uuid.random()
         val repository = mockk<ConversationRepository>()

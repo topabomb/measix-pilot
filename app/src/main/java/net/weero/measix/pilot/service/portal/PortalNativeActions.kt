@@ -14,7 +14,7 @@ import kotlin.uuid.Uuid
 
 internal sealed interface PortalNativePrompt {
     val id: Uuid
-    data class Logout(override val id: Uuid = Uuid.random(), val enterpriseName: String) : PortalNativePrompt
+    data class Logout(override val id: Uuid = Uuid.random(), val enterpriseName: String, val pendingInputCount: Int?) : PortalNativePrompt
     data class External(override val id: Uuid = Uuid.random(), val url: URI) : PortalNativePrompt
 }
 
@@ -57,7 +57,7 @@ internal class PortalNativeActions(
         val original = exits.captureRequest() ?: throw PortalFailure("session_expired")
         if (original.selection != selection || original.access != selection.access) throw PortalFailure("session_expired")
         val name = requireNotNull(sessions.portalState(selection).manifest.session).identity.enterpriseName
-        confirm(PortalNativePrompt.Logout(enterpriseName = name))
+        confirm(PortalNativePrompt.Logout(enterpriseName = name, pendingInputCount = original.pendingInputCount))
         // Exit owns its application task. Revoking this document cancels only this caller's wait.
         exits.exit(original)
     }

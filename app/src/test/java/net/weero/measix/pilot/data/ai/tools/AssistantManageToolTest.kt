@@ -213,6 +213,23 @@ class AssistantManageToolTest {
         assertEquals("Work carefully", parsed.instructions)
     }
 
+    @Test fun `ordinary tool approval does not approve loss of pending inputs`() = runTest {
+        val service = mockk<AssistantManagementService>()
+        coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(
+            net.weero.measix.pilot.data.datastore.AssistantManagementRejection("assistant_pending_inputs_confirmation_required")
+        )
+        val tool = manageTool(AssistantToolFactory(service, json, mockk(), mockk(), mockk(), mockk()), caller())
+        val args = buildJsonObject {
+            put("action", "DELETE")
+            put("assistant_id", targetId.toString())
+        }
+        assertEquals(ToolInteractionRequirement.Approval, tool.interactionRequirement(args))
+        val failure = failureResult(tool, args)
+        assertEquals("assistant_pending_inputs_confirmation_required", failure["reason"]!!.jsonPrimitive.content)
+        assertTrue(failure["detail"]!!.jsonPrimitive.content.contains("assistant management page"))
+        io.mockk.coVerify(exactly = 0) { service.prepareDeletion(any()) }
+    }
+
     @Test
     fun `management result cancellation is rethrown`() = runTest {
         val cancellation = CancellationException("stop mutation")

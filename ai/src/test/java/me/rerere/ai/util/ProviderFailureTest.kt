@@ -1,5 +1,6 @@
 package me.rerere.ai.util
 
+import kotlinx.serialization.decodeFromString
 import java.net.SocketTimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -7,6 +8,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProviderFailureTest {
+    @Test fun `JSON literal payload is excluded from provider diagnostic`() {
+        val error = requireNotNull(runCatching {
+            json.decodeFromString<Boolean>("\"PRIVATE_BODY_SENTINEL\"")
+        }.exceptionOrNull())
+        val detail = classifyProviderFailure(IllegalStateException(error)).detail
+        assertFalse(detail.contains("PRIVATE_BODY_SENTINEL"))
+        assertTrue(detail.contains("boolean"))
+    }
+
     @Test
     fun `OpenAI moderation_blocked is content_blocked without leaking check types`() {
         val error = formatProviderHttpError(

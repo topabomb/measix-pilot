@@ -257,10 +257,12 @@ internal class ToolCallRuntime(
             }
 
             if (definition == null) {
+                val retiredChart = tool.toolName == "chart_display"
                 reject(
                     output = listOf(UIMessagePart.Text(ToolErrorProtocol.envelope(
-                        "failed", "tool_not_available",
-                        "Tool ${tool.toolName} is unavailable in this run. Do not retry unchanged.",
+                        "failed", if (retiredChart) "tool_removed" else "tool_not_available",
+                        if (retiredChart) "chart_display has been removed. Return HTML or SVG directly instead."
+                        else "Tool ${tool.toolName} is unavailable in this run. Do not retry unchanged.",
                     ).toString())),
                     wasPending = tool.isPending,
                 )

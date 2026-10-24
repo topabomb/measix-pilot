@@ -53,7 +53,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.res.ResourcesCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import com.termux.view.TerminalView
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalViewport

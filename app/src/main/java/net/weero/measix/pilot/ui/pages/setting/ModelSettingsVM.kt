@@ -38,6 +38,11 @@ class ModelSettingsVM internal constructor(
         commands.setSuggestionEnabled(selection, enabled)
     }
 
+    internal suspend fun setContextCapacity(selection: RealmSelection, reference: ConfigurationReference.Enterprise,
+        expectedTokens: Int?, tokens: Int?) {
+        commands.setModelContextLengthOverride(selection, reference, expectedTokens, tokens)
+    }
+
     private fun execute(selection: RealmSelection, action: suspend () -> Unit) = viewModelScope.launch {
         try {
             action()

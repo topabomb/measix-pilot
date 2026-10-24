@@ -64,4 +64,6 @@ data class ToolExecutionEntity(
     val createdAt: Long,
     @ColumnInfo("updated_at")
     val updatedAt: Long,
+    @ColumnInfo("duration_millis")
+    val durationMillis: Long? = null,
 )

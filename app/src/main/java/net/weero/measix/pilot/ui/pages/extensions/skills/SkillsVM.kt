@@ -2,7 +2,6 @@ package net.weero.measix.pilot.ui.pages.extensions.skills
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
 import java.io.IOException
 import net.weero.measix.pilot.data.files.SkillFileSaveResult
 import net.weero.measix.pilot.data.files.SkillFileDeleteResult
@@ -38,6 +37,8 @@ import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillMetadata
 import net.weero.measix.pilot.data.datastore.SettingsLockedException
 import net.weero.measix.pilot.data.files.SkillParseResult
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import org.yaml.snakeyaml.error.YAMLException
 import org.json.JSONArray
 import kotlin.collections.iterator
 
@@ -48,11 +49,13 @@ class SkillsVM internal constructor(
 ) : ViewModel() {
     private val _skills = MutableStateFlow<List<SkillMetadata>>(emptyList())
     val skills = _skills.asStateFlow()
+    private val _invalidDirectories = MutableStateFlow<List<net.weero.measix.pilot.data.files.InvalidSkillDirectory>>(emptyList())
+    val invalidDirectories = _invalidDirectories.asStateFlow()
     private val _failure = MutableStateFlow<Exception?>(null)
     val failure = _failure.asStateFlow()
     fun dismissFailure() { _failure.value = null }
     private fun reportFailure(error: Exception) {
-        Log.e("SkillsVM", "Skill operation failed", error)
+        logDiagnosticFailure("SkillsVM", "Skill operation failed", error)
         _failure.value = error
     }
 
@@ -60,21 +63,32 @@ class SkillsVM internal constructor(
 
     private fun loadSkills() {
         viewModelScope.launch(ioDispatcher) {
-            try { _skills.value = skillManager.listSkills() }
+            try { refreshSkills() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { reportFailure(error) }
         }
     }
 
+    private fun refreshSkills() {
+        _invalidDirectories.value = skillManager.listInvalidSkillDirectories()
+        _skills.value = skillManager.listSkills()
+    }
+
+    suspend fun deleteInvalidDirectory(target: net.weero.measix.pilot.data.files.InvalidSkillDirectory) =
+        withContext(ioDispatcher) {
+            val result = skillManager.deleteInvalidSkillDirectory(target)
+            refreshSkills()
+            result
+        }
     suspend fun saveSkill(name: String, content: String): SkillFileSaveResult = withContext(ioDispatcher) {
         val result = skillManager.saveSkill(name, content)
-        if (result == SkillFileSaveResult.SUCCESS) _skills.value = skillManager.listSkills()
+        if (result == SkillFileSaveResult.SUCCESS) refreshSkills()
         result
     }
 
     suspend fun deleteSkill(name: String): SkillFileDeleteResult = withContext(ioDispatcher) {
         val result = skillManager.deleteSkill(name)
-        if (result == SkillFileDeleteResult.SUCCESS) _skills.value = skillManager.listSkills()
+        if (result == SkillFileDeleteResult.SUCCESS) refreshSkills()
         result
     }
 
@@ -97,7 +111,7 @@ class SkillsVM internal constructor(
                 }
 
                 currentCoroutineContext().ensureActive()
-                _skills.value = skillManager.listSkills()
+                refreshSkills()
                 currentCoroutineContext().ensureActive()
                 withContext(Dispatchers.Main) {
                     onResult(SkillImportOutcome.Success(importedNames.joinToString()))
@@ -105,9 +119,10 @@ class SkillsVM internal constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: SkillImportException) {
-                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(error.reason, error.takeIf { it.message != null })) }
+                logDiagnosticFailure("SkillsVM", "Skill import rejected", error)
+                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(error.reason, error.takeIf { it.message != null || it.cause != null })) }
             } catch (e: Exception) {
-                Log.e("SkillsVM", "Skill import failed", e)
+                logDiagnosticFailure("SkillsVM", "Skill import failed", e)
                 withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure((e as? SkillHttpException)?.let { if (it.rateLimited) SkillImportFailure.RATE_LIMITED else SkillImportFailure.HTTP_REJECTED } ?: SkillImportFailure.UNKNOWN, e)) }
             }
     }
@@ -160,15 +175,16 @@ class SkillsVM internal constructor(
                 if (saved != SkillFileSaveResult.SUCCESS) throw SkillImportException(SkillImportFailure.SAVE_FAILED, saved.name)
 
                 currentCoroutineContext().ensureActive()
-                _skills.value = skillManager.listSkills()
+                refreshSkills()
                 currentCoroutineContext().ensureActive()
                 withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Success(name)) }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: SkillImportException) {
-                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(error.reason, error.takeIf { it.message != null })) }
+                logDiagnosticFailure("SkillsVM", "Skill import rejected", error)
+                withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure(error.reason, error.takeIf { it.message != null || it.cause != null })) }
             } catch (e: Exception) {
-                Log.e("SkillsVM", "Skill import failed", e)
+                logDiagnosticFailure("SkillsVM", "Skill import failed", e)
                 withContext(Dispatchers.Main) { onResult(SkillImportOutcome.Failure((e as? SkillHttpException)?.let { if (it.rateLimited) SkillImportFailure.RATE_LIMITED else SkillImportFailure.HTTP_REJECTED } ?: SkillImportFailure.UNKNOWN, e)) }
             }
         }
@@ -238,8 +254,8 @@ class SkillsVM internal constructor(
                 ?: throw SkillImportException(SkillImportFailure.READ_SOURCE)
             val name = try {
                 parseSkillDocument(skillContent).frontmatter.name
-            } catch (error: IllegalArgumentException) {
-                throw SkillImportException(SkillImportFailure.INVALID_SKILL)
+            } catch (error: SkillImportException) {
+                throw SkillImportException(error.reason, "$skillMdPath: ${error.message.orEmpty()}", error)
             }
 
             val basePath = skillMdPath.substringBeforeLast('/', missingDelimiterValue = "")
@@ -274,8 +290,11 @@ class SkillsVM internal constructor(
     private fun parseSkillDocument(content: String): SkillDocument =
         when (val parsed = SkillFrontmatterParser.parseDocument(content)) {
             is SkillParseResult.Success -> parsed.document
-            is SkillParseResult.NoFrontmatter -> throw SkillImportException(SkillImportFailure.INVALID_SKILL)
-            is SkillParseResult.Error -> throw SkillImportException(SkillImportFailure.INVALID_SKILL)
+            is SkillParseResult.NoFrontmatter -> throw SkillImportException(SkillImportFailure.INVALID_SKILL, "Missing frontmatter delimiter")
+            is SkillParseResult.Error -> {
+                parsed.cause?.let { if (it !is YAMLException) throw it }
+                throw SkillImportException(SkillImportFailure.INVALID_SKILL, parsed.message, parsed.cause)
+            }
         }
 
     private fun isInsideNestedSkill(path: String, basePath: String, skillBasePaths: List<String>): Boolean {
@@ -434,7 +453,7 @@ enum class SkillImportFailure {
     UNKNOWN,
 }
 
-private class SkillImportException(val reason: SkillImportFailure, detail: String? = null) : IllegalArgumentException(detail)
+private class SkillImportException(val reason: SkillImportFailure, detail: String? = null, cause: Exception? = null) : IllegalArgumentException(detail, cause)
 
 private object SkillImportLimits {
     const val MAX_SOURCE_BYTES = 16 * 1024 * 1024

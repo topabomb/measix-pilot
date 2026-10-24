@@ -19,6 +19,22 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class WebDavBrowserServiceTest {
+    @Test fun `rendered resources borrow DAV root and stop after session close`() = runTest {
+        val f = Fixture(backgroundScope)
+        val session = f.source.open()
+        coEvery { f.dav.download(f.handle, "assets/theme.css", any(), any(), any(), any()) } coAnswers {
+            assertEquals(24L * 1024 * 1024, arg<Long>(5))
+            arg<java.io.OutputStream>(2).write("body{}".toByteArray())
+            6L
+        }
+        val source = session.renderedSource("docs/index.html", f.source.changes)
+        assertEquals("text/css" to "body{}", source.readResource("../assets/theme.css").let { it.first to it.second.decodeToString() })
+        session.close()
+        try { source.readResource("../assets/theme.css"); fail() }
+        catch (error: IllegalStateException) { assertEquals("rendered_file_revoked", error.message) }
+        coVerify(exactly = 1) { f.dav.download(any(), any(), any(), any(), any(), any()) }
+    }
+
     @get:Rule val temporary = TemporaryFolder()
     private val selection = RealmSelection(RealmAccess.Personal, 1)
     private val connection = WebDavConnection(name = "Files", rootUrl = "https://dav.example/root/")

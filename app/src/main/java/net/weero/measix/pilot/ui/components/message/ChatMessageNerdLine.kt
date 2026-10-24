@@ -1,5 +1,7 @@
 package net.weero.measix.pilot.ui.components.message
 
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
@@ -113,12 +115,24 @@ fun ChatMessageNerdLine(
                     )
                 }
                 AnimatedVisibility(visible = expanded) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                        itemVerticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        display.detailItems().forEach { UsageDetailItem(it) }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        display.context?.let { context ->
+                            context.capacityTokens?.takeIf { it > 0 }?.let { capacity ->
+                                val fraction = context.tokens.toDouble() / capacity
+                                androidx.compose.material3.LinearProgressIndicator(
+                                    progress = { fraction.toFloat().coerceIn(0f, 1f) },
+                                    modifier = Modifier.widthIn(max = 240.dp).fillMaxWidth(),
+                                    color = if (fraction > 1) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                            itemVerticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            display.detailItems().forEach { UsageDetailItem(it) }
+                        }
                     }
                 }
             }
@@ -188,6 +202,7 @@ internal fun elapsedText(
 internal data class NerdLineContext(
     val tokens: Long,
     val exact: Boolean,
+    val capacityTokens: Long? = null,
 )
 
 /** 已关闭请求的 turn 级展示投影；未知值始终保持 null，不用零补齐。 */
@@ -219,13 +234,11 @@ internal data class NerdLineUsageDisplay(
      */
     internal fun summaryItems(elapsedText: String?): List<UsageSummaryMetric> = buildList {
         context?.let { ctx ->
+            val input = (if (ctx.exact) "" else "~") + ctx.tokens.formatTokenCount()
+            val capacity = ctx.capacityTokens?.takeIf { it > 0 }
             add(
                 UsageSummaryMetric(
-                    text = if (ctx.exact) {
-                        ctx.tokens.formatTokenCount()
-                    } else {
-                        "~${ctx.tokens.formatTokenCount()}"
-                    },
+                    text = if (capacity == null) input else "$input/${capacity.formatTokenCount()} (${String.format(Locale.ROOT, "%.1f", ctx.tokens.toDouble() / capacity * 100)}%)",
                     icon = UsageSummaryIcon.CONTEXT,
                     muted = !ctx.exact,
                 ),
@@ -349,8 +362,8 @@ private fun UsageDetailItem(metric: UsageDetailMetric) {
  */
 internal fun TokenUsage?.toNerdLineDisplay(): NerdLineUsageDisplay? {
     if (this == null) return null
-    val context = latestRequestContextTokens?.let { NerdLineContext(tokens = it, exact = true) }
-        ?: latestRequestEstimatedContextTokens?.let { NerdLineContext(tokens = it, exact = false) }
+    val context = latestRequestContextTokens?.let { NerdLineContext(tokens = it, exact = true, capacityTokens = latestRequestContextCapacityTokens) }
+        ?: latestRequestEstimatedContextTokens?.let { NerdLineContext(tokens = it, exact = false, capacityTokens = latestRequestContextCapacityTokens) }
     // 命中率的分子分母就是第二行的 Cached 与 Input。三者共用同一组 completeness 门控，
     // 因此要么一起可见（用户可当场验算 Cached ÷ Input），要么一起缺席，不会出现有比例却无分母。
     val exactInput = inputTokens.takeIf { inputCompleteness == UsageCompleteness.COMPLETE }

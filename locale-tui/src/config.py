@@ -23,6 +23,7 @@ class ModuleConfig:
     name: str
     res_path: str
     source_patterns: list[str] = field(default_factory=list)
+    keep_keys: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -61,6 +62,9 @@ class Config:
         for values in ([module.name for module in self.modules], self.get_language_codes()):
             if len(values) != len(set(values)):
                 raise ValueError("Duplicate module or language")
+        for module in self.modules:
+            if not isinstance(module.keep_keys, list) or not all(isinstance(key, str) and key for key in module.keep_keys):
+                raise ValueError(f"keep_keys must be a list of string keys: {module.name}")
         if not isinstance(self.glossary, dict):
             raise ValueError("glossary must map language codes to terminology")
         for code, terms in self.glossary.items():
@@ -87,6 +91,7 @@ class Config:
                 name=m["name"],
                 res_path=m["res_path"],
                 source_patterns=m.get("source_patterns", []),
+                keep_keys=m.get("keep_keys", []),
             )
             for m in data.get("modules", [])
         ]

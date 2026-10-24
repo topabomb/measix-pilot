@@ -7,6 +7,7 @@ import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -107,7 +108,7 @@ class SubAssistantTurnIntegrationTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         try {
-            val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root))
+            val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
             val access = if (exitWindow == null) RealmAccess.Personal else {
                 sessions.enrollFixture(exampleEnterprisePackage())
                 sessions.captureSelectedRealmAccess()
@@ -291,6 +292,17 @@ class SubAssistantTurnIntegrationTest {
                     },
                 ))
             }
+            // Capture the confirmation before a transaction is deliberately held open. Admission
+            // rechecks the same queue snapshot under Session -> conversation lock order.
+            val exitAndRequest = if (exitWindow != null) {
+                val gate = ApplicationRecoveryGate().apply { ready() }
+                val application = ConversationApplicationService(settingsStore, repository, mockk(), registry, commands, gate,
+                    SubAssistantLifecycle(repository, registry, commands, JsonInstant), mockk(), artifacts, mockk(), finalizer,
+                    JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
+                val synchronization = mockk<EnterpriseSynchronizationService> { coEvery { cancelAndAwait(any()) } returns Unit }
+                val exit = EnterpriseExitService(sessions, synchronization, application, gate, CoroutineScope(appScope.coroutineContext + Dispatchers.Unconfined), net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), identityData = mockk(relaxed = true), remoteWorkspace = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, webDav = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, platformLogout = {})
+                exit to requireNotNull(exit.captureRequest())
+            } else null
             registry.installAndStartTurnWorker(runtime.id, turnId, worker)
             if (revokeDuringRequest) {
                 entered.await()
@@ -307,15 +319,22 @@ class SubAssistantTurnIntegrationTest {
             }
             if (exitWindow != null) {
                 entered.await()
-                val gate = ApplicationRecoveryGate().apply { ready() }
-                val application = ConversationApplicationService(settingsStore, repository, mockk(), registry, commands, gate,
-                    SubAssistantLifecycle(repository, registry, commands, JsonInstant), mockk(), artifacts, mockk(), finalizer,
-                    JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
-                val synchronization = mockk<EnterpriseSynchronizationService> { coEvery { cancelAndAwait(any()) } returns Unit }
-                val exit = EnterpriseExitService(sessions, synchronization, application, gate, appScope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), identityData = mockk(relaxed = true), remoteWorkspace = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, webDav = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, platformLogout = {})
-                val request = requireNotNull(exit.captureRequest())
-                val pending = async { try { exit.exit(request); null } catch (error: Exception) { error } }
-                sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.CLOSING }
+                val (exit, request) = requireNotNull(exitAndRequest)
+                // UNDISPATCHED initiation plus the exit owner's Unconfined dispatcher runs
+                // admission to its first suspension before this assertion, rather than merely
+                // asserting that a scheduled coroutine has not started yet.
+                val pending = async(start = CoroutineStart.UNDISPATCHED) {
+                    try { exit.exit(request); null } catch (error: Exception) { error }
+                }
+                if (exitWindow == ExitWindow.LINK) {
+                    // The link transaction has returned; shutdown can revoke admission while
+                    // the original parent worker is still held at its checkpoint callback.
+                    sessions.state.first { it is EnterpriseState.Available && it.manifest.phase == EnterpriseSessionPhase.CLOSING }
+                } else {
+                    // CREATE holds the parent/child boundary; CHILD_START holds the child
+                    // transaction boundary. Queue revalidation must wait before CLOSING.
+                    assertFalse((sessions.state.value as EnterpriseState.Available).manifest.phase == EnterpriseSessionPhase.CLOSING)
+                }
                 assertFalse(pending.isCompleted)
                 release.complete(Unit)
                 val failure = pending.await()

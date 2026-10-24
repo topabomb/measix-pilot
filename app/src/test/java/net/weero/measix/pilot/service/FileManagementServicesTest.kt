@@ -49,17 +49,64 @@ class FileManagementServicesTest {
 
     @Before fun setUp() = runBlocking {
         root = kotlin.io.path.createTempDirectory("file-session").toFile()
-        sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), nowMillis = { 1_800_000_000_000L })
+        sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")), nowMillis = { 1_800_000_000_000L })
         sessions.recover()
         selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
     }
 
     @After fun tearDown() { root.deleteRecursively() }
 
+    @Test fun `gallery selection reconciliation uses original scope and rejects expired response`() = runTest {
+        var now = 1000L
+        val controller = EnterpriseSessionController(enterpriseTestStore(File(root, "selection-expiry")),
+            EnterpriseDataResetStore(File(root, "selection-reset"))) { now }
+        val ready = controller.enrollFixture(exampleEnterprisePackage())
+        val original = requireNotNull(controller.readPresentation().selection)
+        val generated = mockk<GeneratedMediaStore>()
+        val query = FileManagementQueryService(mockk(), generated, ApplicationRecoveryGate().apply { ready() }, controller)
+        coEvery { generated.existingIds(original.access.scope, setOf(1, 2)) } returns setOf(2)
+        assertEquals(setOf(2), query.existingGeneratedIds(original, setOf(1, 2)))
+        coEvery { generated.existingIds(original.access.scope, setOf(1, 2)) } coAnswers {
+            now = ready.manifest.session!!.expiresAtMillis
+            setOf(2)
+        }
+        val failure = runCatching { query.existingGeneratedIds(original, setOf(1, 2)) }.exceptionOrNull()
+        assertEquals("enterprise_data_access_unavailable", failure?.message)
+    }
+
+    @Test fun `message image dispatch preserves artifact authority and rechecks the query lease without nested session locks`() = runTest {
+        val workspace = mockk<net.weero.measix.pilot.service.workspace.WorkspaceApplicationService>()
+        val artifacts = mockk<ArtifactStore>()
+        val files = FileManagementApplicationService(workspace, artifacts, mockk(), ApplicationRecoveryGate().apply { ready() }, sessions)
+        val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selection.access, selection.revision) {}
+        var revokeDuringRead = false
+        val message = ConversationMessageResourceSource(view,
+            net.weero.measix.pilot.data.model.WorkspaceContextOrigin(kotlin.uuid.Uuid.random().toString(), "root", "/workspace")) {
+            sessions.withSelectedRealmSelection(selection) { view.requireOpen() }
+        }
+        val source = RenderedContentSource.Conversation(view, message)
+        val image = ImageSource("original", ImageOrigin.LOCAL, verifyAccess = {}, readPayload = {
+            if (revokeDuringRead) view.close()
+            byteArrayOf(1)
+        })
+        every { workspace.messageImageSource(message, "plot.png") } returns image
+        coEvery { artifacts.resolveToolPath("/upload/missing.png") } returns null
+        kotlinx.coroutines.withTimeout(2_000) {
+            files.requireContentAccess(source)
+            org.junit.Assert.assertNull(files.resolveContentImage(source, "/upload/missing.png"))
+            org.junit.Assert.assertNotNull(files.resolveContentImage(source, "https://example.com/plot.png"))
+            val resolved = requireNotNull(files.resolveContentImage(source, "plot.png"))
+            org.junit.Assert.assertArrayEquals(byteArrayOf(1), resolved.readBytes())
+            revokeDuringRead = true
+            assertEquals("conversation_view_closed", runCatching { resolved.readBytes() }.exceptionOrNull()?.message)
+        }
+        io.mockk.verify(exactly = 1) { workspace.messageImageSource(any(), any()) }
+    }
+
     @Test fun `cleanup counts cannot return after expiry while querying either file owner`() = runTest {
         for (category in FileCleanupCategory.entries) {
             var now = 1000L
-            val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "count-${category.name}"))) { now }
+            val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "count-${category.name}")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
             val ready = controller.enrollFixture(exampleEnterprisePackage())
             val selected = requireNotNull(controller.readPresentation().selection)
             val artifacts = mockk<ArtifactStore>()
@@ -82,11 +129,11 @@ class FileManagementServicesTest {
 
     @Test fun `attachment handoff rechecks expiry after waiting for the artifact owner`() = runTest {
         var now = 1_800_000_000_000L
-        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "export-expiry"))) { now }
+        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "export-expiry")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
         val ready = controller.enrollFixture(exampleEnterprisePackage())
         val selected = requireNotNull(controller.observeSelectedRealmSelection().first())
         val artifacts = mockk<ArtifactStore>()
-        val files = FileManagementApplicationService(artifacts, mockk(), ApplicationRecoveryGate().apply { ready() }, controller)
+        val files = FileManagementApplicationService(io.mockk.mockk(), artifacts, mockk(), ApplicationRecoveryGate().apply { ready() }, controller)
         val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selected.access, selected.revision) {}
         val preview = AttachmentPreview("file:///report.pdf", null, AttachmentPreview.FileTarget(net.weero.measix.pilot.service.RenderedContentSource.Conversation(view), 1, "report.pdf"))
         val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
@@ -109,7 +156,7 @@ class FileManagementServicesTest {
             secondArg<suspend () -> Unit>()()
         }
         var candidate: File? = null
-        val service = FileManagementApplicationService(mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, selected,
+        val service = FileManagementApplicationService(io.mockk.mockk(), mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, selected,
             writeTemporaryImage = { file, bytes -> file.writeBytes(bytes); candidate = file; allowed = false })
         val source = File(root, "picked.png").apply { writeBytes(java.util.Base64.getDecoder().decode(PNG)) }
         val failure = runCatching { service.importImageReference(androidx.test.core.app.ApplicationProvider.getApplicationContext(),
@@ -122,7 +169,7 @@ class FileManagementServicesTest {
     @Test fun `temporary image compensation preserves cancellation and deletion failure`() = runTest {
         val cancelled = kotlinx.coroutines.CancellationException("cancelled image writer")
         var writer: Job? = null
-        val service = FileManagementApplicationService(mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, sessions,
+        val service = FileManagementApplicationService(io.mockk.mockk(), mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, sessions,
             writeTemporaryImage = { file, _ ->
                 check(file.mkdir())
                 File(file, "blocks-delete").writeText("owned failed output")
@@ -150,7 +197,7 @@ class FileManagementServicesTest {
             check(selectionAllowed) { "selection_changed" }
             secondArg<suspend () -> Unit>()()
         }
-        val service = FileManagementApplicationService(mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, selected)
+        val service = FileManagementApplicationService(io.mockk.mockk(), mockk(), mockk(), ApplicationRecoveryGate().apply { ready() }, selected)
         val owner = Job()
         val item = me.rerere.ai.ui.ImageGenerationItem(
             data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -175,7 +222,7 @@ class FileManagementServicesTest {
 
     @Test fun `inspection preview uses bounded authenticated LAN reads and rejects late page results`() = runTest {
         val fetcher = mockk<net.weero.measix.pilot.data.ai.attachments.SafeRemoteMediaFetcher>()
-        val service = FileManagementApplicationService(mockk(), mockk(), ApplicationRecoveryGate().apply { ready() },
+        val service = FileManagementApplicationService(io.mockk.mockk(), mockk(), mockk(), ApplicationRecoveryGate().apply { ready() },
             sessions, remoteMediaFetcher = fetcher)
         val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selection.access, selection.revision) {}
         val url = "http://user:pass@192.168.1.2/image.png"
@@ -199,7 +246,7 @@ class FileManagementServicesTest {
     @Test fun `closing the original page during image work rejects the result`() = runTest {
         for (checkOnly in listOf(true, false)) {
             val artifacts = mockk<ArtifactStore>()
-            val service = FileManagementApplicationService(artifacts, mockk(), ApplicationRecoveryGate().apply { ready() }, sessions)
+            val service = FileManagementApplicationService(io.mockk.mockk(), artifacts, mockk(), ApplicationRecoveryGate().apply { ready() }, sessions)
             val view = ConversationViewLease(kotlin.uuid.Uuid.random(), selection.access, selection.revision) {}
             val source = service.conversationImageSource(view, 1)
             assertEquals(source, service.conversationImageSource(view, 1))
@@ -219,12 +266,12 @@ class FileManagementServicesTest {
     @Test fun `image authorization and bytes cannot return after expiry during owner work`() = runTest {
         for (artifact in listOf(true, false)) for (checkOnly in listOf(true, false)) {
             var now = 1_800_000_000_000L
-            val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "$artifact-$checkOnly"))) { now }
+            val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "$artifact-$checkOnly")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
             val ready = controller.enrollFixture(exampleEnterprisePackage())
             val selected = requireNotNull(controller.observeSelectedRealmSelection().first())
             val artifacts = mockk<ArtifactStore>()
             val generated = mockk<GeneratedMediaStore>()
-            val service = FileManagementApplicationService(artifacts, generated, ApplicationRecoveryGate().apply { ready() }, controller)
+            val service = FileManagementApplicationService(io.mockk.mockk(), artifacts, generated, ApplicationRecoveryGate().apply { ready() }, controller)
             val key = if (artifact) ManagedFileKey.Artifact(1, selected) else ManagedFileKey.Generated(1, selected)
             val entered = kotlinx.coroutines.CompletableDeferred<Unit>()
             val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
@@ -258,7 +305,7 @@ class FileManagementServicesTest {
         val gate = ApplicationRecoveryGate().also { it.ready() }
         val artifacts = mockk<ArtifactStore>()
         val generated = mockk<GeneratedMediaStore>()
-        val service = FileManagementApplicationService(artifacts, generated, gate, sessions)
+        val service = FileManagementApplicationService(io.mockk.mockk(), artifacts, generated, gate, sessions)
         coEvery { artifacts.deleteUserRequestedFolderCreatedBefore(ConfigurationScope.Personal, FileFolders.UPLOAD, Long.MAX_VALUE) } returns
             ArtifactCleanupResult(deleted = 2, cleanupPending = 1, skippedInProgress = 3, failed = 4)
         coEvery { generated.deleteCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE) } returns
@@ -298,7 +345,7 @@ class FileManagementServicesTest {
         val gate = ApplicationRecoveryGate()
         val artifacts = mockk<ArtifactStore>()
         val generated = mockk<GeneratedMediaStore>()
-        val service = FileManagementApplicationService(artifacts, generated, gate, sessions)
+        val service = FileManagementApplicationService(io.mockk.mockk(), artifacts, generated, gate, sessions)
         coEvery { artifacts.deleteUserRequestedFolderCreatedBefore(ConfigurationScope.Personal, FileFolders.UPLOAD, any()) } returns
             ArtifactCleanupResult(deleted = 0, cleanupPending = 0, skippedInProgress = 0, failed = 0)
 
@@ -318,7 +365,7 @@ class FileManagementServicesTest {
         val artifacts = mockk<ArtifactStore>()
         val generated = mockk<GeneratedMediaStore>()
         val gate = ApplicationRecoveryGate().also { it.ready() }
-        val application = FileManagementApplicationService(artifacts, generated, gate, sessions)
+        val application = FileManagementApplicationService(io.mockk.mockk(), artifacts, generated, gate, sessions)
         val query = FileManagementQueryService(artifacts, generated, gate, sessions)
         val oldPersonal = selection
         sessions.enrollFixture(exampleEnterprisePackage())
@@ -414,7 +461,7 @@ class FileManagementServicesTest {
     fun `generated preview removes a partial file when writing fails`() = runTest {
         val tempDirectory = kotlin.io.path.createTempDirectory("generated-preview").toFile()
         var partialFile: File? = null
-        val service = FileManagementApplicationService(
+        val service = FileManagementApplicationService(io.mockk.mockk(),
             artifactStore = mockk(),
             sessions = sessions,
             generatedMediaStore = mockk(),
@@ -447,7 +494,7 @@ class FileManagementServicesTest {
         val tempDirectory = kotlin.io.path.createTempDirectory("generated-preview-cancel").toFile()
         var operationJob: Job? = null
         var candidate: File? = null
-        val service = FileManagementApplicationService(
+        val service = FileManagementApplicationService(io.mockk.mockk(),
             artifactStore = mockk(),
             sessions = sessions,
             generatedMediaStore = mockk(),

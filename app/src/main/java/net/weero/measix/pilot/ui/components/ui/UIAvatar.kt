@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.net.toFile
 import androidx.core.net.toUri
 import coil3.compose.AsyncImage
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import me.rerere.common.android.appTempFolder

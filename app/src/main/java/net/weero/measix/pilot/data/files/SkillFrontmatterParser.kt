@@ -3,6 +3,7 @@ package net.weero.measix.pilot.data.files
 import org.yaml.snakeyaml.DumperOptions
 import org.yaml.snakeyaml.LoaderOptions
 import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.error.YAMLException
 import org.yaml.snakeyaml.constructor.SafeConstructor
 import org.yaml.snakeyaml.representer.Representer
 import org.yaml.snakeyaml.resolver.Resolver
@@ -32,7 +33,7 @@ data class SkillDocument(
 sealed class SkillParseResult {
     data class Success(val document: SkillDocument) : SkillParseResult()
     data class NoFrontmatter(val body: String) : SkillParseResult()
-    data class Error(val message: String) : SkillParseResult()
+    data class Error(val message: String, val cause: Exception? = null) : SkillParseResult()
 }
 
 object SkillFrontmatterParser {
@@ -100,8 +101,8 @@ object SkillFrontmatterParser {
                     )
                 )
             }
-        } catch (e: Exception) {
-            SkillParseResult.Error(e.message ?: "Invalid YAML")
+        } catch (e: YAMLException) {
+            SkillParseResult.Error(e.message ?: "Invalid YAML", e)
         }
     }
 

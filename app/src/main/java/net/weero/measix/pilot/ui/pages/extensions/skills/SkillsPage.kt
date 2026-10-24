@@ -79,7 +79,7 @@ import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
 
@@ -88,6 +88,8 @@ fun SkillsPage() {
     val navController = LocalNavController.current
     val vm = koinViewModel<SkillsVM>()
     val skills by vm.skills.collectAsStateWithLifecycle()
+    val invalidDirectories by vm.invalidDirectories.collectAsStateWithLifecycle()
+    var invalidDeleteTarget by remember { mutableStateOf<net.weero.measix.pilot.data.files.InvalidSkillDirectory?>(null) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val toaster = LocalToaster.current
     val context = LocalContext.current
@@ -98,6 +100,7 @@ fun SkillsPage() {
     val importSuccessFmt = stringResource(R.string.skills_page_import_success)
     val importFailedFmt = stringResource(R.string.skills_page_import_failed)
     val saveFailedText = stringResource(R.string.skills_page_save_failed)
+    val invalidChangedText = stringResource(R.string.skills_invalid_changed)
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var importJob by remember { mutableStateOf<Job?>(null) }
@@ -189,7 +192,7 @@ fun SkillsPage() {
             if (skills.isNotEmpty() && filtered.isEmpty()) {
                 item { Text(stringResource(R.string.skills_search_empty), Modifier.padding(16.dp)) }
             }
-            if (skills.isEmpty()) {
+            if (skills.isEmpty() && invalidDirectories.isEmpty()) {
                 item {
                     Column(
                         modifier = Modifier
@@ -224,6 +227,25 @@ fun SkillsPage() {
                     onClick = { navController.navigate(Screen.SkillDetail(skill.name)) },
                     onDelete = { if (!busy) deleteTarget = skill },
                 )
+            }
+            if (invalidDirectories.isNotEmpty()) {
+                item { Text(stringResource(R.string.skills_invalid_title), style = MaterialTheme.typography.titleMedium) }
+                items(invalidDirectories, key = { "invalid:${it.directoryName}" }) { directory ->
+                    Card(colors = CustomColors.cardColorsOnSurfaceContainer) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(directory.directoryName, style = MaterialTheme.typography.titleSmall)
+                            Text(stringResource(R.string.skills_invalid_description), style = MaterialTheme.typography.bodySmall)
+                            Row {
+                                TextButton(onClick = { diagnostic = directory.diagnostic.userVisibleDiagnostic() }) {
+                                    Text(stringResource(R.string.skills_invalid_details))
+                                }
+                                TextButton(enabled = !busy, onClick = { invalidDeleteTarget = directory }) {
+                                    Text(stringResource(R.string.delete))
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -307,6 +329,22 @@ fun SkillsPage() {
         onDismiss = { if (!busy) deleteTarget = null },
     ) {
         Text(stringResource(R.string.skills_page_delete_message, deleteTarget?.name ?: ""))
+    }
+    ConfirmDialog(
+        show = invalidDeleteTarget != null,
+        title = stringResource(R.string.skills_page_delete_title),
+        confirmText = stringResource(R.string.delete),
+        dismissText = stringResource(R.string.cancel),
+        onConfirm = {
+            invalidDeleteTarget?.let { target -> operation {
+                val result = vm.deleteInvalidDirectory(target)
+                invalidDeleteTarget = null
+                if (result == net.weero.measix.pilot.data.files.InvalidSkillDeleteResult.CHANGED) toaster.show(invalidChangedText)
+            } }
+        },
+        onDismiss = { if (!busy) invalidDeleteTarget = null },
+    ) {
+        Text(stringResource(R.string.skills_invalid_delete_message, invalidDeleteTarget?.directoryName.orEmpty()))
     }
     (diagnostic ?: failure?.userVisibleDiagnostic())?.let { detail ->
         net.weero.measix.pilot.ui.components.ui.ErrorDetails(

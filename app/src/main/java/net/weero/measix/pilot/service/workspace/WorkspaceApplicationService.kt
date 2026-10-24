@@ -299,21 +299,66 @@ class WorkspaceApplicationService internal constructor(
         } catch (failure: Throwable) { descriptor.close(); throw failure }
     }
 
-    internal suspend fun previewImageSource(workspaceId: String, area: WorkspaceStorageArea, path: String): ImageSource {
-        val entry = gated(workspaceId) {
-            requireWorkspace(workspaceId)
-            requireNotNull(repository.statFile(workspaceId, area, path)) { "workspace_image_missing" }
+    /** Historical message paths use the original guest cwd; the query lease is checked outside the Workspace gate. */
+    internal fun messageImageSource(
+        source: net.weero.measix.pilot.service.ConversationMessageResourceSource,
+        reference: String,
+    ): ImageSource {
+        val origin = requireNotNull(source.workspace) { "message_workspace_origin_unknown" }
+        suspend fun verifyRoot() {
+            check(recovery.state.value == net.weero.measix.pilot.service.ApplicationRecoveryState.Ready) { "rendered_file_revoked" }
+            check(repository.getById(origin.workspaceId)?.root == origin.root) { "message_workspace_unavailable" }
         }
-        return imageSource(workspaceId, area, entry)
+        val file = net.weero.measix.pilot.service.RenderedFileSource(
+            documentPath = (origin.cwd.trimEnd('/') + "/_message").trimStart('/'),
+            changes = repository.listFlow(),
+            verify = {
+                source.requireAccess()
+                gated(origin.workspaceId) { verifyRoot() }
+            },
+            validatePath = { path ->
+                val guest = me.rerere.workspace.RootfsPath.parse("/$path")
+                require(!guest.isUpload) { "message_workspace_upload_requires_artifact" }
+                guest.value.trimStart('/')
+            },
+            read = { path, limit -> gated(origin.workspaceId) {
+                verifyRoot()
+                repository.readRootfsBytes(origin.workspaceId, "/$path", limit).also { verifyRoot() }
+            } },
+        )
+        return file.image(reference)
     }
 
-    internal suspend fun relativeImageSource(workspaceId: String, area: WorkspaceStorageArea, document: String, reference: String): ImageSource {
-        val path = net.weero.measix.pilot.data.enterprise.WorkspaceFileRules.relativeImage(document, reference)
-        val entry = gated(workspaceId) {
-            requireWorkspace(workspaceId)
-            requireNotNull(repository.statFile(workspaceId, area, path)) { "workspace_image_missing" }
+    internal suspend fun renderedSource(workspaceId: String, area: WorkspaceStorageArea, document: String): net.weero.measix.pilot.service.RenderedFileSource {
+        recovery.awaitReady()
+        val root = gated(workspaceId) { requireWorkspace(workspaceId).root }
+        suspend fun verify() {
+            check(recovery.state.value == net.weero.measix.pilot.service.ApplicationRecoveryState.Ready) { "rendered_file_revoked" }
+            check(repository.getById(workspaceId)?.root == root) { "rendered_file_revoked" }
         }
-        return imageSource(workspaceId, area, entry)
+        return net.weero.measix.pilot.service.RenderedFileSource(document,
+            kotlinx.coroutines.flow.merge(repository.listFlow(), recovery.state),
+            verify = { gated(workspaceId) { verify() } },
+            validatePath = { path -> require(path.isNotEmpty()) { "workspace_file_missing" }; path },
+            read = { path, maxBytes -> gated(workspaceId) {
+                verify()
+                val reading = currentCoroutineContext()
+                val output = object : java.io.ByteArrayOutputStream() {
+                    override fun write(value: Int) {
+                        reading.ensureActive()
+                        check(size().toLong() < maxBytes) { "rendered_resource_size_limit" }
+                        super.write(value)
+                    }
+                    override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                        reading.ensureActive()
+                        check(length.toLong() <= maxBytes - size()) { "rendered_resource_size_limit" }
+                        super.write(bytes, offset, length)
+                    }
+                }
+                repository.exportFile(workspaceId, area, path, output)
+                verify()
+                output.toByteArray()
+            } })
     }
 
     suspend fun writeText(workspaceId: String, path: String, text: String) =

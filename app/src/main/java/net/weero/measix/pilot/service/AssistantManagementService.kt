@@ -72,13 +72,47 @@ class AssistantManagementService internal constructor(
         return manage(caller, AssistantManagementChange.Update(assistantId, normalizedName, normalizedDescription, normalizedInstructions)).map { it.assistant }
     }
 
+    internal suspend fun prepareDeletion(assistantId: ConfigurationReference): AssistantDeletionPreview {
+        recoveryGate.awaitReady()
+        val selection = sessions.readPresentation().selection
+            ?: throw net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException("enterprise_data_access_unavailable")
+        return sessions.withSelectedRealmSelection(selection) {
+            settingsStore.withAssistantDeletionPreview(assistantId, sessions.state.value) {
+                AssistantDeletionPreview(assistantId, selection,
+                    conversationApplicationService.captureAssistantDeletionInputs(assistantId))
+            }
+        }
+    }
+
     /** Grants and usage references retire with the definition. Data cleanup waits outside authorization locks. */
     internal suspend fun deleteAssistant(
         assistantId: ConfigurationReference,
         caller: AssistantManagementCaller? = null,
+        preview: AssistantDeletionPreview? = null,
     ): Result<AssistantDeletionResult> {
         recoveryGate.awaitReady()
-        val committed = manage(caller, AssistantManagementChange.Delete(assistantId)).getOrElse { return Result.failure(it) }
+        val access = caller?.realmAccess ?: RealmAccess.Personal
+        val committed = try {
+            // Keep Session admission through durable definition removal. Later queue admissions
+            // observe the removed definition under the Settings owner.
+            suspend fun commit(): AssistantManagementResult {
+                if (preview != null) {
+                    if (caller != null || preview.assistantId != assistantId) {
+                        throw net.weero.measix.pilot.data.datastore.AssistantManagementRejection("assistant_deletion_preview_mismatch")
+                    }
+                    sessions.requirePublishedSelection(preview.selection)
+                }
+                return manageAuthorized(caller, AssistantManagementChange.Delete(assistantId), beforeCommit = {
+                    conversationApplicationService.requireAssistantDeletionInputs(assistantId, preview)
+                }) {
+                    preview?.let { sessions.requirePublishedSelection(it.selection) }
+                }
+            }
+            if (preview != null) sessions.withSelectedRealmSelection(preview.selection) { commit() }
+            else sessions.withRealmAdmission(access) { commit() }
+        } catch (missing: NoSuchElementException) { return Result.failure(missing) }
+        catch (rejected: net.weero.measix.pilot.data.datastore.AssistantManagementRejection) { return Result.failure(rejected) }
+        catch (rejected: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) { return Result.failure(rejected) }
         val cleanupCompleted = committed.deletion?.let { cleanupPendingDeletion(it) } == true
         return Result.success(AssistantDeletionResult(committed.assistant, cleanupPending = !cleanupCompleted))
     }
@@ -87,9 +121,7 @@ class AssistantManagementService internal constructor(
         val access = caller?.realmAccess ?: RealmAccess.Personal
         return try {
             val result = sessions.withRealmAccess(access) {
-                artifactStore.manageAssistantReferences(access.scope, sessions.state.value, caller?.assistantId, change) {
-                    sessions.requirePublishedRealmAccess(access)
-                }
+                manageAuthorized(caller, change)
             }
             Result.success(result)
         } catch (missing: NoSuchElementException) { Result.failure(missing) }
@@ -97,7 +129,21 @@ class AssistantManagementService internal constructor(
         catch (rejected: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) { Result.failure(rejected) }
     }
 
-    /** App 启动时幂等消费尚未完成的删除 tombstone。 */
+    /** Session admission is owned by the caller; Settings and Artifact retain their existing write protocol. */
+    private suspend fun manageAuthorized(
+        caller: AssistantManagementCaller?,
+        change: AssistantManagementChange,
+        beforeCommit: suspend () -> Unit = {},
+        requireSelection: () -> Unit = {},
+    ): AssistantManagementResult {
+        val access = caller?.realmAccess ?: RealmAccess.Personal
+        return artifactStore.manageAssistantReferences(access.scope, sessions.state.value, caller?.assistantId, change, beforeCommit) {
+            sessions.requirePublishedRealmAccess(access)
+            requireSelection()
+        }
+    }
+
+    /** Replays already accepted durable deletion work without asking for confirmation again. */
     internal suspend fun performPendingDeletionCleanupDuringRecovery() {
         val pending = settingsStore.userSettings.value.pendingAssistantDeletions
         pending.forEach { tombstone ->

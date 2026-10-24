@@ -8,7 +8,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -423,7 +423,7 @@ class SettingMcpPageAndroidTest {
             McpTestTheme {
                 val state = net.weero.measix.pilot.ui.hooks.useEditState<McpServerConfig> { }
                 androidx.compose.runtime.LaunchedEffect(Unit) { state.open(config) }
-                McpServerConfigModal(state) { candidate ->
+                McpServerConfigPage(state) { _, candidate ->
                     saved.set(candidate)
                     if (attempts.incrementAndGet() == 1) throw java.io.IOException("disk write detail", IllegalStateException("original cause"))
                 }
@@ -466,7 +466,7 @@ class SettingMcpPageAndroidTest {
             McpTestTheme {
                 val state = net.weero.measix.pilot.ui.hooks.useEditState<McpServerConfig> { }
                 androidx.compose.runtime.LaunchedEffect(Unit) { state.open(config) }
-                McpServerConfigModal(state) { error("existing invalid row must not reach persistence") }
+                McpServerConfigPage(state) { _, _ -> error("existing invalid row must not reach persistence") }
             }
         }
         compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_save)).performClick()
@@ -490,7 +490,7 @@ class SettingMcpPageAndroidTest {
                 KoinIsolatedContext(isolated) { McpTestTheme {
                     val state = net.weero.measix.pilot.ui.hooks.useEditState<McpServerConfig> {}
                     androidx.compose.runtime.LaunchedEffect(Unit) { state.open(config) }
-                    McpServerConfigModal(state) { saved.set(it) }
+                    McpServerConfigPage(state) { _, candidate -> saved.set(candidate) }
                 } }
             }
             compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_tools)).performClick()

@@ -202,17 +202,35 @@ internal data class ResourceSelections(
 )
 
 @Serializable
+internal data class ModelContextLengthOverride(
+    val modelId: ConfigurationReference.Enterprise,
+    val tokens: Int,
+) {
+    init { require(tokens > 0) { "model_context_length_must_be_positive" } }
+}
+
+@Serializable
 internal data class ScopedUserPreferences(
     val scope: ConfigurationScope,
     val selections: ResourceSelections = ResourceSelections(),
     val assistantUsage: List<AssistantUsagePreferences> = emptyList(),
     val gateways: List<GatewayPreference> = emptyList(),
+    val modelContextLengthOverrides: List<ModelContextLengthOverride> = emptyList(),
     val lastConversationId: kotlin.uuid.Uuid? = null,
     val collapsedModelGroupIds: Set<String> = emptySet(),
     val currentWebDavConnectionId: kotlin.uuid.Uuid? = null,
     val webDavBackup: net.weero.measix.pilot.data.configuration.WebDavBackupPreferences = net.weero.measix.pilot.data.configuration.WebDavBackupPreferences(),
 ) {
     init {
+        require(modelContextLengthOverrides.isEmpty() || scope is ConfigurationScope.Enterprise) {
+            "model_context_override_requires_enterprise_scope"
+        }
+        require(modelContextLengthOverrides.all { scope is ConfigurationScope.Enterprise && it.modelId.authority == scope.authority }) {
+            "foreign_model_context_override"
+        }
+        require(modelContextLengthOverrides.map { it.modelId }.distinct().size == modelContextLengthOverrides.size) {
+            "duplicate_model_context_override"
+        }
         require(scope is ConfigurationScope.Enterprise || assistantUsage.isEmpty()) { "personal_assistants_use_shared_definitions" }
         require(assistantUsage.map { it.assistantId }.distinct().size == assistantUsage.size) { "duplicate_assistant_usage" }
         require(gateways.isEmpty() || scope is ConfigurationScope.Enterprise) { "gateway_preferences_require_enterprise_scope" }
@@ -241,6 +259,17 @@ internal data class UserPreferences(
 
     fun forScope(scope: ConfigurationScope): ResourceSelections =
         scopes.singleOrNull { it.scope == scope }?.selections ?: ResourceSelections()
+
+    fun modelContextLengths(scope: ConfigurationScope): Map<ConfigurationReference.Enterprise, Int> =
+        scopes.singleOrNull { it.scope == scope }?.modelContextLengthOverrides.orEmpty().associate { it.modelId to it.tokens }
+
+    fun withModelContextLength(scope: ConfigurationScope.Enterprise, modelId: ConfigurationReference.Enterprise, tokens: Int?): UserPreferences {
+        require(modelId.authority == scope.authority) { "foreign_model_context_override" }
+        val existing = scopes.singleOrNull { it.scope == scope } ?: ScopedUserPreferences(scope)
+        val updated = existing.modelContextLengthOverrides.filterNot { it.modelId == modelId } +
+            listOfNotNull(tokens?.let { ModelContextLengthOverride(modelId, it) })
+        return copy(scopes = scopes.filterNot { it.scope == scope } + existing.copy(modelContextLengthOverrides = updated))
+    }
 
     fun lastConversation(scope: ConfigurationScope): kotlin.uuid.Uuid? =
         scopes.singleOrNull { it.scope == scope }?.lastConversationId

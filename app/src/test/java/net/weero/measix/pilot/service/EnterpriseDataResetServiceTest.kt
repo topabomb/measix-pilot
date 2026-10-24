@@ -50,8 +50,9 @@ class EnterpriseDataResetServiceTest {
                 entered.complete(Unit)
                 release.await()
             }
-            val request = EnterpriseDataResetRequest(Uuid.random(), EnterpriseDataResetMode.CLEAR_ALL)
-            val page = async { reset.reset(request) }
+            val preview = reset.prepare(EnterpriseDataResetMode.CLEAR_ALL)
+            val request = preview.request
+            val page = async { reset.reset(preview) }
             entered.await()
             page.cancel()
             page.join()
@@ -59,7 +60,7 @@ class EnterpriseDataResetServiceTest {
             assertTrue(requireNotNull(reset.progress.value).running)
             assertNull(reset.progress.value?.failure)
             val retry = async { reset.retryReset() }
-            val repeated = async { reset.reset(request) }
+            val repeated = async { reset.reset(preview) }
             runCurrent()
             assertFalse(retry.isCompleted)
             assertFalse(repeated.isCompleted)
@@ -79,8 +80,9 @@ class EnterpriseDataResetServiceTest {
             val (sessions, _, reset) = f.new()
             val scope = f.enroll(sessions)
             coEvery { f.catalogs.clearEnterpriseScope(scope) } throws CancellationException("worker stopped")
-            val request = EnterpriseDataResetRequest(Uuid.random(), EnterpriseDataResetMode.CLEAR_ALL)
-            try { reset.reset(request); fail("Expected cancellation") }
+            val preview = reset.prepare(EnterpriseDataResetMode.CLEAR_ALL)
+            val request = preview.request
+            try { reset.reset(preview); fail("Expected cancellation") }
             catch (_: CancellationException) { }
             assertFalse(requireNotNull(reset.progress.value).running)
             assertNull(reset.progress.value?.failure)
@@ -116,8 +118,9 @@ class EnterpriseDataResetServiceTest {
             val (sessions, _, reset) = f.new()
             f.enroll(sessions)
             f.workerScope.coroutineContext[Job]?.cancel()
-            val request = EnterpriseDataResetRequest(Uuid.random(), EnterpriseDataResetMode.KEEP_HISTORY)
-            try { reset.reset(request); fail("Expected application shutdown") }
+            val preview = reset.prepare(EnterpriseDataResetMode.KEEP_HISTORY)
+            val request = preview.request
+            try { reset.reset(preview); fail("Expected application shutdown") }
             catch (_: CancellationException) { }
             assertEquals(request.operationId.toString(), f.store.read()?.operationId)
             assertFalse(requireNotNull(reset.progress.value).running)
@@ -347,7 +350,7 @@ class EnterpriseDataResetServiceTest {
         fixture { f ->
             // A live READY Session on disk: the confirmed reset died before its barrier ran. The bare
             // enroller carries no exit watcher, so nothing races the resumed writes over the same store.
-            val enroller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(f.root)) { f.now }
+            val enroller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(f.root), f.store) { f.now }
             val scope = f.enroll(enroller)
             f.store.write(f.frozenIntent(scope))
 
@@ -368,7 +371,7 @@ class EnterpriseDataResetServiceTest {
 
     @Test fun `startup resume defers to a pending foreign exit and converges once it completes`() = runTest {
         fixture { f ->
-            val enroller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(f.root)) { f.now }
+            val enroller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(f.root), f.store) { f.now }
             val scope = f.enroll(enroller)
             // A reset confirmed while a foreign exit was already closing is rejected but keeps its intent.
             enroller.beginExit(requireNotNull(enroller.captureExitRequest()))
@@ -400,7 +403,7 @@ class EnterpriseDataResetServiceTest {
             val (sessions, exits, reset) = f.new()
             f.enroll(sessions)
             val request = requireNotNull(exits.captureRequest())
-            sessions.beginExit(request)
+            sessions.beginExit(request.request)
 
             var error: EnterpriseConfigurationException? = null
             try { f.reset(reset, EnterpriseDataResetMode.KEEP_HISTORY); fail("Expected reset rejection") }
@@ -425,7 +428,7 @@ class EnterpriseDataResetServiceTest {
             val scope = f.enroll(sessions)
             val access = requireNotNull((sessions.state.value as EnterpriseState.Available).manifest.session)
                 .let { RealmAccess.Enterprise(scope, it.id) }
-            sessions.beginLocalDataReset(requireNotNull(exits.captureRequest()))
+            sessions.beginLocalDataReset(requireNotNull(exits.captureRequest()).request)
 
             var invalidation: EnterpriseConfigurationException? = null
             try { sessions.beginInvalidation(access, EnterpriseExitReason.AUTHORIZATION_REVOKED); fail("Expected invalidation rejection") }
@@ -441,7 +444,7 @@ class EnterpriseDataResetServiceTest {
     @Test fun `identity deletion strengthens keep history reset at every durable stage and survives restart`() = runTest {
         for (stage in EnterpriseDataResetStage.entries) fixture { f ->
             val original = EnterpriseSessionController(
-                net.weero.measix.pilot.data.enterprise.enterpriseTestStore(f.root),
+                net.weero.measix.pilot.data.enterprise.enterpriseTestStore(f.root), f.store,
             ) { f.now }
             val scope = f.enroll(original)
             val access = original.captureRealmAccess(scope) as RealmAccess.Enterprise
@@ -509,6 +512,123 @@ class EnterpriseDataResetServiceTest {
         }
     }
 
+    @Test fun `changed queue refuses reset before any intent or cleanup`() = runTest {
+        fixture { f ->
+            val (sessions, _, reset) = f.new()
+            f.enroll(sessions)
+            val preview = reset.prepare(EnterpriseDataResetMode.CLEAR_ALL)
+            coEvery { f.conversations.requireEnterpriseResetInputs(preview) } throws
+                EnterpriseConfigurationException("enterprise_pending_inputs_changed")
+            assertEquals("enterprise_pending_inputs_changed", runCatching { reset.reset(preview) }.exceptionOrNull()?.message)
+            assertNull(f.store.read())
+            assertEquals(EnterpriseSessionPhase.READY, (sessions.state.value as EnterpriseState.Available).manifest.phase)
+            coVerify(exactly = 0) { f.conversations.clearEnterpriseInputQueuesAfterResetStop() }
+            coVerify(exactly = 0) { f.conversations.clearEnterpriseScope(any()) }
+        }
+    }
+
+    @Test fun `reset preview cannot follow a later space selection`() = runTest {
+        fixture { f ->
+            val (sessions, _, reset) = f.new()
+            f.enroll(sessions)
+            val preview = reset.prepare(EnterpriseDataResetMode.KEEP_HISTORY)
+            sessions.selectPersonalFixture()
+            assertTrue(runCatching { reset.reset(preview) }.exceptionOrNull() is EnterpriseConfigurationException)
+            assertNull(f.store.read())
+            coVerify(exactly = 0) { f.conversations.requireEnterpriseResetInputs(any()) }
+        }
+    }
+
+    @Test fun `both reset branches clear all residual enterprise queues without a live session`() = runTest {
+        for (mode in EnterpriseDataResetMode.entries) fixture { f ->
+            val (sessions, _, reset) = f.new()
+            sessions.recover()
+            f.frozenScopes = setOf(f.residualScope())
+            val preview = reset.prepare(mode)
+            assertNull(preview.pendingInputCount)
+            reset.reset(preview)
+            coVerify(exactly = 1) { f.conversations.clearEnterpriseInputQueuesAfterResetStop() }
+            coVerify(exactly = 0) { f.conversations.stopEnterpriseWork(any()) }
+            coVerify(exactly = if (mode == EnterpriseDataResetMode.CLEAR_ALL) 1 else 0) {
+                f.conversations.clearEnterpriseScope(f.residualScope())
+            }
+        }
+    }
+
+    @Test fun `failed intent write leaves no accepted reset and never clears pending inputs`() = runTest {
+        fixture { f ->
+            val (sessions, exits, _) = f.new()
+            f.enroll(sessions)
+            val failingStore = mockk<EnterpriseDataResetStore>()
+            every { failingStore.read() } returns null
+            every { failingStore.write(any()) } throws IOException("intent write failed")
+            val reset = EnterpriseDataResetService(failingStore, sessions, exits, f.conversations, f.settings,
+                f.memories, f.catalogs, f.files, ApplicationRecoveryGate().apply { ready() }, f.workerScope) { f.now }
+            val preview = reset.prepare(EnterpriseDataResetMode.CLEAR_ALL)
+            assertEquals("intent write failed", runCatching { reset.reset(preview) }.exceptionOrNull()?.message)
+            assertNull(f.store.read())
+            assertEquals(EnterpriseSessionPhase.READY, (sessions.state.value as EnterpriseState.Available).manifest.phase)
+            coVerify(exactly = 0) { f.conversations.clearEnterpriseInputQueuesAfterResetStop() }
+        }
+    }
+
+    @Test fun `accepted intent is handed off even when the session acceptance receipt is cancelled`() = runTest {
+        fixture { f ->
+            val (sessions, exits, original) = f.new()
+            f.enroll(sessions)
+            val preview = original.prepare(EnterpriseDataResetMode.KEEP_HISTORY)
+            val cancelledReceipt = mockk<EnterpriseSessionController>()
+            coEvery { cancelledReceipt.acceptLocalDataResetAdmission(any(), any()) } coAnswers {
+                secondArg<suspend () -> Unit>()()
+                throw CancellationException("acceptance receipt cancelled")
+            }
+            f.workerScope.coroutineContext[Job]?.cancel()
+            val reset = EnterpriseDataResetService(f.store, cancelledReceipt, exits, f.conversations, f.settings,
+                f.memories, f.catalogs, f.files, ApplicationRecoveryGate().apply { ready() }, f.workerScope) { f.now }
+            assertTrue(runCatching { reset.reset(preview) }.exceptionOrNull() is CancellationException)
+            assertEquals(preview.request.operationId.toString(), f.store.read()?.operationId)
+            val progress = requireNotNull(reset.progress.value)
+            assertEquals(preview.request.operationId, progress.operationId)
+            assertFalse(progress.running)
+            assertNull(progress.failure)
+        }
+    }
+
+    @Test fun `write verification failure with retained intent exposes pending retry without cleanup`() = runTest {
+        fixture { f ->
+            val (sessions, exits, original) = f.new()
+            f.enroll(sessions)
+            val preview = original.prepare(EnterpriseDataResetMode.KEEP_HISTORY)
+            val uncertainStore = mockk<EnterpriseDataResetStore>()
+            every { uncertainStore.read() } answers { f.store.read() }
+            every { uncertainStore.write(any()) } answers {
+                f.store.write(firstArg())
+                throw EnterpriseStorageException("enterprise_reset_commit_failed").apply {
+                    initCause(java.io.IOException("Cannot verify enterprise-reset/intent.json"))
+                }
+            }
+            val reset = EnterpriseDataResetService(uncertainStore, sessions, exits, f.conversations, f.settings,
+                f.memories, f.catalogs, f.files, ApplicationRecoveryGate().apply { ready() }, f.workerScope) { f.now }
+            assertEquals("enterprise_reset_commit_failed", runCatching { reset.reset(preview) }.exceptionOrNull()?.message)
+            assertNotNull(f.store.read())
+            assertTrue(requireNotNull(reset.progress.value?.failure).contains("enterprise_reset_commit_failed"))
+            assertTrue(requireNotNull(reset.progress.value?.failure).contains("IOException: Cannot verify enterprise-reset/intent.json"))
+            assertFalse(requireNotNull(reset.progress.value).running)
+            coVerify(exactly = 0) { f.conversations.clearEnterpriseInputQueuesAfterResetStop() }
+            every { uncertainStore.write(any()) } answers { f.store.write(firstArg()) }
+            every { uncertainStore.clear() } throws EnterpriseStorageException("enterprise_reset_clear_failed").apply {
+                initCause(java.io.IOException("Cannot remove enterprise-reset/intent.json"))
+            }
+            assertTrue(runCatching { reset.retryReset() }.isFailure)
+            assertTrue(requireNotNull(reset.progress.value?.failure).contains("enterprise_reset_clear_failed"))
+            assertTrue(requireNotNull(reset.progress.value?.failure).contains("IOException: Cannot remove enterprise-reset/intent.json"))
+            every { uncertainStore.clear() } answers { f.store.clear() }
+            reset.retryReset()
+            assertNull(f.store.read())
+            assertNull(reset.progress.value)
+        }
+    }
+
     private suspend fun TestScope.fixture(block: suspend (Fixture) -> Unit) {
         val f = Fixture(this)
         try { block(f) } finally {
@@ -534,6 +654,11 @@ class EnterpriseDataResetServiceTest {
         val files = mockk<FileManagementApplicationService>()
 
         init {
+            coEvery { conversations.captureEnterpriseExitInputs(any()) } returns emptyMap()
+            coEvery { conversations.requireEnterpriseExitInputs(any()) } returns Unit
+            coEvery { conversations.captureEnterpriseResetInputs() } returns emptyMap()
+            coEvery { conversations.requireEnterpriseResetInputs(any()) } returns Unit
+            coEvery { conversations.clearEnterpriseInputQueuesAfterResetStop() } returns Unit
             coEvery { conversations.stopEnterpriseWork(any()) } returns Unit
             coEvery { conversations.requireEnterpriseStopped(any()) } returns Unit
             coEvery { conversations.clearEnterpriseScope(any()) } returns Unit
@@ -567,7 +692,7 @@ class EnterpriseDataResetServiceTest {
 
         /** A fresh controller, exit service and reset service over the same durable directories. */
         fun new(): Triple<EnterpriseSessionController, EnterpriseExitService, EnterpriseDataResetService> {
-            val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root)) { now }
+            val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), store) { now }
             val gate = ApplicationRecoveryGate().apply { ready() }
             val exits = EnterpriseExitService(sessions,
                 mockk { coEvery { cancelAndAwait(any()) } returns Unit }, conversations, gate, scope,
@@ -586,7 +711,7 @@ class EnterpriseDataResetServiceTest {
          * runtime domain stop, and the strict exit mock fails the test the moment it is called.
          */
         fun restart(): Pair<EnterpriseSessionController, EnterpriseDataResetService> {
-            val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root)) { now }
+            val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), store) { now }
             val reset = EnterpriseDataResetService(store, sessions, mockk(), conversations, settings,
                 memories, catalogs, files, ApplicationRecoveryGate().apply { ready() }, workerScope) { now }
             return sessions to reset
@@ -600,7 +725,7 @@ class EnterpriseDataResetServiceTest {
         }
 
         suspend fun reset(service: EnterpriseDataResetService, mode: EnterpriseDataResetMode) {
-            service.reset(EnterpriseDataResetRequest(Uuid.random(), mode))
+            service.reset(service.prepare(mode))
         }
 
         fun assertStoreClean() {

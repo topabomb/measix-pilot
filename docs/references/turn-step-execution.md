@@ -118,9 +118,53 @@ Tool 的 `stepId` 指向前方最近的 Step，`localCallId` 在 owning Assistan
 
 ## START 与交互继续
 
+### Runtime 待发输入
+
+`ConversationRuntime.inputQueue` 是进程内待发输入的内部投影，持有原 RealmSelection、助手、语境代次、稳定用户消息 ID
+与附件提交权。等待、编辑和提交阶段由 Runtime 同步方法管理；编辑队首阻止越过，暂停 epoch 使旧接纳观察失效。
+每次编辑取得独立 editToken；取消按 itemId、version 与 token 幂等比较，迟到清理不能取消后一次编辑，也不清除队列暂停。
+保存先复验编辑身份，再将旧 submission 中仍被保留的创建权移交给已取得 retention 的替代 submission，
+最后发布替代项并关闭旧提交权；移交失败不改变原项。
+`QueueInputEditLease` 借用原附件并用独立 ArtifactDraftScope 接管新增附件；保存与关闭同步互斥，
+接纳后即使回执取消也不回收替代项。Runtime 在取消、替换、撤回和清空时同步撤销编辑租约；
+原选择、助手或语境改变也使租约失效。关闭先撤销访问，新资源沿 Draft 原关闭协议释放，
+已在执行的导入由原操作 finally 清理；取消清理仅核对原 Runtime/token，不要求原页面仍开放。
+`ConversationRuntimeRegistry.installAndStartQueuedInputWorker` 在原会话操作锁内复验并仅空闲安装，额外检查上一个
+Job 真正 completed，不能因 finally 中移除了 worker 就启动下一项。待发队列取得独立 Runtime lease，cleanup 不得丢弃它。
+`ConversationTurnService.enqueueMessage` 接管原输入提交权并调度；调度不依赖已关闭的页面 CommandTarget，
+但按入队时的 RealmSelection 在 Session 边界复验。排队与普通发送共用 `appendRequestInput` 原用户消息事务；
+提交成功移出待发，提交前失败保留输入及附件，模型失败暂停余项。普通 START、队列 START 和审批继续在 Job 完成后
+通知调度，以实际 TurnRunResult 区分完成、等待交互、失败及取消，不能用 Job 正常返回当作模型成功。
+停止先提升队列 epoch，再捕获请求和最后 Job，锁外等待；切域在原 Session 回调内同步暂停，退出/删除在停止后清理。
+聊天输入经 `submitChatInput` 在原会话锁内判断立即发送或入队；活动请求、未退出的最后 Job、待交互 stream 或已有待发项
+都会进入队列，不依据 UI 的 loading 值决定是否 supersede。`RequestAdmission` 区分已安装请求和已交接队列项，
+UI 仅消费公开回执与 `ConversationInputQueueUiModel`，不持有附件 submission。
+显式 `clearQueuedInputs` 比较确认时的完整 item/version 集合并拒绝 SUBMITTING，原子撤回全部未发送项，
+不停止活动请求；其与停止后删除使用的 `clearInputQueueAfterStop` 保持不同前置条件。
+会话删除通过 `prepareDeletion` 捕获原 selection、目标对象和待发版本，UI 只读取数量；
+`delete`、`deleteForUndo`、`deleteConversations` 无确认时只允许无待发内容。整批目标先在原根锁内复验，
+随后暂停并等待活动请求，最终删除锁内再次检查，等待期间新增或编辑会拒绝旧确认。
+已撤回或已经持久提交的项可以从确认范围减少，Undo 仅恢复持久会话树，不恢复待发队列。
+待发项及其附件只在持久删除成功后、Runtime 逐出前释放；数据库删除或 Undo 保留失败时保留已暂停队列。
+普通 START、队列 START 与审批继续同时等待 Job 完成及原 worker 的请求结果对账，之后才允许下一项调度；
+失败/取消的暂停与对账在原会话锁内发布。旧 worker 的迟到结果不能解除新 worker 的等待。
+队列 worker 在安装前进入清理协议，安装成功后尚未恢复主体即被取消，也必须结清 SUBMITTING 并保留未提交输入。
+
+显式企业退出由 `EnterpriseExitPreview` 捕获原 Session、Runtime 和待发版本；应用页面与门户退出共用
+`EnterpriseExitService`。当前企业空间显示数量，从个人空间发起时只说明企业待发内容及附件会被清除。
+确认范围复验与进入 CLOSING 在同一 Session 锁内完成；新增或编辑返回 `enterprise_pending_inputs_changed`，
+撤回或已经持久提交的内容允许收窄。自动过期、撤权和已接纳退出的恢复不等待新的用户确认。
+
 ### Draft 与首条提交
 
 新聊天先是非持久化 Draft，首条 `AppendUserMessage` 单事务创建会话并原位晋升 Ready。共享预设附件在安装 Draft 前由 ArtifactStore 复制到目标域，创建令牌随原 Runtime 保留；重复打开不重复复制。提交失败保持 Draft 与附件，提交后沿原会话协议发布，闲置丢弃时同步交还 GC。细节见多模态持久化参考。
+
+聊天页新建时捕获抽屉的原 `ConversationFolderAccess` 与文件夹 ID，经应用服务核对原选择和助手后写入
+`NewDraft.folderId`，初始化只写 Draft header。`MaterializeDraft` 在建会话同一 Room 事务内复验文件夹存在、
+完整 scope 与助手；失效时拒绝首发，不静默清空或改用当前抽屉位置。后续抽屉切换不改写该会话位置。
+Draft 的位置选择器通过 `foldersOfDraft` 取得原 lease 签发的目录，显式选择新位置或移出文件夹。
+`updateDraftFolder` 与发送共用输入锁，应用命令在原会话锁内复查 Draft 和助手后提交 `UpdateHeader`；
+不清空输入或附件，不允许用过期的 Draft 操作修改已经晋升的 Ready 会话。
 页面打开通过 `ConversationApplicationService.initialize` 校验原 selected RealmAccess，再由 `openForView` 在会话锁内先检查
 resident/Room header 的完整 scope 与根会话身份，之后才加载消息树或安装显式 Draft。已有会话不存在时返回 Missing，禁止回退新建。
 已晋升聊天保留原 Runtime 与导航项；恢复的 `NewDraft` 请求若已有持久 header，就读取已提交内容，不重放助手 preset。
@@ -180,6 +224,12 @@ Pending 是整批屏障，任何自动工具都不抢先执行。合法 Denied /
 `ModelResponseCheckpoint(AWAITING_USER)`。首次采样的即时失败同样随模型 checkpoint 提交；续跑且无 Pending
 时，即时失败通过 `ToolResultCheckpoint` 提交。新 Pending 不进入 RUNNING snapshot 或流式投影。
 
+工具执行耗时由 `ToolBatchRunner` 在 STARTED 检查点成功后围绕实际执行以单调时钟测量，
+`ToolExecutionFact.durationMillis` 随原终态事务写入 `tool_execution.duration_millis`。
+正常返回的成功或失败保存测量值；审批等待不计入，取消、恢复兜底及旧记录缺测量时保持 null，
+不以创建/更新时间推算。终态重复回调不能覆盖已提交值，中间 Child link 更新不写时长。
+查询在原会话授权下读取已提交事实，按已提交聚合身份缓存；UI 不从工具 metadata 推导耗时。
+
 | 命令 | durable 边界 |
 | --- | --- |
 | `AdmitRequestContext` | Provider IO 前的应用内容、selection 与实际位置差异、零变化边界及 Artifact CONTEXT roots |
@@ -238,6 +288,9 @@ model-context owner/anchor 使恢复失败关闭，不能以空会话或只改 e
 Header command 不清除 active owner；冲突树命令必须结束或拒绝当前 owner。Registry 只回收没有页面引用、活动
 任务和待释放执行资源的闲置 Runtime；Job 已结束不代表 stream 或资源清理已完成。前台服务只通过 query port 观察活动，保活、通知与 UI 阶段不成为第二执行 owner，
 具体投影见 [UI 架构](ui-architecture.md)。
+`ChatGenerationForegroundService` 的观察与生命周期回调在 Main 串行执行；每次 `onStartCommand` 立即发布前台通知并替换旧观察。
+观察只使用捕获的 startId 请求停止，旧观察不能停止新启动，也不建立生成引用计数。平台权限拒绝保留诊断并只停止对应启动，
+不改写 Turn 终态；系统 timeout 先撤销观察、释放对应服务启动，再由 AppScope 沿原应用命令停止生成，服务销毁不取消该收口。
 
 ## 辅助生成、标题与摘要
 

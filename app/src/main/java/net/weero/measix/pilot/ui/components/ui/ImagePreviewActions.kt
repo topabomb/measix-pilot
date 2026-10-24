@@ -22,8 +22,8 @@ import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import com.dokar.sonner.ToastType
-import com.dokar.sonner.ToasterState
+import net.weero.measix.pilot.ui.components.toast.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToasterState
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -282,6 +282,7 @@ internal fun setBackgroundWithFeedback(
                 )
             }
         } catch (cancelled: CancellationException) {
+            toaster.dismiss(toastId)
             throw cancelled
         } catch (error: Throwable) {
             toaster.show(

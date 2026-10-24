@@ -40,6 +40,17 @@ UserSettingsDocument（用户定义 + 公用/按域偏好）+ Applied Enterprise
 
 ### 2.2 单一读写路径
 
+模型上下文容量沿现有配置责任保存。用户模型的 `Model.contextLength` 是可空正整数，
+从原提供商模型编辑器修改，共享该模型的空间同时受影响。企业模型的本地覆盖由
+`ScopedUserPreferences.modelContextLengthOverrides` 保存，按完整企业主体与受管引用隔离，
+不改企业发布定义或 Core 合同。企业模型设置页只编辑本域覆盖，失效引用显示原因且允许清除旧覆盖。
+`ConfigurationApplicationService.setModelContextLengthOverride` 持有原 RealmSelection 授权，
+Settings writer 在最新文档内比较 expectedTokens；过期编辑、会话失效和存储失败不能覆盖已提交值。
+Resolver 提供有效容量及来源，START 捕获后同 Turn 继续使用。缺字段和删除覆盖均表示未知，
+个人备份不含企业覆盖，个人恢复保留企业偏好，退出与主体删除沿原 scope 生命周期清理。
+容量只用于上下文占比展示，不改变服务端限制、ContextBudget 或历史裁剪；历史分母规则见
+[Token 用量](token-usage-accounting.md)。
+
 `SettingsStore` 是用户配置与偏好的唯一写入 owner。企业配置归独立的 EnterpriseAppliedStore / EnterpriseSessionController。
 
 ```text
@@ -53,6 +64,7 @@ updateLocal(latest personalSettings transform)
 
 - `userSettings` 用于共享用户定义编辑、公用外观与个人配置读取；不代表企业可用资源或执行授权。
 - `SettingVM.settings` 直接读取 owner 的 StateFlow，首帧不再另造默认 Settings；未恢复时由 RouteActivity 的统一恢复门禁展示 Loading／失败与重试，恢复成功才开放设置导航。
+- 新增提供商先选协议类型，再复用配置编辑器持有内存草稿；`ProviderSettingsApplicationService.createProvider/importProvider` 等待 Settings 提交后才发布成功和列表定位。导入重新分配提供商与模型用户引用，不覆盖已有定义或企业偏好；取消草稿不写入，失败保留输入。分享配置解析禁止异常附带原始 JSON 输入，避免自定义凭据泄漏，保留异常位置、类型与诊断堆栈。
 - 域内目录、使用选择和执行通过 configuration application/query ports 消费 `ConfigurationResolver` 的 `ResolvedConfiguration`，不另落盘镜像。
 - `ConfigurationQueryService` 将原 selection 的读取失败发布为带诊断的不可用状态，保留外层空间订阅；查询等待期间授权到期后，切换空间仍可重新建立目录读取。取消继续传播，失败不发布旧目录或空目录冒充成功。
 - `SettingsStore.observeConfiguration` 的去重同时比较完整投影内容与目录 `catalog.keys` 的迭代顺序：Map 值相同但顺序变化仍发布。目录顺序只从原配置 List 经 Resolver 投影，不增加 order 字段或 UI 排序副本；无关配置变化仍去重。
@@ -227,6 +239,15 @@ Snapshot v5 的可选 `webdav[]` 经 `PlatformSnapshotMapper` 保存为 `Enterpr
 
 `EnterpriseIdentityDataDisposer` 按 principal 编排各 owner 清理。`EnterpriseDataResetService` 先持久保存“仅删除接入”或“接入和全部企业历史”的 reset intent，由应用 scope 的 worker 持有该操作；页面取消只取消等待，不取消已接纳的清理。重试复用尚在执行的原 intent，UI 区分 running、pending 与 failure。服务复用关闭屏障并在重启后继续；启动 resume 保持 `ApplicationRecoveryCoordinator` 门禁开放前的原恢复顺序，更强删除终态可扩大清理范围。任何分支都不删除个人数据，也不依赖 Core logout 成功；损坏 manifest 不能通过回读旧值假装重置成功。
 
+显式重置先由 `EnterpriseResetPreview` 固定原选择、Session 身份和所有企业 Runtime 的待发版本。
+确认只显示当前企业空间数量；个人空间或存储异常时不披露企业数量，始终说明全部企业空间的清理影响。
+两个模式都会在停止实际工作后清除企业待发内容及附件；KEEP_HISTORY 保留持久历史，个人待发内容不受影响。
+确认范围复验与原 reset intent 的持久接纳在同一 Session 锁内完成，新增或编辑使旧确认失效。
+原 `EnterpriseDataResetStore` 中未完成的 intent 同时阻止普通企业准入和新接入；即使之后写 CLOSING 失败，
+也不能恢复 READY 准入。它仍是原重置流程的唯一持久事实，Session 只读该事实；文件变更通知用于唤醒授权投影，
+不复制可编辑的重置状态。原关闭、重试和启动恢复入口可继续推进该 intent，不要求再次确认。
+接入码交换尚未结束时重置返回 `enterprise_enrollment_in_progress`，避免丢弃已取得但尚未登记的凭据。
+
 接入与配置 wire 以固定的 Core 导出 [Client Control 合同](../../app/src/test/resources/contracts/platform/client-control.openapi.yaml)及其 [来源 manifest](../../app/src/test/resources/contracts/platform/manifest.json)核对。Android 的共享 cases、本机 HTTP 与二维码 round-trip 只证明各自边界，真实 Core、相机/相册及发行版验收见 [测试策略](testing-strategy.md)。
 
 APK 的平台合同身份来自同目录 `protocol-baseline.json` 和 Portal manifest。`tools/android_contract.py` 与
@@ -388,7 +409,10 @@ Workspace 注册和审批、会话助手及合法覆盖、文件夹和模型上�
 - `Assistant.enabledSkills` 只保存 Skill 名称引用；
 - 自定义字体、Assistant 头像/背景、上传和生成图片分别由自己的文件 owner 管理。
 
-`SkillManager` 是 Skill 目录身份、文件树、读取、校验和发布的唯一 owner，UI 与工具只持有 typed metadata/file/result，不取得宿主路径。`SkillFrontmatterParser` 使用 SafeConstructor 与 loader limits，拒绝重复键并限制 alias、嵌套和文档大小。
+`SkillManager` 是 Skill 目录身份、文件树、读取、校验和发布的唯一 owner，UI 与工具只持有 typed metadata/file/result，不取得宿主路径。`SkillFrontmatterParser` 使用 SafeConstructor 与 loader limits，拒绝重复键并限制 alias、嵌套和文档大小。 Markdown、ZIP 和 GitHub 导入遇到 YAML 或字段校验错误时保留 INVALID_SKILL、具体原因与解析异常链；ZIP 诊断包含条目路径。非 YAML 的非预期异常保留原异常并报告 UNKNOWN，取消继续传播，解析失败不得发布 Skill。 优化 Release 保留 `org.yaml.snakeyaml.TypeDescription` 类名：SafeConstructor 初始化会经该类读取自身包名，移入默认包会在 Android 上崩溃；不因此保留整套 JavaBean 反射能力。
+`listInvalidSkillDirectories` 单独返回无法加载的目录名、原始诊断及 owner 签发的删除目标；合法旧目录与 frontmatter 名称不同仍按现有身份规则读取。
+`deleteInvalidSkillDirectory` 在原备份锁内复验目标未被修复或替换，按实际目录操作，复用整库 staging/rename/backup 恢复协议保留其他目录。
+页面确认删除前展示共享用户 Skill 库的影响，过期目标要求刷新；越界、符号链接或 IO 失败保留诊断，不把失败当作已清理。
 
 Skill 文本在 owner 边界先做 4 MiB bounded byte read，再 strict UTF-8 解码；超限、非法编码和 IO 分别返回 typed failure。写主文档/支持文件及删除支持文件时，先复制完整已发布目录到 staging，拒绝 symlink/path escape，校验 frontmatter 与预期 name 后 rename 发布。更新 SKILL.md 保留支持文件；中断 backup 由下一次 owner 访问恢复或清理，歧义时拒绝继续。
 

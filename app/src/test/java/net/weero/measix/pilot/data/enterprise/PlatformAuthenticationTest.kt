@@ -20,7 +20,7 @@ class PlatformAuthenticationTest {
     private fun fixture(name: String) = requireNotNull(javaClass.getResourceAsStream("/contracts/platform/cases.json"))
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
         .first { it.jsonObject.getValue("name").jsonPrimitive.content == name }.jsonObject.getValue("value").toString().let(::withStarterOpeningMock)
-    private fun controller(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)) { 1000L }
+    private fun controller(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
     private val connection get() = PlatformConnection("http://192.168.1.20:8080", PlatformWireCodec.decode(fixture("discovery")))
     private val response get() = PlatformWireCodec.decode<PlatformEnrollmentExchangeResponse>(fixture("enrollment-response"))
 
@@ -175,7 +175,7 @@ class PlatformAuthenticationTest {
 
     @Test fun `pending realm navigation checks expiry again after prior host shutdown`() = runBlocking {
         var time = 1000L
-        val owner = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder(), credentialCipher = cipher)) { time }
+        val owner = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder(), credentialCipher = cipher), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { time }
         val id = owner.acceptPlatformEnrollment(owner.beginPlatformEnrollment(), connection, response)
         val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap")).let {
             it.copy(session = it.session.copy(expiresAt = "1970-01-01T00:00:03Z", sessionIdleExpiresAt = "1970-01-01T00:00:03Z"))

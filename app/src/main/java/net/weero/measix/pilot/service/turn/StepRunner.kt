@@ -319,7 +319,7 @@ internal class StepRunner(
                 )
                 // 请求构建完成，进入等待模型响应阶段
                 onPhase?.invoke(TurnRunPhase.MODEL_WAITING)
-                attachUsage(turnUsage.recordRequestStarted(estimatedRequestContextTokens))
+                attachUsage(turnUsage.recordRequestStarted(estimatedRequestContextTokens, model.contextLength?.toLong()))
                 onUpdateMessages(messages)
                 val requestStarted = TimeSource.Monotonic.markNow()
                 fun providerDurationMillis(): Long = requestStarted.elapsedNow().inWholeMilliseconds.coerceAtLeast(0)
@@ -425,7 +425,7 @@ internal class StepRunner(
                         providerRequestDurationMillis = providerDurationMillis(),
                         timeToFirstOutputMillis = timeToFirstOutputMillis,
                     )
-                    val appliedUsage = turnUsage.apply(completedUsage)
+                    val appliedUsage = turnUsage.apply(completedUsage, model.contextLength?.toLong())
                     val usageDiagnostics = completedUsage.diagnostics + appliedUsage.diagnostics
                     if (usageDiagnostics.isNotEmpty()) {
                         Log.w(TAG, "Provider usage normalization diagnostics: ${usageDiagnostics.joinToString()}")

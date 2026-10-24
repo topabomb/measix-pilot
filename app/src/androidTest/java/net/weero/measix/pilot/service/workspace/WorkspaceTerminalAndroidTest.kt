@@ -149,7 +149,7 @@ class WorkspaceTerminalAndroidTest {
 
     private suspend fun withRuntime(block: suspend (WorkspaceTerminalRuntime, EnterpriseSessionController, NativeHost, AppScope) -> Unit) {
         val root = File(context.cacheDir, "pty-test-${UUID.randomUUID()}").apply { check(mkdirs()) }
-        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise"))).also { it.recover() }
+        val sessions = EnterpriseSessionController(EnterpriseAppliedStore(File(root, "enterprise")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).also { it.recover() }
         val scope = AppScope()
         val host = NativeHost(root)
         val runtime = WorkspaceTerminalRuntime(context, scope, sessions, host)

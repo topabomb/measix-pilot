@@ -24,6 +24,51 @@ internal fun appliedConfiguration(packet: EnterprisePackage, snapshotSchemaVersi
 )
 
 class ConfigurationResolverTest {
+    @Test
+    fun `model capacity preferences round trip and isolate enterprise principals`() {
+        val packet = exampleEnterprisePackage()
+        val first = packet.identity.scope
+        val second = first.copy(userId = first.userId + "_other")
+        val reference = packet.identity.reference(packet.configuration.models.first().id)
+        val preferences = UserPreferences().withModelContextLength(first, reference, 1000)
+            .withModelContextLength(second, reference, 2000)
+        val json = net.weero.measix.pilot.utils.JsonInstant
+        val encoded = json.encodeToString(UserPreferences.serializer(), preferences)
+        val decoded = json.decodeFromString(UserPreferences.serializer(), encoded)
+        assertEquals(1000, decoded.modelContextLengths(first)[reference])
+        assertEquals(2000, decoded.modelContextLengths(second)[reference])
+        assertEquals(2000, decoded.withModelContextLength(first, reference, null).modelContextLengths(second)[reference])
+        val old = json.decodeFromString(UserPreferences.serializer(), "{}")
+        assertTrue(old.modelContextLengths(first).isEmpty())
+        assertThrows(IllegalArgumentException::class.java) {
+            ScopedUserPreferences(ConfigurationScope.Personal, modelContextLengthOverrides = listOf(ModelContextLengthOverride(reference, 1000)))
+        }
+        val foreign = reference.copy(authority = me.rerere.common.configuration.EnterpriseAuthority("other_deployment"))
+        assertThrows(IllegalArgumentException::class.java) { old.withModelContextLength(first, foreign, 1000) }
+        val original = Model(modelId = "capacity-test", contextLength = 1000)
+        assertEquals(original, json.decodeFromString(Model.serializer(), json.encodeToString(Model.serializer(), original)))
+        assertNull(json.decodeFromString(Model.serializer(), "{} ").contextLength)
+    }
+
+    @Test
+    fun `enterprise capacity is scoped and survives personal restore`() {
+        val packet = exampleEnterprisePackage()
+        val scope = packet.identity.scope
+        val reference = packet.identity.reference(packet.configuration.models.first().id)
+        val original = UserSettingsDocument.empty()
+        val configured = original.copy(preferences = original.preferences.withModelContextLength(scope, reference, 128000))
+        val resolved = ConfigurationResolver.resolve(configured, scope, appliedConfiguration(packet))
+        assertEquals(128000, resolved.models.getValue(reference).model.contextLength)
+        assertEquals(ModelContextCapacitySource.LOCAL_OVERRIDE, resolved.models.getValue(reference).contextCapacitySource)
+        assertTrue(ConfigurationResolver.resolve(configured, ConfigurationScope.Personal, appliedConfiguration(packet))
+            .modelContextLengthOverrides.isEmpty())
+        val restored = configured.withPersonalSettings(Settings())
+        assertEquals(128000, restored.preferences.modelContextLengths(scope)[reference])
+        val cleared = restored.copy(preferences = restored.preferences.withModelContextLength(scope, reference, null))
+        assertNull(ConfigurationResolver.resolve(cleared, scope, appliedConfiguration(packet)).models.getValue(reference).model.contextLength)
+        assertThrows(IllegalArgumentException::class.java) { original.preferences.withModelContextLength(scope, reference, 0) }
+    }
+
     @Test fun `starter catalog and chat suggestions share enabled target filtering and stable order`() {
         val base = exampleEnterprisePackage()
         val starter = base.configuration.starters.first()

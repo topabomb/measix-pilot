@@ -157,6 +157,33 @@ private fun compressAndEncode(
         return Pair(encodeToBase64Streaming(openStream, checkActive), mimeType)
     }
 
+    return withPreparedStaticPixels(openStream, checkActive, maxDimension, maxPixels) { bitmap ->
+        val byteArrayOutputStream = ByteArrayOutputStream()
+        Base64OutputStream(byteArrayOutputStream, Base64.NO_WRAP).use { base64Stream ->
+            val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Bitmap.CompressFormat.WEBP_LOSSY
+                else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
+            check(bitmap.compress(format, quality, base64Stream)) { "Failed to compress image" }
+        }
+        checkActive()
+        Pair(byteArrayOutputStream.toString(Charsets.ISO_8859_1.name()), "image/webp")
+    }
+}
+
+/** Borrows normalized pixels for static-image composition; the bitmap is recycled when the callback returns. */
+suspend fun <T> withPreparedStaticImage(bytes: ByteArray, operation: (Bitmap) -> T): T = withContext(Dispatchers.IO) {
+    val context = currentCoroutineContext()
+    context.ensureActive()
+    require(bytes.inputStream().use(::guessImageMimeType) != "image/gif") { "animated_image_annotation_not_supported" }
+    withPreparedStaticPixels(bytes::inputStream, context::ensureActive, operation = operation)
+}
+
+private fun <T> withPreparedStaticPixels(
+    openStream: () -> InputStream,
+    checkActive: () -> Unit,
+    maxDimension: Int = 2560,
+    maxPixels: Long = 16_000_000L,
+    operation: (Bitmap) -> T,
+): T {
     // 读取图片尺寸
     val options = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
@@ -186,16 +213,7 @@ private fun compressAndEncode(
         scaledBitmap = if (width == normalizedBitmap.width && height == normalizedBitmap.height) normalizedBitmap
             else Bitmap.createScaledBitmap(normalizedBitmap, width, height, true)
         checkActive()
-        val byteArrayOutputStream = ByteArrayOutputStream()
-        Base64OutputStream(byteArrayOutputStream, Base64.NO_WRAP).use { base64Stream ->
-            val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Bitmap.CompressFormat.WEBP_LOSSY
-                else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
-            check(scaledBitmap.compress(format, quality, base64Stream)) {
-                "Failed to compress image"
-            }
-        }
-        checkActive()
-        Pair(byteArrayOutputStream.toString(Charsets.ISO_8859_1.name()), "image/webp")
+        operation(scaledBitmap).also { checkActive() }
     } finally {
         if (scaledBitmap !== normalizedBitmap && scaledBitmap !== bitmap) {
             scaledBitmap.recycle()

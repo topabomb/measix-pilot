@@ -65,7 +65,7 @@ internal fun McpPickerListItem(
     modifier: Modifier = Modifier,
     onNavigateToSettings: () -> Unit,
     onToggle: (ConfigurationReference, Boolean) -> Unit,
-    feedback: com.dokar.sonner.ToasterState? = null,
+    feedback: net.weero.measix.pilot.ui.components.toast.ToasterState? = null,
     onPickerVisibilityChange: (Boolean) -> Unit = {},
 ) {
     var showMcpPicker by remember { mutableStateOf(false) }
@@ -124,7 +124,7 @@ internal fun McpPickerSheet(
     onToggle: (ConfigurationReference, Boolean) -> Unit,
     onNavigateToSettings: () -> Unit,
     onDismiss: () -> Unit,
-    feedback: com.dokar.sonner.ToasterState? = null,
+    feedback: net.weero.measix.pilot.ui.components.toast.ToasterState? = null,
 ) {
     val selectedServers = servers.fastFilter {
         it.selected

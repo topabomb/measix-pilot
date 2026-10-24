@@ -49,8 +49,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import io.github.g00fy2.quickie.QRResult
-import io.github.g00fy2.quickie.ScanQRCode
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import net.weero.measix.pilot.R
@@ -87,7 +85,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.core.content.ContextCompat
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.OrchelmLogo
 import net.weero.measix.pilot.ui.components.richtext.MarkdownSummary
@@ -312,12 +310,16 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     }
     // Enrollment text contains a credential and is deliberately not saved in Activity state.
     var enrollment by remember { mutableStateOf("") }
-    val scanner = rememberLauncherForActivityResult(ScanQRCode()) { result ->
-        when (result) {
-            is QRResult.QRSuccess -> vm.join(result.content.rawValue.orEmpty())
-            QRResult.QRUserCanceled -> Unit
-            else -> vm.scanFailed()
-        }
+    var scannerSelection by remember { mutableStateOf<RealmSelection?>(null) }
+    scannerSelection?.let { original ->
+        net.weero.measix.pilot.ui.components.ui.QRCodeScannerDialog(
+            selection = original, queries = queries,
+            onDismissRequest = { scannerSelection = null },
+            onResult = { content ->
+                scannerSelection = null
+                if (vm.overview.value?.selection == original) vm.join(content)
+            },
+        )
     }
     val imageScanner = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -756,7 +758,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             }
                         }) {
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { scanner.launch(null) }, enabled = canJoin) {
+                            Button(onClick = { scannerSelection = state?.selection }, enabled = canJoin) {
                                 Text(stringResource(R.string.enterprise_join_scan))
                             }
                             OutlinedButton(onClick = { paste = true }, enabled = canJoin) {
@@ -864,13 +866,17 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                 EnterpriseDataResetMode.KEEP_HISTORY -> if (storageFailure) R.string.enterprise_reset_repair
                     else R.string.enterprise_reset_keep_history
             })) },
-            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(when (confirmation.request.mode) {
                     EnterpriseDataResetMode.CLEAR_ALL -> R.string.enterprise_reset_clear_all_confirm
                     EnterpriseDataResetMode.KEEP_HISTORY -> if (storageFailure) R.string.enterprise_reset_repair_confirm
                         else R.string.enterprise_reset_keep_history_confirm
                 }))
                 Text(stringResource(R.string.enterprise_reset_option_notice), style = MaterialTheme.typography.bodySmall)
+                confirmation.preview.pendingInputCount?.let { count ->
+                    Text(stringResource(R.string.enterprise_reset_queue_count, count))
+                }
+                Text(stringResource(R.string.enterprise_reset_queue_all_spaces))
             } },
             confirmButton = { Button(onClick = { vm.confirmReset(openChat) }, enabled = !busy,
                 colors = if (destructive) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error,
@@ -880,8 +886,11 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     }
     if (exit != null) AlertDialog(onDismissRequest = vm::dismissExit,
         title = { Text(stringResource(R.string.enterprise_exit)) },
-        text = { Text(stringResource(R.string.enterprise_exit_confirm,
-            exit?.enterpriseName ?: stringResource(R.string.enterprise_space))) },
+        text = { Column {
+            Text(stringResource(R.string.enterprise_exit_confirm,
+                exit?.enterpriseName ?: stringResource(R.string.enterprise_space)))
+            EnterprisePendingInputLoss(exit?.request?.pendingInputCount)
+        } },
         confirmButton = { TextButton(onClick = { vm.confirmExit(openChat) }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = vm::dismissExit) { Text(stringResource(R.string.cancel)) } })
 }
@@ -1711,13 +1720,21 @@ internal fun PortalNativeControls(actions: PortalNativeActions) {
             is PortalNativePrompt.Logout -> R.string.enterprise_exit
             is PortalNativePrompt.External -> R.string.enterprise_external_open
         })) },
-        text = { Text(when (original) {
+        text = { Column { Text(when (original) {
             is PortalNativePrompt.Logout -> stringResource(R.string.enterprise_exit_confirm, original.enterpriseName)
             is PortalNativePrompt.External -> stringResource(R.string.enterprise_external_confirm, original.url.toASCIIString())
-        }) },
+        })
+            if (original is PortalNativePrompt.Logout) EnterprisePendingInputLoss(original.pendingInputCount)
+        } },
         confirmButton = { TextButton(onClick = { actions.decide(original, true) }) { Text(stringResource(R.string.confirm)) } },
         dismissButton = { TextButton(onClick = { actions.decide(original, false) }) { Text(stringResource(R.string.cancel)) } },
     )
+}
+
+@Composable
+internal fun EnterprisePendingInputLoss(count: Int?) {
+    if (count == null) Text(stringResource(R.string.enterprise_queue_loss_private))
+    else if (count > 0) Text(stringResource(R.string.enterprise_queue_loss_count, count))
 }
 
 @Composable

@@ -112,10 +112,10 @@ class ChatDocumentContextFlowAndroidTest {
             compose.onNodeWithTag("chat_send_button").performClick()
             compose.waitUntil(60_000) { compose.onAllNodesWithText("Document context answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
             val row = awaitUi { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }.first { it.isNotEmpty() }.single() }
-            val lease = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal)) }
+            val lease = awaitUi { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal)) }
             view = lease
             awaitUi { query.conversationUiModel(lease).first { it != null && it.presentation.activeTurnId == null } }
-            val saved = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val saved = awaitUi { requireNotNull(query.aggregateSnapshot(row.id)) }
             val user = saved.currentMessages().single { it.role == MessageRole.USER }
             assertEquals(listOf(userText), user.parts.filterIsInstance<UIMessagePart.Text>().map { it.text })
             val durableDocument = user.parts.filterIsInstance<UIMessagePart.Document>().single()
@@ -144,13 +144,13 @@ class ChatDocumentContextFlowAndroidTest {
             assertEquals(ContextPlacement.BeforeMessage(source.message), admission.uses.single { it.entryId == time.id }.placement)
             assertFalse(projectConversationContextSummary(saved).messages.values.any { it.updates.isNotEmpty() })
             compose.onAllNodesWithContentDescription(uiContext.getString(R.string.context_updated_accessibility)).assertCountEquals(0)
-            val details = runBlocking { query.contextDetails(lease, row.id, admission.owner.messageId) }.requests.single()
+            val details = awaitUi { query.contextDetails(lease, row.id, admission.owner.messageId) }.requests.single()
             val documentItem = details.items.single { it.entryId == attachment.id }
             val timeItem = details.items.single { it.entryId == time.id }
             assertEquals(listOf(ConversationContextCategory.ATTACHMENT), documentItem.categories)
             assertEquals(listOf(ConversationContextCategory.TIME), timeItem.categories)
             assertTrue(requireNotNull(documentItem.location).contains(documentPosition.toString()))
-            fun content(item: ConversationContextItemUiModel) = runBlocking {
+            fun content(item: ConversationContextItemUiModel) = awaitUi {
                 query.contextContent(lease, row.id, admission.owner.messageId, details.id, item.key)
             }
             val documentContent = content(documentItem)
@@ -186,20 +186,20 @@ class ChatDocumentContextFlowAndroidTest {
             activity.close(); activity = null
             lease.close(); view = null
             context.writeBooleanPreference("create_new_conversation_on_start", false)
-            runBlocking { settings.rememberConversation(ConfigurationScope.Personal, row.id) }
+            awaitUi { settings.rememberConversation(ConfigurationScope.Personal, row.id) }
             activity = ActivityScenario.launch(Intent(context, RouteActivity::class.java))
             activity.onActivity { uiContext = it }
             compose.waitUntil(30_000) { compose.onAllNodesWithText("Document context answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
-            val reopened = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal)) }
+            val reopened = awaitUi { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal)) }
             view = reopened
-            val restored = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val restored = awaitUi { requireNotNull(query.aggregateSnapshot(row.id)) }
             assertEquals(saved.contextAdmissions, restored.contextAdmissions)
             assertEquals(saved.modelContextEntries, restored.modelContextEntries)
-            val restoredDetails = runBlocking { query.contextDetails(reopened, row.id, admission.owner.messageId) }.requests.single()
+            val restoredDetails = awaitUi { query.contextDetails(reopened, row.id, admission.owner.messageId) }.requests.single()
             assertEquals(details, restoredDetails)
-            assertEquals(documentBody, runBlocking { query.contextContent(reopened, row.id, admission.owner.messageId,
+            assertEquals(documentBody, awaitUi { query.contextContent(reopened, row.id, admission.owner.messageId,
                 details.id, documentItem.key).text })
-            assertEquals(timeBody, runBlocking { query.contextContent(reopened, row.id, admission.owner.messageId,
+            assertEquals(timeBody, awaitUi { query.contextContent(reopened, row.id, admission.owner.messageId,
                 details.id, timeItem.key).text })
             compose.onAllNodesWithText(documentBody).assertCountEquals(0)
             compose.onAllNodesWithText(timeBody).assertCountEquals(0)
@@ -226,14 +226,14 @@ class ChatDocumentContextFlowAndroidTest {
             } }
             cleanup { instrumentation.removeMonitor(monitor) }
             cleanup { activity?.close() }; cleanup { view?.close() }
-            cleanup { runBlocking {
+            cleanup { awaitUi {
                 query.recentConversations(RealmAccess.Personal, assistant.id, Int.MAX_VALUE).forEach { row ->
                     val lease = conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal))
                     try { withTimeout(30_000) { conversations.stopGeneration(lease.commandTarget) }; conversations.delete(lease.commandTarget) }
                     finally { lease.close() }
                 }
             } }
-            cleanup { runBlocking {
+            cleanup { awaitUi {
                 settings.updateLocal { it.copy(providers = it.providers.filterNot { value -> value.id == provider.id },
                     assistants = it.assistants.filterNot { value -> value.id == assistant.id },
                     assistantId = before.assistantId, chatModelId = before.chatModelId, fastModelId = before.fastModelId,
@@ -252,6 +252,8 @@ class ChatDocumentContextFlowAndroidTest {
         }
     }
 
+    // Compose effects can hold configuration locks while returning from a background dispatcher.
+    // Keep their test scheduler advancing while application queries or cleanup await those locks.
     private fun <T> awaitUi(action: suspend () -> T): T {
         val scope = CoroutineScope(Dispatchers.Default)
         val pending = scope.async { withTimeout(30_000) { action() } }

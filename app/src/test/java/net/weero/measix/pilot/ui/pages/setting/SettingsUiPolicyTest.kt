@@ -24,7 +24,7 @@ class SettingsUiPolicyTest {
             io.mockk.every { store.userSettings } returns state
             val query = io.mockk.mockk<net.weero.measix.pilot.service.ConfigurationQueryService>()
             io.mockk.every { query.observeModelCatalog() } returns kotlinx.coroutines.flow.flowOf(net.weero.measix.pilot.service.ModelCatalogReadState.Loading)
-            val vm = SettingVM(store, io.mockk.mockk(), io.mockk.mockk(), query)
+            val vm = SettingVM(store, io.mockk.mockk(), io.mockk.mockk(), query, io.mockk.mockk(), io.mockk.mockk())
             assertEquals(loaded, vm.settings.value)
             org.junit.Assert.assertFalse(vm.settings.value.init)
             state.value = loaded.copy(enableSuggestion = true)

@@ -112,6 +112,9 @@ private fun ModelSettingsPage(catalog: ModelCatalogUiModel, vm: ModelSettingsVM,
                 color = MaterialTheme.colorScheme.primary)
         }
         error?.let { detail -> item { Text(detail, color = MaterialTheme.colorScheme.error) } }
+        if (selection.access is RealmAccess.Enterprise) item("contextCapacities") {
+            EnterpriseModelContextCapacitySettings(catalog, vm)
+        }
         item("conversationModels") {
             ModelSettingsGroup(
                 title = stringResource(R.string.setting_model_group_conversation),

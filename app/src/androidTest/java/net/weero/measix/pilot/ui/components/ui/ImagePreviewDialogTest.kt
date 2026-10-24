@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.SideEffect
@@ -84,6 +86,80 @@ class ImagePreviewDialogTest {
         coil3.SingletonImageLoader.setUnsafe(originalLoader)
         loader.shutdown()
         images.forEach(File::delete)
+    }
+
+    @Test
+    fun packagedPlaceholdersRenderWhileLoadingInBothThemes() {
+        val started = List(2) { kotlinx.coroutines.CompletableDeferred<Unit>() }
+        val cancelled = List(2) { kotlinx.coroutines.CompletableDeferred<Unit>() }
+        var showPlaceholders by mutableStateOf(true)
+        val sources = List(2) { index ->
+            net.weero.measix.pilot.service.ImageSource(
+                "placeholder-${java.util.UUID.randomUUID()}", net.weero.measix.pilot.service.ImageOrigin.INLINE,
+                verifyAccess = {}, readPayload = {
+                    started[index].complete(Unit)
+                    try { kotlinx.coroutines.awaitCancellation() }
+                    finally { cancelled[index].complete(Unit) }
+                },
+            )
+        }
+        // These particular assets are opaque; verify Android decoding preserves all four edges.
+        for (resource in listOf(R.drawable.placeholder, R.drawable.placeholder_dark)) {
+            val drawable = requireNotNull(androidx.core.content.ContextCompat.getDrawable(compose.activity, resource))
+            val bitmap = (drawable as android.graphics.drawable.BitmapDrawable).bitmap
+            assertTrue(bitmap.width > 0 && bitmap.height > 0)
+            for (x in 0 until bitmap.width) {
+                assertEquals(255, android.graphics.Color.alpha(bitmap.getPixel(x, 0)))
+                assertEquals(255, android.graphics.Color.alpha(bitmap.getPixel(x, bitmap.height - 1)))
+            }
+            for (y in 0 until bitmap.height) {
+                assertEquals(255, android.graphics.Color.alpha(bitmap.getPixel(0, y)))
+                assertEquals(255, android.graphics.Color.alpha(bitmap.getPixel(bitmap.width - 1, y)))
+            }
+        }
+        try {
+            compose.setContent {
+                MaterialTheme {
+                    Column {
+                        for (index in if (showPlaceholders) 0..1 else IntRange.EMPTY) {
+                            val dark = index == 1
+                            CompositionLocalProvider(net.weero.measix.pilot.ui.theme.LocalDarkMode provides dark) {
+                                Box(Modifier.size(192.dp).background(
+                                    if (dark) androidx.compose.ui.graphics.Color.Black else androidx.compose.ui.graphics.Color.White,
+                                )) {
+                                    net.weero.measix.pilot.ui.components.richtext.ZoomableAsyncImage(
+                                        model = sources[index], contentDescription = "placeholder-$index",
+                                        modifier = Modifier.size(192.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            compose.waitUntil(10_000) { started.all { it.isCompleted } }
+            compose.mainClock.autoAdvance = false
+            compose.mainClock.advanceTimeBy(32)
+            val light = compose.onNodeWithContentDescription("placeholder-0").assertIsDisplayed().captureToImage().toPixelMap()
+            val dark = compose.onNodeWithContentDescription("placeholder-1").assertIsDisplayed().captureToImage().toPixelMap()
+            fun brightness(pixels: androidx.compose.ui.graphics.PixelMap, fraction: Float): Float {
+                val color = pixels[(pixels.width * fraction).toInt(), (pixels.height * fraction).toInt()]
+                return (color.red + color.green + color.blue) / 3f
+            }
+            val lightEdge = brightness(light, 0.05f)
+            val darkEdge = brightness(dark, 0.05f)
+            // Shimmer intentionally changes alpha, so assert the asset's stable contrast rather
+            // than exact screenshot bytes. A blank background or wrong-theme asset fails these.
+            assertTrue("Light placeholder must be visible on white", lightEdge > 0.7f)
+            assertTrue("Dark placeholder must be visible on black", darkEdge < 0.25f)
+            assertTrue("Light asset must retain its central illustration", lightEdge - brightness(light, 0.5f) > 0.10f)
+            assertTrue("Dark asset must retain its central illustration", brightness(dark, 0.5f) - darkEdge > 0.025f)
+            captureEvidence("packaged-placeholders-light-dark")
+        } finally {
+            compose.mainClock.autoAdvance = true
+            compose.runOnIdle { showPlaceholders = false }
+            compose.waitUntil(10_000) { started.indices.all { !started[it].isCompleted || cancelled[it].isCompleted } }
+        }
     }
 
     @Test fun exportPreservesEncodedImageAndMime() = kotlinx.coroutines.runBlocking {
@@ -316,7 +392,7 @@ class ImagePreviewDialogTest {
         io.mockk.coEvery { sessions.withSelectedRealmSelection<Unit>(any(), any()) } coAnswers {
             secondArg<suspend () -> Unit>()()
         }
-        val files = net.weero.measix.pilot.service.FileManagementApplicationService(io.mockk.mockk(), io.mockk.mockk(),
+        val files = net.weero.measix.pilot.service.FileManagementApplicationService(io.mockk.mockk(), io.mockk.mockk(), io.mockk.mockk(),
             net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }, sessions)
         val view = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(),
             net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0) {}
@@ -389,6 +465,20 @@ class ImagePreviewDialogTest {
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.image_viewer_close_content_description))
             .assertIsDisplayed().performClick()
         compose.waitUntil(5_000) { !visible }
+    }
+
+    @Test fun editActionIdentifiesTheDisplayedOccurrenceEvenWhenSourcesAreEqual() {
+        val bytes = android.util.Base64.decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", android.util.Base64.DEFAULT)
+        val source = net.weero.measix.pilot.service.ImageSource("repeated-input",
+            net.weero.measix.pilot.service.ImageOrigin.UPLOAD, displayName = "same.gif",
+            verifyAccess = {}, readPayload = { bytes })
+        var selected = -1
+        compose.setContent { MaterialTheme {
+            ImagePreviewDialog(listOf(source, source), {}, initialIndex = 1, showSaveAction = false,
+                onEditImage = { selected = it })
+        } }
+        compose.onNodeWithText(compose.activity.getString(R.string.image_annotation_title)).performClick()
+        compose.runOnIdle { assertEquals(1, selected) }
     }
 
     @Test

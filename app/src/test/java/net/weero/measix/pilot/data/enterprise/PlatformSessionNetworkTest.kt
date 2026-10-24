@@ -35,7 +35,7 @@ import org.robolectric.annotation.Config
 class PlatformSessionNetworkTest {
     @get:Rule val temporary = TemporaryFolder()
     private val cipher = EnterpriseCredentialCipher { SecretKeySpec(ByteArray(32) { it.toByte() }, "AES") }
-    private fun owner(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher)) { 1000L }
+    private fun owner(root: File) = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root, credentialCipher = cipher), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
     private fun service(owner: EnterpriseSessionController) = PlatformEnterpriseService(
         owner, PlatformControlClient(OkHttpClient()), now = { Instant.ofEpochMilli(1000) })
     private fun fixture(name: String) = withStarterOpeningMock(rawFixture(name))

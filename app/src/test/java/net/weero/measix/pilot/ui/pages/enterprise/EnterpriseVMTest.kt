@@ -16,6 +16,49 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EnterpriseVMTest {
+    @Test fun `reset preview is explicit and a dismissed asynchronous preparation cannot reopen it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val access = RealmAccess.Enterprise(exampleEnterprisePackage().identity.scope, "session")
+            val selection = RealmSelection(access, 1)
+            val overview = MutableStateFlow(EnterpriseOverview(selection, EnterpriseSessionPhase.READY,
+                "Example", "Member", access, 1, 1000, null, null, false, resetPath = EnterpriseResetPath.CONNECTED))
+            val service = mockk<EnterpriseApplicationService>()
+            every { service.observe() } returns overview
+            val remote = mockk<net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService>()
+            every { remote.summary } returns MutableStateFlow(null)
+            every { remote.queryState } returns MutableStateFlow(null)
+            val vm = EnterpriseVM(service, remote)
+            store.put("enterprise", vm)
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.overview.collect {} }
+            runCurrent()
+            val preview = mockk<EnterpriseResetPreview>()
+            val delayed = CompletableDeferred<EnterpriseResetPreview>()
+            coEvery { service.prepareLocalDataReset(EnterpriseDataResetMode.KEEP_HISTORY) } coAnswers { delayed.await() }
+            coEvery { service.localDataReset(preview) } returns Unit
+            vm.showReset()
+            vm.requestReset(EnterpriseDataResetMode.KEEP_HISTORY)
+            runCurrent()
+            vm.dismissReset()
+            delayed.complete(preview)
+            runCurrent()
+            assertNull(vm.resetConfirmation.value)
+            io.mockk.coVerify(exactly = 0) { service.localDataReset(any()) }
+            vm.showReset()
+            vm.requestReset(EnterpriseDataResetMode.KEEP_HISTORY)
+            runCurrent()
+            assertSame(preview, vm.resetConfirmation.value!!.preview)
+            io.mockk.coVerify(exactly = 0) { service.localDataReset(any()) }
+            var navigated = false
+            vm.confirmReset { navigated = true }
+            runCurrent()
+            io.mockk.coVerify(exactly = 1) { service.localDataReset(preview) }
+            assertTrue(navigated)
+            assertNull(vm.resetConfirmation.value)
+        } finally { store.clear(); runCurrent(); Dispatchers.resetMain() }
+    }
+
     @Test fun `updates keep last successful content during one deduplicated refresh and clear on confirmed empty result`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()

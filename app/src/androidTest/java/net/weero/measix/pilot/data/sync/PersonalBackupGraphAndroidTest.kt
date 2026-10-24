@@ -368,6 +368,8 @@ class PersonalBackupGraphAndroidTest {
                 assertEquals(it, 1L, scalar(exported, "SELECT COUNT(*) FROM $it"))
             }
             assertEquals(1L, scalar(exported, "SELECT COUNT(*) FROM message_fts WHERE message_fts MATCH 'personal'"))
+            assertFtsMapping(exported, 1L)
+            assertEquals(0L, scalar(exported, "SELECT COUNT(*) FROM message_fts_rowid r JOIN ConversationEntity c ON c.id=r.conversation_id WHERE c.scope <> 'personal'"))
             assertEquals(0L, scalar(exported, "SELECT COUNT(*) FROM sqlite_master WHERE name='private_unknown'"))
         } finally { exported.close() }
         archiveService.stageRestore(archive, BackupSelection(true, true))
@@ -407,7 +409,16 @@ class PersonalBackupGraphAndroidTest {
         listOf("ConversationEntity", "MemoryEntity", "conversation_folder", "favorites", "message_fts").forEach {
             assertEquals(it, 3L, scalar(room, "SELECT COUNT(*) FROM $it"))
         }
+        assertFtsMapping(room, 3L)
         PendingBackupRestore.complete(context)
+    }
+
+    private fun assertFtsMapping(database: AppDatabase, expected: Long) {
+        assertEquals(expected, scalar(database, "SELECT COUNT(*) FROM message_fts_rowid"))
+        assertEquals(expected, scalar(database, """
+            SELECT COUNT(*) FROM message_fts f JOIN message_fts_rowid r ON r.fts_rowid=f.rowid
+            AND r.conversation_id=f.conversation_id AND r.node_id=f.node_id AND r.message_id=f.message_id
+        """.trimIndent()))
     }
 
     @Test

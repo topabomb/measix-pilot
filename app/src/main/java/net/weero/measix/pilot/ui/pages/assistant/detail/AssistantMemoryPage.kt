@@ -67,7 +67,7 @@ fun AssistantMemoryPage(id: String) {
     val toaster = net.weero.measix.pilot.ui.context.LocalToaster.current
     val memoryFailureMessage = stringResource(R.string.memory_operation_failed)
     androidx.compose.runtime.LaunchedEffect(vm, memoryFailureMessage) {
-        vm.memoryFailures.collect { toaster.show(memoryFailureMessage, type = com.dokar.sonner.ToastType.Error) }
+        vm.memoryFailures.collect { toaster.show(memoryFailureMessage, type = net.weero.measix.pilot.ui.components.toast.ToastType.Error) }
     }
     val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val memories by vm.memories.collectAsStateWithLifecycle()
@@ -126,6 +126,16 @@ internal fun AssistantMemoryContent(
         }
     }
     var pendingDeleteMemory by remember { mutableStateOf<MemoryRecord?>(null) }
+    var editingInterval by remember(assistant.id) { mutableStateOf(false) }
+    if (editingInterval && onUpdateAssistant != null) {
+        TimeReminderIntervalDialog(assistant.timeReminderIntervalMinutes,
+            onDismiss = { editingInterval = false },
+            onConfirm = { minutes ->
+                onUpdateAssistant(assistant.copy(timeReminderIntervalMinutes = minutes))
+                editingInterval = false
+            })
+    }
+
 
     // 记忆对话框
     memoryDialogState.EditStateContent { memory, update ->
@@ -268,6 +278,12 @@ internal fun AssistantMemoryContent(
                             }
                         )
                     }
+                )
+                if (assistant.enableTimeReminder) item(
+                    headlineContent = { Text(stringResource(R.string.assistant_page_time_reminder_interval)) },
+                    supportingContent = { Text(stringResource(R.string.assistant_page_time_reminder_interval_hint)) },
+                    trailingContent = { Text(stringResource(R.string.assistant_page_time_reminder_interval_value, assistant.timeReminderIntervalMinutes)) },
+                    onClick = { editingInterval = true },
                 )
             }
 
@@ -425,4 +441,25 @@ private fun MemoryItem(
             ))
         }
     }
+}
+
+
+@Composable
+internal fun TimeReminderIntervalDialog(initialMinutes: Int, onDismiss: () -> Unit, onConfirm: (Int) -> Unit) {
+    var input by remember { mutableStateOf(initialMinutes.toString()) }
+    val minutes = input.takeIf { it.isNotEmpty() && it.all { character -> character in '0'..'9' } }
+        ?.toIntOrNull()?.takeIf { it > 0 }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.assistant_page_time_reminder_interval)) },
+        text = { TextField(value = input, onValueChange = { input = it }, singleLine = true,
+            isError = minutes == null,
+            supportingText = { Text(stringResource(if (minutes == null) R.string.assistant_page_time_reminder_interval_invalid
+                else R.string.assistant_page_time_reminder_interval_hint)) },
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)) },
+        confirmButton = { TextButton(enabled = minutes != null, onClick = { minutes?.let(onConfirm) }) {
+            Text(stringResource(R.string.confirm))
+        } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }

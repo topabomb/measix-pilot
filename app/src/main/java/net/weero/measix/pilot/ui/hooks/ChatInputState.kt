@@ -9,6 +9,11 @@ import androidx.compose.runtime.setValue
 import me.rerere.ai.ui.UIMessagePart
 import kotlin.uuid.Uuid
 
+sealed interface ChatInputEditTarget {
+    data class History(val messageId: Uuid) : ChatInputEditTarget
+    data class Queued(val itemId: Uuid, val version: Long) : ChatInputEditTarget
+}
+
 class ChatInputState {
     val textContent = TextFieldState()
     private data class InputAttachment(val part: UIMessagePart, val identity: Any = Any())
@@ -22,31 +27,81 @@ class ChatInputState {
                 if (index >= 0) retained.removeAt(index) else InputAttachment(part)
             }
         }
-    var editingMessage by mutableStateOf<Uuid?>(null)
+    var editingTarget by mutableStateOf<ChatInputEditTarget?>(null)
+    var editingMessage: Uuid?
+        get() = (editingTarget as? ChatInputEditTarget.History)?.messageId
+        set(value) { editingTarget = value?.let { ChatInputEditTarget.History(it) } }
     private var editingParts: List<UIMessagePart>? = null
+    private var editingAttachmentPositions: Map<Any, Int> = emptyMap()
     private var editingAttachmentUrls: Set<String> = emptySet()
     private var inputIdentity = Any()
+    private var imageEditEpoch by mutableStateOf(Any())
+
+    internal class ImageEditTarget internal constructor(
+        internal val inputIdentity: Any,
+        internal val epoch: Any,
+        internal val attachmentIdentity: Any,
+        internal val editingTarget: ChatInputEditTarget?,
+        val image: UIMessagePart.Image,
+    )
+
+    internal fun imageEditTargets(): List<ImageEditTarget> = attachments.mapNotNull { attachment ->
+        (attachment.part as? UIMessagePart.Image)?.let { image ->
+            ImageEditTarget(inputIdentity, imageEditEpoch, attachment.identity, editingTarget, image)
+        }
+    }
+
+    internal fun isImageEditCurrent(target: ImageEditTarget): Boolean =
+        target.inputIdentity === inputIdentity && target.epoch === imageEditEpoch &&
+            target.editingTarget == editingTarget && attachments.any { it.identity === target.attachmentIdentity }
+
+    internal fun invalidateImageEdits() { imageEditEpoch = Any() }
+
+    internal fun removeImage(target: ImageEditTarget): Boolean {
+        if (!isImageEditCurrent(target)) return false
+        attachments = attachments.filterNot { it.identity === target.attachmentIdentity }
+        return true
+    }
+
+    /** The caller retains resource ownership until this identity-based replacement succeeds. */
+    internal fun replaceImage(target: ImageEditTarget, image: UIMessagePart.Image): Boolean {
+        if (!isImageEditCurrent(target)) return false
+        val replacement = InputAttachment(image)
+        // Preserve the causal position when editing a message containing interleaved text and media.
+        editingAttachmentPositions[target.attachmentIdentity]?.let { position ->
+            editingAttachmentPositions = editingAttachmentPositions - target.attachmentIdentity + (replacement.identity to position)
+        }
+        attachments = attachments.map { if (it.identity === target.attachmentIdentity) replacement else it }
+        return true
+    }
 
     internal class Submission internal constructor(
         internal val identity: Any,
         internal val text: String,
         internal val attachmentIdentities: Set<Any>,
-        internal val editingMessage: Uuid?,
+        internal val editingTarget: ChatInputEditTarget?,
         val contents: List<UIMessagePart>,
-    )
+    ) {
+        internal val editingMessage: Uuid? get() = (editingTarget as? ChatInputEditTarget.History)?.messageId
+    }
 
-    internal fun captureSubmission() = Submission(
-        inputIdentity, textContent.text.toString(), attachments.mapTo(mutableSetOf()) { it.identity }, editingMessage, getContents(),
-    )
+    internal fun captureSubmission(): Submission {
+        // Sending invalidates pending image edits even if the request is subsequently rejected.
+        invalidateImageEdits()
+        return Submission(
+            inputIdentity, textContent.text.toString(), attachments.mapTo(mutableSetOf()) { it.identity }, editingTarget, getContents(),
+        )
+    }
 
     /** A committed submission owns its captured input, never edits made while it was waiting. */
     internal fun completeSubmission(submission: Submission) {
-        if (submission.identity !== inputIdentity || submission.editingMessage != editingMessage) return
+        if (submission.identity !== inputIdentity || submission.editingTarget != editingTarget) return
         if (textContent.text.toString() == submission.text) textContent.setTextAndPlaceCursorAtEnd("")
         // Equal file payloads can be removed and selected again while append is pending.
         attachments = attachments.filterNot { it.identity in submission.attachmentIdentities }
-        editingMessage = null
+        editingTarget = null
         editingParts = null
+        editingAttachmentPositions = emptyMap()
         editingAttachmentUrls = emptySet()
         inputIdentity = Any()
     }
@@ -55,12 +110,13 @@ class ChatInputState {
         inputIdentity = Any()
         textContent.setTextAndPlaceCursorAtEnd("")
         messageContent = emptyList()
-        editingMessage = null
+        editingTarget = null
         editingParts = null
+        editingAttachmentPositions = emptyMap()
         editingAttachmentUrls = emptySet()
     }
 
-    fun isEditing() = editingMessage != null
+    fun isEditing() = editingTarget != null
 
     fun setMessageText(text: String) {
         textContent.setTextAndPlaceCursorAtEnd(text)
@@ -81,6 +137,8 @@ class ChatInputState {
         textContent.setTextAndPlaceCursorAtEnd(text)
         messageContent = contents.filter { it !is UIMessagePart.Text }
         editingParts = contents
+        editingAttachmentPositions = attachments.map { it.identity }
+            .zip(contents.indices.filter { contents[it] !is UIMessagePart.Text }).toMap()
         editingAttachmentUrls = contents.mapNotNull { it.attachmentUrlOrNull() }.toSet()
     }
 
@@ -90,7 +148,7 @@ class ChatInputState {
             val originalParts = editingParts
             if (originalParts != null) {
                 val editedTextIndex = originalParts.indexOfLast { it is UIMessagePart.Text }
-                val remainingAttachments = messageContent.toMutableList()
+                val remainingAttachments = attachments.toMutableList()
                 val merged = mutableListOf<UIMessagePart>()
 
                 originalParts.forEachIndexed { index, part ->
@@ -104,9 +162,9 @@ class ChatInputState {
                         }
 
                         else -> {
-                            val currentIndex = remainingAttachments.indexOf(part)
+                            val currentIndex = remainingAttachments.indexOfFirst { editingAttachmentPositions[it.identity] == index }
                             if (currentIndex >= 0) {
-                                merged.add(remainingAttachments.removeAt(currentIndex))
+                                merged.add(remainingAttachments.removeAt(currentIndex).part)
                             }
                         }
                     }
@@ -115,7 +173,7 @@ class ChatInputState {
                     merged.add(0, UIMessagePart.Text(text))
                 }
                 // Newly added attachments are appended in insertion order.
-                merged.addAll(remainingAttachments)
+                merged.addAll(remainingAttachments.map { it.part })
                 return merged
             }
             return if (text.isBlank()) messageContent else listOf(UIMessagePart.Text(text)) + messageContent

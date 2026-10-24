@@ -13,7 +13,6 @@ internal interface FileBrowserSession {
     val writable: Boolean
     fun path(value: String): String
     fun child(parent: String, name: String): String
-    fun relativeImage(document: String, reference: String): String
     suspend fun refresh()
     suspend fun isValid(): Boolean
     suspend fun close()
@@ -21,6 +20,11 @@ internal interface FileBrowserSession {
     suspend fun list(path: String): BrowserDirectory
     suspend fun stat(path: String): BrowserFile?
     suspend fun readText(file: BrowserFile): BrowserTextDocument
+    suspend fun readPreviewResource(path: String, maxBytes: Long): ByteArray
+    fun renderedSource(document: String, changes: Flow<*>): net.weero.measix.pilot.service.RenderedFileSource =
+        net.weero.measix.pilot.service.RenderedFileSource(path(document), changes,
+            verify = { check(isValid()) { "rendered_file_revoked" } }, validatePath = ::path,
+            read = ::readPreviewResource)
     suspend fun createDirectory(path: String): BrowserOperationResult
     suspend fun upload(path: String, etag: String?, length: Long?, input: () -> InputStream,
         progress: (Long, Long?) -> Unit = { _, _ -> }): BrowserOperationResult

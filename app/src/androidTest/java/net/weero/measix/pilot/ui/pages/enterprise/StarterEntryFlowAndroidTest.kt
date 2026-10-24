@@ -9,7 +9,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import io.mockk.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -192,7 +192,7 @@ class StarterEntryFlowAndroidTest {
                 val session = EnterpriseSession(id, candidate.identity, expiry,
                     PlatformSessionDetails(execution.connection, "dev_${Uuid.random()}", credential))
                 store.commit(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY, session, applied, candidate.identity.scope, candidate.identity))
-                val sessions = EnterpriseSessionController(store).apply { recover() }
+                val sessions = EnterpriseSessionController(store, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).apply { recover() }
                 val fixture = Fixture(root, sessions, candidate, requireNotNull(sessions.readPresentation().selection))
                 if (draft) {
                     fixture.view = fixture.application.initialize(fixture.application.newDraftRequest(fixture.selection, fixture.assistant))

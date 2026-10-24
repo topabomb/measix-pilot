@@ -166,12 +166,26 @@ class ConversationRepository(
     }
 
     /** Inserts one already-remapped internal aggregate without exposing context through Conversation. */
-    internal suspend fun insertConversationSnapshot(snapshot: ConversationAggregateSnapshot) {
+    internal suspend fun insertConversationSnapshot(
+        snapshot: ConversationAggregateSnapshot,
+        validateDraftFolder: Boolean = false,
+    ) {
         validateContext(snapshot)
         val conversation = snapshotToConversation(snapshot)
         artifactStore.withLifecycleLock {
             val referenceDelta = artifactStore.prepareReferenceDelta(snapshot.header.scope, snapshot.nodes, emptyList(), contextBodies(snapshot.modelContextEntries))
             database.withTransaction {
+                if (validateDraftFolder) {
+                    snapshot.header.folderId?.let { id ->
+                        val folder = requireNotNull(database.folderDao().getFolderById(id.toString())) {
+                            "draft_folder_not_found"
+                        }
+                        check(folder.scope == snapshot.header.scope &&
+                            folder.assistantId == snapshot.header.assistantId.toString()) {
+                            "draft_folder_scope_mismatch"
+                        }
+                    }
+                }
                 requireValidParent(conversation)
                 conversationDAO.insert(conversationToConversationEntity(conversation))
                 saveMessageNodes(snapshot.conversationId.toString(), snapshot.nodes)
@@ -315,7 +329,7 @@ class ConversationRepository(
      */
     internal suspend fun commit(write: ConversationWrite): Boolean = when (write) {
         is ConversationWrite.MaterializeDraft -> {
-            insertConversationSnapshot(write.snapshot)
+            insertConversationSnapshot(write.snapshot, validateDraftFolder = true)
             true
         }
         is ConversationWrite.Mutate -> {
@@ -543,6 +557,9 @@ class ConversationRepository(
     }
 
     private suspend fun persistToolExecution(execution: ToolExecutionEntity) {
+        require(execution.durationMillis == null || (execution.durationMillis >= 0 && execution.status != ToolExecutionStatus.STARTED)) {
+            "Tool duration requires a measured terminal execution"
+        }
         if (execution.status == ToolExecutionStatus.STARTED) {
             if (toolExecutionDAO.insertStartedIfTurnActive(
                     executionId = execution.executionId,
@@ -585,6 +602,7 @@ class ConversationRepository(
             childTurnId = execution.childTurnId,
             subAssistantRunId = execution.subAssistantRunId,
             updatedAt = execution.updatedAt,
+            durationMillis = execution.durationMillis,
         )
         if (changed == 1) return
         val current = toolExecutionDAO.getById(execution.executionId)
@@ -668,6 +686,14 @@ class ConversationRepository(
             }.toMap(),
         )
     }
+
+    internal suspend fun getToolDurations(conversationId: Uuid): Map<me.rerere.ai.core.ToolCallLocator, Long> =
+        toolExecutionDAO.getConversationOutcomes(conversationId.toString()).mapNotNull { row ->
+            row.durationMillis?.takeIf { it >= 0 && row.status != ToolExecutionStatus.STARTED }?.let { duration ->
+                me.rerere.ai.core.ToolCallLocator(Uuid.parse(row.assistantMessageId), Uuid.parse(requireNotNull(row.stepId)),
+                    Uuid.parse(requireNotNull(row.localCallId))) to duration
+            }
+        }.toMap()
 
     internal suspend fun deleteConversation(conversationId: Uuid) {
         val persisted = conversationDAO.getConversationById(conversationId.toString()) ?: return

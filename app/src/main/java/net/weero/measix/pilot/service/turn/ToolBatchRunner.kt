@@ -45,6 +45,7 @@ internal sealed interface ToolBatchOutcome {
 internal class ToolBatchRunner(
     private val toolCallRuntime: ToolCallRuntime,
     private val attachmentResolver: AttachmentResolver,
+    private val nanoTime: () -> Long = System::nanoTime,
 ) {
     suspend fun run(state: TurnRunState): ToolBatchOutcome {
         // 本批的门控/可用性/审批准备（含续跑恢复）：Turn live phase = TOOL_PREPARING，
@@ -198,7 +199,14 @@ internal class ToolBatchRunner(
 
                     )
 
+                    val executionStartedNanos = nanoTime()
                     val outcome = toolCallRuntime.execute(call, hooks)
+                    // Only a returned outcome proves this execution finished. Cancellation and
+                    // recovery keep an unknown duration; neither wall clocks nor finalization time
+                    // can measure resource cleanup that this executor did not observe.
+                    executionEvent = requireNotNull(executionEvent).copy(
+                        durationMillis = ((nanoTime() - executionStartedNanos) / 1_000_000L).coerceAtLeast(0),
+                    )
                     // Re-read by stable localCallId so metadata reported during execution is retained.
                     val latestTool = state.messages.last().getTools()
                         .firstOrNull { it.localCallId == call.locator.localCallId } ?: call.source

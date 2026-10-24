@@ -38,8 +38,15 @@ internal data class ResolvedModelConfiguration(
     val imageGeneration: ImageGenerationCapabilities?,
     val transportCapabilities: ChatTransportCapabilities,
 ) {
+    val contextCapacitySource: ModelContextCapacitySource get() = when {
+        model.contextLength == null -> ModelContextCapacitySource.UNKNOWN
+        userProviderId != null -> ModelContextCapacitySource.USER_DEFINITION
+        else -> ModelContextCapacitySource.LOCAL_OVERRIDE
+    }
     val imageGenerationSupported: Boolean get() = imageGeneration?.canGenerate == true
 }
+
+internal enum class ModelContextCapacitySource { UNKNOWN, USER_DEFINITION, LOCAL_OVERRIDE }
 
 internal data class ImageGenerationCapabilities(
     val canGenerate: Boolean,
@@ -93,6 +100,7 @@ internal data class ResolvedConfiguration(
     val personalWebDavConnections: List<WebDavConnection> = emptyList(),
     val currentPersonalWebDavConnectionId: kotlin.uuid.Uuid? = null,
     val webDavBackup: WebDavBackupPreferences = WebDavBackupPreferences(),
+    val modelContextLengthOverrides: Map<ConfigurationReference.Enterprise, Int> = emptyMap(),
 ) {
     /** The v5 binding meaning must not loosen the published v4 or an unidentified snapshot. */
     fun permitsAdditionalManagedMcp(assistantId: ConfigurationReference): Boolean =
@@ -250,7 +258,8 @@ internal object ConfigurationResolver {
                 add(ConfigurationCategory.MODEL, id, definition.name, definition.enabled && providerEnabled)
                 models[id] = ResolvedModelConfiguration(
                     Model(id = id, modelId = definition.modelId, displayName = definition.name, type = definition.type,
-                        inputModalities = definition.inputModalities, outputModalities = definition.outputModalities, abilities = definition.abilities),
+                        inputModalities = definition.inputModalities, outputModalities = definition.outputModalities, abilities = definition.abilities,
+                        contextLength = document.preferences.modelContextLengths(scope)[id]),
                     null,
                     null,
                     available.modelCapabilities[definition.id] ?: ChatTransportCapabilities.BASIC,
@@ -365,6 +374,7 @@ internal object ConfigurationResolver {
             enterpriseSnapshotSchemaVersion = available?.snapshotSchemaVersion.takeIf { enterprise != null },
             personalWebDavConnections = if (scope == ConfigurationScope.Personal) user.webDavConnections else emptyList(),
             currentPersonalWebDavConnectionId = if (scope == ConfigurationScope.Personal) user.currentWebDavConnectionId else null,
-            webDavBackup = document.preferences.scopes.singleOrNull { it.scope == scope }?.webDavBackup ?: WebDavBackupPreferences())
+            webDavBackup = document.preferences.scopes.singleOrNull { it.scope == scope }?.webDavBackup ?: WebDavBackupPreferences(),
+            modelContextLengthOverrides = document.preferences.modelContextLengths(scope))
     }
 }

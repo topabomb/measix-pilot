@@ -32,7 +32,7 @@ class RealmAccessTest {
                 entered.complete(Unit)
                 check(release.await(10, java.util.concurrent.TimeUnit.SECONDS)) { "renewal commit did not resume" }
             }
-        }) { now.get() }
+        }, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now.get() }
         controller.enrollFixture(exampleEnterprisePackage(), java.time.Instant.ofEpochMilli(3000L))
         val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
         val allowed = mutableListOf<Boolean>()
@@ -72,7 +72,7 @@ class RealmAccessTest {
     @Test
     fun `local expiry respects renewal while a remote session expiry remains terminal`() = runTest {
         var now = 1000L
-        val controller = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { now }
+        val controller = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
         controller.enrollFixture(exampleEnterprisePackage(), java.time.Instant.ofEpochMilli(3000L))
         val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
         val refresh = controller.beginPlatformRefresh(access.sessionId)
@@ -88,7 +88,7 @@ class RealmAccessTest {
 
     @Test
     fun `captured identity survives switching but not exit and same principal reenrollment`() = runTest {
-        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         controller.enrollFixture(packet)
         val access = controller.captureRealmAccess(packet.identity.scope)
@@ -109,7 +109,7 @@ class RealmAccessTest {
 
     @Test
     fun `verified pending identity can access its data but another principal cannot`() = runTest {
-        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         val identity = packet.identity
         controller.enrollFixture(packet)
@@ -125,7 +125,7 @@ class RealmAccessTest {
     @Test
     fun `deleted identity permanently leaves enterprise while preserving personal access and reason`() = runTest {
         val root = temporary.newFolder()
-        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root))
+        val controller = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         controller.enrollFixture(packet)
         val access = controller.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
@@ -142,7 +142,7 @@ class RealmAccessTest {
         assertNull(manifest.lastIdentity)
         assertTrue(controller.withRealmAccess(RealmAccess.Personal) { true })
 
-        val restarted = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root))
+        val restarted = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         restarted.recover()
         val recovered = (restarted.readPresentation().state as EnterpriseState.Available).manifest
         assertEquals(EnterpriseExitReason.IDENTITY_DELETED, recovered.exitReason)
@@ -152,7 +152,7 @@ class RealmAccessTest {
     @Test
     fun `deleted principal can enroll again only as a fresh Core principal`() = runTest {
         val root = temporary.newFolder()
-        val controller = EnterpriseSessionController(enterpriseTestStore(root))
+        val controller = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val original = exampleEnterprisePackage()
         controller.enrollFixture(original)
         val retiredAccess = controller.captureRealmAccess(original.identity.scope) as RealmAccess.Enterprise
@@ -173,7 +173,7 @@ class RealmAccessTest {
         assertEquals(recreated.identity, manifest.lastIdentity)
         expectDenied { controller.withRealmAccess(retiredAccess) { fail("retired access executed") } }
 
-        val restarted = EnterpriseSessionController(enterpriseTestStore(root))
+        val restarted = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         restarted.recover()
         val recovered = (restarted.readPresentation().state as EnterpriseState.Available).manifest
         assertEquals(EnterpriseSessionPhase.READY, recovered.phase)
@@ -184,7 +184,7 @@ class RealmAccessTest {
     @Test
     fun `identity deletion durably upgrades a weaker closing reason across restart`() = runTest {
         val root = temporary.newFolder()
-        val original = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root))
+        val original = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         original.enrollFixture(packet)
         val access = original.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
@@ -193,7 +193,7 @@ class RealmAccessTest {
         val upgraded = original.beginInvalidation(access, EnterpriseExitReason.IDENTITY_DELETED)
         assertEquals(EnterpriseExitReason.IDENTITY_DELETED, upgraded.reason)
 
-        val restarted = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root))
+        val restarted = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         restarted.recover()
         assertEquals(EnterpriseExitReason.IDENTITY_DELETED, restarted.pendingExit()?.reason)
         restarted.finishExit(requireNotNull(restarted.pendingExit()))
@@ -205,7 +205,7 @@ class RealmAccessTest {
     @Test
     fun `identity deletion durably upgrades a local reset closing reason across restart`() = runTest {
         val root = temporary.newFolder()
-        val original = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root))
+        val original = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         original.enrollFixture(packet)
         val access = original.captureRealmAccess(packet.identity.scope) as RealmAccess.Enterprise
@@ -214,7 +214,7 @@ class RealmAccessTest {
         val upgraded = original.beginInvalidation(access, EnterpriseExitReason.IDENTITY_DELETED)
         assertEquals(EnterpriseExitReason.IDENTITY_DELETED, upgraded.reason)
 
-        val restarted = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root))
+        val restarted = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         restarted.recover()
         assertEquals(EnterpriseExitReason.IDENTITY_DELETED, restarted.pendingExit()?.reason)
         restarted.finishExit(requireNotNull(restarted.pendingExit()))

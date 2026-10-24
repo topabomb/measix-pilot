@@ -64,6 +64,10 @@ data class TokenUsage(
     val coreCompleteness: UsageCompleteness = UsageCompleteness.LEGACY,
     val cacheReadCompleteness: UsageCompleteness = UsageCompleteness.LEGACY,
     val semanticsVersion: Int = LEGACY_TOKEN_USAGE_SEMANTICS_VERSION,
+    /** Captured client capacity paired with the displayed latest input; never inferred from current settings. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val latestRequestContextCapacityTokens: Long? = null,
 )
 
 const val LEGACY_TOKEN_USAGE_SEMANTICS_VERSION = 1

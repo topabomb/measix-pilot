@@ -58,6 +58,7 @@
 | `presetMessages` | 空列表 | 新会话的预置消息 |
 | `modeInjectionIds` | 空集合 | 关联的 `PromptInjection` |
 | `enableTimeReminder` | `false` | 是否注入跨时段提醒 |
+| `timeReminderIntervalMinutes` | `60` | 正整数分钟；真实用户消息间隔严格超过该值才提醒，首次消息仍提醒。关闭开关不清除间隔 |
 | `allowConversationSystemPrompt` | `false` | 是否允许会话覆盖 System Prompt |
 | `allowConversationPromptInjection` | `false` | 是否改用会话选择的注入集合；开启后不合并助手集合 |
 
@@ -185,6 +186,14 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 删除 Assistant 由 `AssistantManagementService` 协调：先写 tombstone，再取消相关生成和子助手运行，
 清理记忆与会话，最后提交 Settings 清理。中断后由 tombstone 恢复流程继续完成，不能把列表移除视为删除完成。
+
+显式 UI 删除先通过 `prepareDeletion` 捕获原所选空间及所有相关 Runtime 的待发版本。
+`AssistantDeletionPreview.pendingInputCount` 只显示原当前空间数量；确认文字说明其他空间的相关待发内容及附件也会清除，
+不披露跨空间总数。配置 owner 完成原删除权限校验后，在原 Session 与 Settings 锁内复验待发范围，再提交定义删除及 tombstone。
+新增或编辑的待发内容要求重新确认，已撤回或持久提交的内容允许收窄。
+`assistant_manage` 的普通审批不替代此确认；存在待发内容而没有该预览时返回
+`assistant_pending_inputs_confirmation_required`，引导用户进入助手管理页确认。既有 tombstone 重试不重复询问。
+新入队和待发编辑接纳沿 Session → Settings → 会话锁校验助手仍存在且本域允许选择；不要求已有可用模型。
 
 ## 6. 本域使用编辑
 

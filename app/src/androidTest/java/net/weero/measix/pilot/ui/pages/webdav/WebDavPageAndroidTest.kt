@@ -56,7 +56,7 @@ class WebDavPageAndroidTest {
             MaterialTheme {
                 CompositionLocalProvider(LocalNavController provides Navigator(mutableListOf(Screen.Enterprise)),
                     LocalSettings provides Settings(),
-                    LocalToaster provides com.dokar.sonner.rememberToasterState(),
+                    LocalToaster provides net.weero.measix.pilot.ui.components.toast.rememberToasterState(),
                     net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
                     content()
                 }

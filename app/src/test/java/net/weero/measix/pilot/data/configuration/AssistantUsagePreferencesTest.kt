@@ -14,6 +14,32 @@ import org.junit.Test
 
 class AssistantUsagePreferencesTest {
     @Test
+    fun `time interval overrides stay scoped and disabled interval is retained`() {
+        val packet = exampleEnterprisePackage()
+        val definition = packet.configuration.assistants.first()
+        val resolved = resolveEnterpriseAssistantUsage(packet.identity, definition, null)
+        val edited = resolved.copy(enableTimeReminder = true, timeReminderIntervalMinutes = 5)
+        val usage = AssistantUsagePreferences(resolved.id).withDelta(resolved, edited)
+        val preferences = UserPreferences().withAssistantUsage(packet.identity.scope, usage)
+        val decoded = JsonInstant.decodeFromString<UserPreferences>(JsonInstant.encodeToString(preferences))
+        val owned = decoded.assistantUsage(packet.identity.scope, resolved.id)
+        assertEquals(5, resolveEnterpriseAssistantUsage(packet.identity, definition, owned).timeReminderIntervalMinutes)
+        assertEquals(60, resolveEnterpriseAssistantUsage(packet.identity, definition,
+            decoded.assistantUsage(packet.identity.scope.copy(userId = "another"), resolved.id)).timeReminderIntervalMinutes)
+        val disabled = usage.withDelta(edited, edited.copy(enableTimeReminder = false))
+        val result = resolveEnterpriseAssistantUsage(packet.identity, definition, disabled)
+        assertFalse(result.enableTimeReminder)
+        assertEquals(5, result.timeReminderIntervalMinutes)
+        assertEquals(definition.systemPrompt, result.systemPrompt)
+        assertEquals(60, JsonInstant.decodeFromString<Assistant>("{}").timeReminderIntervalMinutes)
+        assertThrows(IllegalArgumentException::class.java) { Assistant(timeReminderIntervalMinutes = 0) }
+        assertThrows(IllegalArgumentException::class.java) { AssistantUsagePreferences(resolved.id, timeReminderIntervalMinutes = UsageValue(-1)) }
+        assertThrows(kotlinx.serialization.SerializationException::class.java) {
+            JsonInstant.decodeFromString<Assistant>("{\"timeReminderIntervalMinutes\":2147483648}")
+        }
+    }
+
+    @Test
     fun `missing and explicit null survive serialization with different meanings`() {
         val definition = Assistant(temperature = 0.7f, chatModelId = ConfigurationReference.random())
         val inherited = AssistantUsagePreferences(definition.id)

@@ -32,29 +32,17 @@ class MessageFtsManager(private val database: AppDatabase) {
 
     internal fun indexConversationInTransaction(conversation: Conversation) {
         val conversationId = conversation.id.toString()
-        db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
+        deleteConversationInTransaction(conversationId)
         conversation.messageNodes.forEach { node ->
             node.messages.forEach { message ->
-                val text = message.extractFtsText()
-                if (text.isNotBlank()) {
-                    db.execSQL(
-                        "INSERT INTO message_fts(text, node_id, message_id, conversation_id, title, update_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        arrayOf(
-                            text,
-                            node.id.toString(),
-                            message.id.toString(),
-                            conversationId,
-                            conversation.title,
-                            conversation.updateAt.toEpochMilli().toString(),
-                        )
-                    )
-                }
+                insertMessage(conversationId, node.id.toString(), message, conversation.title, conversation.updateAt.toEpochMilli())
             }
         }
     }
 
     internal fun deleteConversationInTransaction(conversationId: String) {
-        db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
+        db.execSQL("DELETE FROM message_fts WHERE rowid IN (SELECT fts_rowid FROM message_fts_rowid WHERE conversation_id = ?)", arrayOf(conversationId))
+        db.execSQL("DELETE FROM message_fts_rowid WHERE conversation_id = ?", arrayOf(conversationId))
     }
 
     /** 节点级增量：按 conversation/node 删除旧行，再以实际 message ID 插入当前文本。 */
@@ -65,26 +53,9 @@ class MessageFtsManager(private val database: AppDatabase) {
         nodes: List<MessageNode>,
     ) {
         nodes.forEach { node ->
-            // 删旧行（按 conversation_id + node_id）
-            db.execSQL(
-                "DELETE FROM message_fts WHERE conversation_id = ? AND node_id = ?",
-                arrayOf(conversationId, node.id.toString()),
-            )
+            deleteNodeRows(conversationId, node.id.toString())
             node.messages.forEach { message ->
-                val text = message.extractFtsText()
-                if (text.isNotBlank()) {
-                    db.execSQL(
-                        "INSERT INTO message_fts(text, node_id, message_id, conversation_id, title, update_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        arrayOf(
-                            text,
-                            node.id.toString(),
-                            message.id.toString(),
-                            conversationId,
-                            title,
-                            updateAt.toString(),
-                        )
-                    )
-                }
+                insertMessage(conversationId, node.id.toString(), message, title, updateAt)
             }
         }
     }
@@ -92,11 +63,33 @@ class MessageFtsManager(private val database: AppDatabase) {
     /** 节点删除的索引清理。 */
     internal fun deleteNodesIndexInTransaction(conversationId: String, nodeIds: List<kotlin.uuid.Uuid>) {
         nodeIds.forEach { nodeId ->
-            db.execSQL(
-                "DELETE FROM message_fts WHERE conversation_id = ? AND node_id = ?",
-                arrayOf(conversationId, nodeId.toString()),
-            )
+            deleteNodeRows(conversationId, nodeId.toString())
         }
+    }
+
+    private fun deleteNodeRows(conversationId: String, nodeId: String) {
+        val args = arrayOf(conversationId, nodeId)
+        db.execSQL("DELETE FROM message_fts WHERE rowid IN (SELECT fts_rowid FROM message_fts_rowid WHERE conversation_id = ? AND node_id = ?)", args)
+        db.execSQL("DELETE FROM message_fts_rowid WHERE conversation_id = ? AND node_id = ?", args)
+    }
+
+    private fun insertMessage(conversationId: String, nodeId: String, message: UIMessage, title: String, updateAt: Long) {
+        val text = message.extractFtsText()
+        if (text.isBlank()) return
+        val messageId = message.id.toString()
+        val rowId = db.compileStatement(
+            "INSERT INTO message_fts_rowid(conversation_id, node_id, message_id) VALUES (?, ?, ?)"
+        ).use { statement ->
+            statement.bindString(1, conversationId)
+            statement.bindString(2, nodeId)
+            statement.bindString(3, messageId)
+            statement.executeInsert()
+        }
+        check(rowId > 0) { "message_fts_rowid_insert_failed" }
+        db.execSQL(
+            "INSERT INTO message_fts(rowid, text, node_id, message_id, conversation_id, title, update_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            arrayOf<Any>(rowId, text, nodeId, messageId, conversationId, title, updateAt.toString()),
+        )
     }
 
     /** Updates the denormalized conversation title without rewriting message rows. */
@@ -107,12 +100,12 @@ class MessageFtsManager(private val database: AppDatabase) {
     ) {
         if (updateAt == null) {
             db.execSQL(
-                "UPDATE message_fts SET title = ? WHERE conversation_id = ?",
+                "UPDATE message_fts SET title = ? WHERE rowid IN (SELECT fts_rowid FROM message_fts_rowid WHERE conversation_id = ?)",
                 arrayOf(title, conversationId),
             )
         } else {
             db.execSQL(
-                "UPDATE message_fts SET title = ?, update_at = ? WHERE conversation_id = ?",
+                "UPDATE message_fts SET title = ?, update_at = ? WHERE rowid IN (SELECT fts_rowid FROM message_fts_rowid WHERE conversation_id = ?)",
                 arrayOf(title, updateAt.toString(), conversationId),
             )
         }
@@ -120,6 +113,7 @@ class MessageFtsManager(private val database: AppDatabase) {
 
     internal fun deleteAllInTransaction() {
         db.execSQL("DELETE FROM message_fts")
+        db.execSQL("DELETE FROM message_fts_rowid")
     }
 
     suspend fun isProjectionCurrent(): Boolean = withContext(Dispatchers.IO) {
@@ -176,7 +170,7 @@ class MessageFtsManager(private val database: AppDatabase) {
 }
 
 private const val PROJECTION_KEY = "message_fts_projection"
-private const val PROJECTION_VERSION = "transactional-v1"
+private const val PROJECTION_VERSION = "rowid-transactional-v2"
 
 private fun UIMessage.extractFtsText(): String =
     parts.filterIsInstance<UIMessagePart.Text>()

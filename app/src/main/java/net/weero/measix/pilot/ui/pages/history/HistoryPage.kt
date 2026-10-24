@@ -69,6 +69,15 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     val continuationUnavailable by vm.continuationUnavailable.collectAsStateWithLifecycle()
     val deletedNavigation by vm.deletedNavigation.collectAsStateWithLifecycle()
     val undo by vm.undo.collectAsStateWithLifecycle()
+    val pendingDeletion by vm.pendingDeletion.collectAsStateWithLifecycle()
+    pendingDeletion?.let { pending ->
+        net.weero.measix.pilot.ui.pages.chat.PendingInputDeletionDialog(
+            count = pending.preview.pendingInputCount,
+            onConfirm = { vm.confirmDeletion(pending) },
+            onDismiss = { vm.dismissDeletion(pending) },
+            enabled = !operationRunning,
+        )
+    }
     val snackMessageDeleted = stringResource(R.string.history_page_conversation_deleted)
     val snackMessageUndo = stringResource(R.string.history_page_undo)
     LaunchedEffect(deletedNavigation) {
@@ -139,6 +148,9 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                 Text(stringResource(R.string.chat_deleted_assistant_unavailable), color = MaterialTheme.colorScheme.error)
             }
             commandFailure?.let { detail -> item("command_failure") {
+                if (detail.contains("conversation_pending_inputs_changed") || detail.contains("conversation_pending_inputs_confirmation_required")) {
+                    Text(stringResource(R.string.chat_queue_changed), color = MaterialTheme.colorScheme.error)
+                }
                 net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
             } }
             (assistantCatalog as? AssistantCatalogReadState.Unavailable)?.let { unavailable ->
@@ -217,8 +229,8 @@ private fun SwipeableConversationItem(
         )
     }
 
-    LaunchedEffect(dismissState.currentValue) {
-        when (dismissState.currentValue) {
+    LaunchedEffect(dismissState.settledValue) {
+        when (dismissState.settledValue) {
             SwipeToDismissBoxValue.EndToStart -> {
                 onDelete()
                 dismissState.snapTo(SwipeToDismissBoxValue.Settled)

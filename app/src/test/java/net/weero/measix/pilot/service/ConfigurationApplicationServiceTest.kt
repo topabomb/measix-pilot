@@ -60,6 +60,105 @@ class ConfigurationApplicationServiceTest {
     @get:Rule val temporary = TemporaryFolder()
 
     @Test
+    fun `provider draft commits once and failed storage retains the original list`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            val commands = ProviderSettingsApplicationService(mockk(), env.settings)
+            val draft = ProviderSetting.Google(name = "  Draft  ")
+            val before = env.diskDocument()
+            env.intercept = { throw IOException("provider storage failed") }
+            try {
+                commands.createProvider(draft)
+                fail("Storage failure must propagate")
+            } catch (expected: IOException) { }
+            assertEquals(before, env.diskDocument())
+            assertFalse(env.settings.userSettings.value.providers.any { it.id == draft.id })
+            env.intercept = null
+            assertEquals(draft.id, commands.createProvider(draft))
+            val saved = env.diskDocument()
+            assertEquals("Draft", saved.personalSettings().providers.first().name)
+            assertEquals(before.preferences.scopes, saved.preferences.scopes)
+            expectCommandFailure { commands.createProvider(draft) }
+            assertEquals(saved, env.diskDocument())
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
+    fun `provider import renews model identities without modifying existing definitions`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            val commands = ProviderSettingsApplicationService(mockk(), env.settings)
+            val model = Model(modelId = "example", contextLength = 1234)
+            val original = ProviderSetting.Google(name = "Original", models = listOf(model))
+            commands.createProvider(original)
+            val before = env.diskDocument()
+            val importedId = commands.importProvider(original)
+            val saved = env.diskDocument()
+            val imported = saved.personalSettings().providers.first()
+            assertEquals(importedId, imported.id)
+            assertNotEquals(original.id, imported.id)
+            assertNotEquals(model.id, imported.models.single().id)
+            assertEquals(model.copy(id = imported.models.single().id), imported.models.single())
+            assertEquals(original, saved.personalSettings().providers.first { it.id == original.id })
+            assertEquals(before.preferences.scopes, saved.preferences.scopes)
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
+    fun `Tavily answer command edits only its field and preserves enterprise preferences`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            val option = me.rerere.search.SearchServiceOptions.TavilyOptions(apiKey = "original")
+            env.settings.updateLocal { it.copy(searchServices = listOf(option)) }
+            val scopes = env.diskDocument().preferences.scopes
+            env.settings.updateLocal { it.copy(searchServices = listOf(option.copy(apiKey = "updated", depth = "basic"))) }
+            env.commands.setTavilyIncludeAnswer(option.id as ConfigurationReference.User, true, false)
+            val stored = env.diskDocument().personalSettings().searchServices.single() as me.rerere.search.SearchServiceOptions.TavilyOptions
+            assertFalse(stored.includeAnswer)
+            assertEquals("updated", stored.apiKey)
+            assertEquals("basic", stored.depth)
+            assertEquals(scopes, env.diskDocument().preferences.scopes)
+            expectCommandFailure { env.commands.setTavilyIncludeAnswer(option.id as ConfigurationReference.User, true, true) }
+            assertEquals(stored, env.diskDocument().personalSettings().searchServices.single())
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
+    fun `enterprise capacity rejects stale edits failed storage and stale realm selection`() = runTest {
+        val env = environment()
+        try {
+            env.initialize()
+            val packet = exampleEnterprisePackage()
+            val reference = packet.identity.reference(requireNotNull(packet.configuration.defaults.chatModelId))
+            env.commands.setModelContextLengthOverride(env.selection, reference, null, 1000)
+            val saved = env.diskDocument()
+            assertEquals(1000, saved.preferences.modelContextLengths(env.access.scope)[reference])
+            assertEquals(1000, env.queries.observeCurrent().first().models.getValue(reference).model.contextLength)
+            expectCommandFailure { env.commands.setModelContextLengthOverride(env.selection, reference, null, 2000) }
+            assertEquals(saved, env.diskDocument())
+            env.intercept = { throw IOException("capacity storage failed") }
+            try {
+                env.commands.setModelContextLengthOverride(env.selection, reference, 1000, 2000)
+                fail("Storage failure must be reported")
+            } catch (error: IOException) { assertTrue(error.stackTraceToString(), generateSequence<Throwable>(error) { it.cause }.any {
+                it is IOException && it.message == "capacity storage failed"
+            }) }
+            assertEquals(saved, env.diskDocument())
+            env.intercept = null
+            val original = env.selection
+            env.sessions.selectPersonalFixture()
+            expectCommandFailure { env.commands.setModelContextLengthOverride(original, reference, 1000, 2000) }
+            assertEquals(saved, env.diskDocument())
+            val selected = env.sessions.selectEnterpriseFixture()
+            env.commands.setModelContextLengthOverride(selected, reference, 1000, null)
+            assertNull(env.queries.observeCurrent().first().models.getValue(reference).model.contextLength)
+        } finally { env.scope.cancel() }
+    }
+
+    @Test
     fun `webdav changes commit through settings owner and reject enterprise stale and failed writes`() = runTest {
         val env = environment()
         try {
@@ -765,7 +864,7 @@ class ConfigurationApplicationServiceTest {
         val settings = SettingsStore(context, scope, dataStore = preferences, computationDispatcher = computationDispatcher)
         var now = System.currentTimeMillis()
         private val enterpriseRoot = File(root, "enterprise")
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(enterpriseRoot)) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(enterpriseRoot), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
         private val gate = ApplicationRecoveryGate()
         lateinit var access: RealmAccess.Enterprise
         lateinit var target: ConversationAssistantTarget
@@ -793,6 +892,7 @@ class ConfigurationApplicationServiceTest {
         init {
             every { preview.lifecycleChanges() } returns flowOf(Unit)
             coEvery { preview.project(any(), any()) } returns emptyMap()
+            coEvery { repository.getToolDurations(any()) } returns emptyMap()
             coEvery { repository.getConversationHeader(any()) } answers { headers[firstArg()] }
             coEvery { repository.commit(any()) } answers {
                 val mutation = (firstArg<ConversationWrite>() as ConversationWrite.Mutate).mutation

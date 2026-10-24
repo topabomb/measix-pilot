@@ -401,7 +401,7 @@ class MemoryServiceTest {
             produceFile = { File(root, "settings.preferences_pb") })
         val settings = SettingsStore(context, scope, dataStore = preferences)
         var now = System.currentTimeMillis()
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "enterprise"))) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(File(root, "enterprise")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
         val gate = ApplicationRecoveryGate()
         val configurations = ConfigurationQueryService(settings, sessions, gate, mockk())
         val repository = mockk<MemoryRepository>()

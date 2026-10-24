@@ -76,47 +76,9 @@ import net.weero.measix.pilot.ui.components.table.DataTable
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
 import net.weero.measix.pilot.utils.toDp
-import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
-import org.intellij.markdown.html.HtmlGenerator
-import org.intellij.markdown.parser.MarkdownParser
-import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
-
-// ---- Preprocessing (mirrors Markdown.kt logic) ----
-
-private val INLINE_LATEX_REGEX = Regex("\\\\\\((.+?)\\\\\\)")
-private val BLOCK_LATEX_REGEX = Regex("\\\\\\[(.+?)\\\\\\]", RegexOption.DOT_MATCHES_ALL)
-private val CODE_BLOCK_REGEX = Regex("```[\\s\\S]*?```|`[^`\n]*`", RegexOption.DOT_MATCHES_ALL)
-
-private fun preProcess(content: String): String {
-    val codeBlocks = mutableListOf<IntRange>()
-    CODE_BLOCK_REGEX.findAll(content).forEach { codeBlocks.add(it.range) }
-    fun isInCodeBlock(pos: Int) = codeBlocks.any { pos in it }
-
-    var result = INLINE_LATEX_REGEX.replace(content) { m ->
-        if (isInCodeBlock(m.range.first)) m.value else "$" + m.groupValues[1] + "$"
-    }
-    result = BLOCK_LATEX_REGEX.replace(result) { m ->
-        if (isInCodeBlock(m.range.first)) m.value else "$$" + m.groupValues[1] + "$$"
-    }
-    return result
-}
-
-// ---- HTML generation ----
-
-private val flavour by lazy {
-    GFMFlavourDescriptor(makeHttpsAutoLinks = true, useSafeLinks = true)
-}
-
-private val parser by lazy { MarkdownParser(flavour) }
-
-private fun generateMarkdownHtml(content: String): String {
-    val preprocessed = preProcess(content)
-    val tree = parser.buildMarkdownTreeFromString(preprocessed)
-    return HtmlGenerator(preprocessed, tree, flavour).generateHtml()
-}
 
 // ---- Main composable ----
 
@@ -137,7 +99,7 @@ fun MarkdownNew(
 private fun MarkdownHtmlContent(content: String, modifier: Modifier, style: TextStyle, onClickCitation: (String) -> Unit) {
     var html by remember {
         mutableStateOf(
-            value = generateMarkdownHtml(content),
+            value = generateMarkdownDocument(content),
         )
     }
 
@@ -145,20 +107,20 @@ private fun MarkdownHtmlContent(content: String, modifier: Modifier, style: Text
     LaunchedEffect(Unit) {
         snapshotFlow { updatedContent }
             .distinctUntilChanged()
-            .mapLatest { generateMarkdownHtml(it) }
+            .mapLatest { generateMarkdownDocument(it) }
             .catch { it.printStackTrace() }
             .flowOn(Dispatchers.Default)
             .collect { html = it }
     }
 
-    val document = remember(html) {
-        runCatching { Jsoup.parse(html) }.getOrElse { Jsoup.parse("") }
-    }
+    val document = html.document
 
-    ProvideTextStyle(style) {
-        Column(modifier = modifier.padding(start = MarkdownContentInset)) {
-            document.body().childNodes().fastForEach { node ->
-                HtmlBodyNode(node = node, onClickCitation = onClickCitation)
+    androidx.compose.runtime.CompositionLocalProvider(LocalMarkdownHtmlFences provides html.fences) {
+        ProvideTextStyle(style) {
+            Column(modifier = modifier.padding(start = MarkdownContentInset)) {
+                document.body().childNodes().fastForEach { node ->
+                    HtmlBodyNode(node = node, onClickCitation = onClickCitation)
+                }
             }
         }
     }
@@ -536,6 +498,7 @@ private fun HtmlListItem(
 
 @Composable
 private fun HtmlCodeBlock(element: Element) {
+    val fence = LocalMarkdownHtmlFences.current[element]
     val codeElement = element.selectFirst("code")
     val language = codeElement?.classNames()
         ?.find { it.startsWith("language-") }
@@ -544,12 +507,14 @@ private fun HtmlCodeBlock(element: Element) {
     val code = codeElement?.wholeText()?.trimEnd('\n') ?: element.wholeText().trimEnd('\n')
 
     HighlightCodeBlock(
-        code = code,
-        language = language,
+        code = fence?.code ?: code,
+        originalCode = fence?.originalCode ?: code,
+        blockIdentity = fence?.let { MarkdownFenceIdentity(it.startOffset, it.language) },
+        language = fence?.language ?: language,
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 4.dp),
-        completeCodeBlock = true,
+        completeCodeBlock = fence?.closed == true,
     )
 }
 
@@ -927,7 +892,7 @@ private fun AnnotatedString.Builder.appendHtmlInlineElement(
                                             .clickable { onClickCitation(id.trim()) }
                                             .fillMaxSize()
                                             .clip(CircleShape)
-                                            .background(colorScheme.tertiaryContainer.copy(0.2f)),
+                                            .background(colorScheme.tertiaryContainer),
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         Text(
@@ -938,7 +903,7 @@ private fun AnnotatedString.Builder.appendHtmlInlineElement(
                                                 lineHeight = 10.sp,
                                                 fontFamily = JetbrainsMono,
                                                 color = colorScheme.onTertiaryContainer,
-                                                fontWeight = FontWeight.Thin,
+                                                fontWeight = FontWeight.Medium,
                                             ),
                                         )
                                     }

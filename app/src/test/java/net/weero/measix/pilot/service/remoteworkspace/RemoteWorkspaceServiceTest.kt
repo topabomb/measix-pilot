@@ -35,7 +35,7 @@ class RemoteWorkspaceServiceTest {
         val invalidations: MutableList<Pair<RealmAccess.Enterprise, EnterpriseExitReason>>)
 
     private suspend fun TestScope.fixture(initial: PlatformWorkspaceProjection = ready, initialError: Exception? = null): Fixture {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         sessions.enrollFixture(exampleEnterprisePackage())
         val client = mockk<PlatformWorkspaceClient>()
         if (initialError == null) coEvery { client.state(any(), any()) } returns initial
@@ -50,6 +50,26 @@ class RemoteWorkspaceServiceTest {
         val selection = sessions.readPresentation().selection!!
         service.queryState.first { it?.refreshing == false }
         return Fixture(sessions, service, client, selection, control, invalidations)
+    }
+
+    @Test fun `rendered resources read original enterprise handle without directory lookup`() = runTest {
+        val f = fixture()
+        val browser = RemoteWorkspaceBrowserSource(f.service, f.selection)
+        val session = browser.open()
+        coEvery { f.client.download(any(), any(), any(), "assets/app.js", any(), any(), any()) } coAnswers {
+            assertEquals(24L * 1024 * 1024, arg<Long>(5))
+            arg<java.io.OutputStream>(4).write("run()".toByteArray())
+            WorkspaceContentMetadata("\"v1\"", 5, null)
+        }
+        val source = session.renderedSource("docs/index.html", browser.changes)
+        val result = source.readResource("../assets/app.js")
+        assertEquals("text/javascript", result.first)
+        assertEquals("run()", result.second.decodeToString())
+        coVerify(exactly = 0) { f.client.list(any(), any(), any(), any()) }
+        session.close()
+        try { source.readResource("../assets/app.js"); fail() }
+        catch (error: IllegalStateException) { assertEquals("rendered_file_revoked", error.message) }
+        coVerify(exactly = 1) { f.client.download(any(), any(), any(), any(), any(), any(), any()) }
     }
 
     @Test fun `DAV projection retains designated identity but exposes query failure and clears it after successful refresh`() = runTest {

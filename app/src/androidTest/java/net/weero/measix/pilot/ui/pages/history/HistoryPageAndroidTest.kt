@@ -7,7 +7,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import io.mockk.*
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
@@ -52,10 +52,13 @@ class HistoryPageAndroidTest {
         every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Available(
             AssistantCatalogUiModel(selection, ConfigurationSelection(assistant, null), emptyMap(), emptyList())))
         val application = mockk<ConversationApplicationService>()
+        val preview = mockk<ConversationDeletionPreview>()
+        every { preview.pendingInputCount } returns 1
+        coEvery { application.prepareDeletion(any()) } returns preview
         val token = mockk<ConversationApplicationService.RestoreToken>(relaxed = true)
         every { token.selection } returns selection
         every { token.deletion } returns ConversationDeletionReceipt(first.id, assistant, selection)
-        coEvery { application.deleteForUndo(any()) } coAnswers { rows.value = Result.success(listOf(second)); token }
+        coEvery { application.deleteForUndo(any(), preview) } coAnswers { rows.value = Result.success(listOf(second)); token }
         coEvery { application.deletionContinuation(any()) } returns ConversationContinuation(
             ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant))
         val pinEntered = AtomicBoolean(false)
@@ -81,6 +84,9 @@ class HistoryPageAndroidTest {
                 }
             }
             compose.onNode(hasAnyDescendant(hasText(first.title)) and hasClickAction()).performTouchInput { swipeLeft() }
+            compose.onNodeWithText(compose.activity.getString(R.string.chat_queue_delete_confirm, 1)).assertIsDisplayed()
+            coVerify(exactly = 0) { application.deleteForUndo(any(), any()) }
+            compose.onNodeWithText(compose.activity.getString(R.string.history_page_delete)).performClick()
             compose.onNodeWithText(compose.activity.getString(R.string.history_page_undo)).assertIsDisplayed()
             compose.onNodeWithContentDescription(compose.activity.getString(R.string.history_page_pin)).performClick()
             compose.waitUntil(5_000) { pinEntered.get() }

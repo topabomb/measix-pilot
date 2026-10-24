@@ -6,10 +6,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 sealed class LocalToolOption {
     @Serializable
-    @SerialName("chart_display")
-    data object ChartDisplay : LocalToolOption()
-
-    @Serializable
     @SerialName("time_info")
     data object TimeInfo : LocalToolOption()
 

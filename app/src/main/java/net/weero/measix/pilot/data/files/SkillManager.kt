@@ -22,6 +22,7 @@ class SkillManager(
     private val context: Context,
     private val settingsStore: SettingsStore,
 ) {
+    private val invalidDirectoryOwner = Any()
     companion object {
         private const val TAG = "SkillManager"
         private val SKILL_TEMP_PATTERN = Regex("^\\.[0-9a-f]+\\.(?:staging|backup)\\.\\d+\\.tmp$")
@@ -45,6 +46,104 @@ class SkillManager(
 
     fun listSkills(): List<SkillMetadata> = BackupSnapshotBarrier.withBlockingLock {
         listSkillsUnlocked()
+    }
+
+    fun listInvalidSkillDirectories(): List<InvalidSkillDirectory> = BackupSnapshotBarrier.withBlockingLock {
+        val root = getSkillsDir()
+        recoverInterruptedSkillPublishes(root)
+        val directories = root.listFiles() ?: throw IOException("Unable to list Skill root: $root")
+        directories.filter { it.isDirectory && !it.name.startsWith(".") }.mapNotNull { directory ->
+            val failure = invalidDirectoryFailure(directory) ?: return@mapNotNull null
+            val identity = directoryIdentity(directory)
+            InvalidSkillDirectory(directory.name, failure, invalidDirectoryOwner, identity)
+        }.sortedBy { it.directoryName }
+    }
+
+    /** An invalid tree has no reliable frontmatter identity; use the existing root-swap recovery protocol. */
+    suspend fun deleteInvalidSkillDirectory(target: InvalidSkillDirectory): InvalidSkillDeleteResult =
+        withContext(Dispatchers.IO) {
+            val job = currentCoroutineContext()[Job]
+            BackupSnapshotBarrier.withLock {
+                require(target.owner === invalidDirectoryOwner) { "invalid_skill_directory_owner" }
+                val root = getSkillsDir()
+                recoverInterruptedSkillPublishes(root)
+                val directory = SkillPaths.resolveSkillDir(root, target.directoryName)
+                    ?: return@withLock InvalidSkillDeleteResult.CHANGED
+                if (!directory.isDirectory) return@withLock InvalidSkillDeleteResult.NOT_FOUND
+                if (directoryIdentity(directory) != target.identity || invalidDirectoryFailure(directory) == null) {
+                    return@withLock InvalidSkillDeleteResult.CHANGED
+                }
+                // Reject links before any rename; backup cleanup must never traverse outside the owned tree.
+                requireSafeSkillTree(directory)
+                val staging = createBundleTempDir(root.parentFile!!, "staging")
+                    ?: throw IOException("Unable to create Skill cleanup staging directory")
+                var failure: Throwable? = null
+                try {
+                    val children = root.listFiles() ?: throw IOException("Unable to list Skill root: $root")
+                    children.filter { it.name != target.directoryName }.forEach { child ->
+                        job?.ensureActive()
+                        if (Files.isSymbolicLink(child.toPath())) throw IOException("unsafe_skill_path: ${child.name}")
+                        val destination = staging.resolve(child.name)
+                        if (child.isDirectory) {
+                            requireSafeSkillTree(child)
+                            if (!destination.mkdir() || !copySkillTree(child, destination)) {
+                                throw IOException("Unable to copy retained Skill directory: ${child.name}")
+                            }
+                        } else if (child.isFile) child.copyTo(destination)
+                        else throw IOException("Unsupported Skill filesystem entry: ${child.name}")
+                    }
+                    job?.ensureActive()
+                    if (directoryIdentity(directory) != target.identity || invalidDirectoryFailure(directory) == null) {
+                        return@withLock InvalidSkillDeleteResult.CHANGED
+                    }
+                    requireSafeSkillTree(directory)
+                    publishStagedSkillsRoot(root, staging)
+                    InvalidSkillDeleteResult.SUCCESS
+                } catch (error: Throwable) {
+                    failure = error
+                    throw error
+                } finally { removeOwnedTree(staging, failure) }
+            }
+        }
+
+    private fun requireSafeSkillTree(directory: File) {
+        directory.walkTopDown().onFail { file, error -> throw IOException("Unable to inspect Skill directory: $file", error) }
+            .forEach {
+                if (Files.isSymbolicLink(it.toPath())) {
+                    val relative = it.relativeTo(directory).invariantSeparatorsPath
+                    val displayPath = if (relative.isEmpty()) directory.name else "${directory.name}/$relative"
+                    throw IOException("unsafe_skill_path: $displayPath")
+                }
+            }
+    }
+
+    private fun directoryIdentity(directory: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        directory.walkTopDown().onFail { file, error -> throw IOException("Unable to inspect Skill directory: $file", error) }
+            .onEnter { !Files.isSymbolicLink(it.toPath()) }.toList().sortedBy { it.path }.forEach { file ->
+                val attributes = Files.readAttributes(file.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                digest.update("${file.relativeTo(directory)}|${attributes.fileKey()}|${attributes.creationTime()}|${attributes.lastModifiedTime()}|${attributes.size()}\n".toByteArray())
+            }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun invalidDirectoryFailure(directory: File): Exception? {
+        if (Files.isSymbolicLink(directory.toPath())) return IOException("unsafe_skill_path: ${directory.name}")
+        val file = directory.resolve("SKILL.md")
+        if (Files.isSymbolicLink(file.toPath())) return IOException("unsafe_skill_path: ${directory.name}/SKILL.md")
+        if (!file.isFile) return IOException("skill_document_missing: ${directory.name}/SKILL.md")
+        val content = when (val read = file.readUtf8Limited()) {
+            is SkillTextRead.Success -> read.content
+            is SkillTextRead.ReadFailure -> return read.cause
+            SkillTextRead.InvalidEncoding -> return IOException("skill_invalid_utf8: ${directory.name}/SKILL.md")
+            SkillTextRead.ResourceLimit -> return IOException("skill_document_too_large: ${directory.name}/SKILL.md")
+        }
+        return when (val parsed = SkillFrontmatterParser.parseDocument(content)) {
+            is SkillParseResult.Success -> null // Legacy directory/name differences remain valid, as in findPublishedSkillDir.
+            is SkillParseResult.NoFrontmatter -> IOException("skill_frontmatter_missing: ${directory.name}/SKILL.md")
+            is SkillParseResult.Error -> IOException("skill_invalid_frontmatter: ${parsed.message}", parsed.cause)
+        }
     }
 
     private fun listSkillsUnlocked(): List<SkillMetadata> {
@@ -670,6 +769,15 @@ private sealed interface SkillTextRead {
     data object ResourceLimit : SkillTextRead
     data class ReadFailure(val cause: Exception) : SkillTextRead
 }
+
+class InvalidSkillDirectory internal constructor(
+    val directoryName: String,
+    val diagnostic: Exception,
+    internal val owner: Any,
+    internal val identity: String,
+)
+
+enum class InvalidSkillDeleteResult { SUCCESS, NOT_FOUND, CHANGED }
 
 data class SkillMetadata(
     val name: String,

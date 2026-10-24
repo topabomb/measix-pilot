@@ -337,18 +337,32 @@ class SettingsStore internal constructor(
         }
     }
 
+    /** Reuse mutation validation without publishing the candidate or its deletion tombstone. */
+    internal suspend fun <T> withAssistantDeletionPreview(
+        assistantId: ConfigurationReference,
+        state: EnterpriseState,
+        operation: suspend (Assistant) -> T,
+    ): T = updateMutex.withLock {
+        val document = userDocuments.first()
+        val validated = document.manageAssistant(ConfigurationScope.Personal, state, null,
+            AssistantManagementChange.Delete(assistantId))
+        operation(validated.result.assistant)
+    }
+
     internal suspend fun manageAssistant(
         scope: ConfigurationScope,
         state: EnterpriseState,
         callerId: ConfigurationReference?,
         change: AssistantManagementChange,
         requireOwner: () -> Unit,
+        beforeCommit: suspend () -> Unit = {},
         withArtifactCommit: suspend (UserSettingsDocument, UserSettingsDocument, suspend () -> Unit) -> Unit,
     ): AssistantManagementResult = updateMutex.withLock {
         val caller = currentCoroutineContext()
         requireOwner()
         val before = userDocuments.first()
         val mutation = before.manageAssistant(scope, state, callerId, change)
+        beforeCommit()
         withArtifactCommit(before, mutation.document) {
             commitUserDocument({ caller.ensureActive(); requireOwner() }, artifactRootsOwned = true) { mutation.document }
         }
@@ -371,6 +385,29 @@ class SettingsStore internal constructor(
         require(groupId.isNotBlank()) { "model_group_id_required" }
         commitUserDocument(requireOwner) { document ->
             document.copy(preferences = document.preferences.withModelGroupCollapsed(scope, groupId, collapsed))
+        }
+    }
+
+    internal suspend fun setModelContextLengthOverride(
+        scope: ConfigurationScope.Enterprise,
+        state: EnterpriseState.Available,
+        reference: ConfigurationReference.Enterprise,
+        expectedTokens: Int?,
+        tokens: Int?,
+        requireOwner: () -> Unit,
+    ) = updateMutex.withLock {
+        require(state.manifest.session?.identity?.scope == scope) { "model_context_principal_mismatch" }
+        require(reference.authority == scope.authority) { "foreign_model_context_override" }
+        require(tokens == null || tokens > 0) { "model_context_length_must_be_positive" }
+        commitUserDocument(requireOwner) { document ->
+            check(document.preferences.modelContextLengths(scope)[reference] == expectedTokens) { "model_context_override_changed" }
+            if (tokens != null) {
+                val resolved = ConfigurationResolver.resolve(document, scope, state)
+                val selection = resolved.selection(ConfigurationCategory.MODEL, reference)
+                require(selection.isAvailable) { "model_context_unavailable:${selection.unavailableReason}" }
+                require(resolved.models[reference]?.model?.type == me.rerere.ai.provider.ModelType.CHAT) { "model_context_requires_chat_model" }
+            }
+            document.copy(preferences = document.preferences.withModelContextLength(scope, reference, tokens))
         }
     }
 

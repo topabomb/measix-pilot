@@ -27,6 +27,36 @@ import org.junit.Test
 
 class UserSettingsMigrationTest {
     @Test
+    fun `summary default migration preserves custom templates and enterprise preferences`() = runTest {
+        val migration = UserSettingsMigration()
+        val legacy = net.weero.measix.pilot.data.ai.prompts.LEGACY_COMPRESS_PROMPT
+        val updated = net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
+        val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "usr_summary")
+        for (prompt in listOf(legacy, legacy + "\nMy custom instruction", "Custom {content}")) {
+            val original = UserSettingsDocument.empty().withPersonalSettings(Settings(compressPrompt = prompt))
+            val document = original.copy(preferences = original.preferences.copy(scopes = original.preferences.scopes +
+                ScopedUserPreferences(enterprise)))
+            val encoded = JsonInstant.encodeToString(document)
+            val preferences = mutablePreferencesOf(SettingsStore.USER_SETTINGS to encoded)
+            assertEquals(prompt == legacy, migration.shouldMigrate(preferences))
+            val migrated = migration.migrate(preferences)
+            val restored = JsonInstant.decodeFromString<UserSettingsDocument>(migrated[SettingsStore.USER_SETTINGS]!!)
+            assertEquals(if (prompt == legacy) updated else prompt, restored.configuration.compressPrompt)
+            assertEquals(document.preferences, restored.preferences)
+            assertEquals(document.internalState, restored.internalState)
+            assertFalse(migration.shouldMigrate(migrated))
+            assertEquals(migrated, migration.migrate(migrated))
+            val backup = JsonInstant.encodeToString(Settings(compressPrompt = prompt))
+            val imported = JsonInstant.decodeFromString<Settings>(migrateLegacySettingsJson(backup))
+            assertEquals(restored.configuration.compressPrompt, imported.compressPrompt)
+        }
+        val legacyKeys = mutablePreferencesOf(SettingsStore.COMPRESS_PROMPT to legacy)
+        val adopted = migration.migrate(legacyKeys)
+        assertEquals(updated, JsonInstant.decodeFromString<UserSettingsDocument>(adopted[SettingsStore.USER_SETTINGS]!!)
+            .configuration.compressPrompt)
+    }
+
+    @Test
     fun `schema one preserves effective limits in shared definitions and scoped overrides without legacy fallback`() = runTest {
         val assistants = listOf(0, 1, 20, 39, 40, 512).map {
             net.weero.measix.pilot.data.model.Assistant(contextMessageLimit = it)

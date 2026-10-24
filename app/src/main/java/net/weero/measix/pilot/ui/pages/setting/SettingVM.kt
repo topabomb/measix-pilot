@@ -22,6 +22,8 @@ class SettingVM internal constructor(
     private val customChatFontService: CustomChatFontService,
     private val artifactUseCase: ArtifactUseCase,
     configurationQueryService: net.weero.measix.pilot.service.ConfigurationQueryService,
+    private val configurationCommands: net.weero.measix.pilot.service.ConfigurationApplicationService,
+    private val providerCommands: net.weero.measix.pilot.service.ProviderSettingsApplicationService,
 ) :
     ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.userSettings
@@ -40,6 +42,13 @@ class SettingVM internal constructor(
             }
         }
     }
+
+    internal suspend fun setTavilyIncludeAnswer(reference: me.rerere.common.configuration.ConfigurationReference.User,
+        expected: Boolean, enabled: Boolean) = configurationCommands.setTavilyIncludeAnswer(reference, expected, enabled)
+
+    internal suspend fun createProvider(draft: me.rerere.ai.provider.ProviderSetting) = providerCommands.createProvider(draft)
+
+    internal suspend fun importProvider(imported: me.rerere.ai.provider.ProviderSetting) = providerCommands.importProvider(imported)
 
     fun clearLockedChange() {
         _lockedChange.value = null

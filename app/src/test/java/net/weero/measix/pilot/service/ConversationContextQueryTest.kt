@@ -33,8 +33,58 @@ class ConversationContextQueryTest {
     private val registry = mockk<ConversationRuntimeRegistry>()
     private val artifacts = mockk<ArtifactStore>()
     private lateinit var lease: ConversationViewLease
+
+    private fun installWorkspaceOrigin(origin: WorkspaceContextOrigin): MessageNode {
+        val first = TurnTransition.openStep(0)
+        val second = TurnTransition.openStep(1)
+        val node = assistant.copy(messages = listOf(assistant.currentMessage.copy(parts = listOf(first, second))))
+        val system = entry.copy(payload = ConversationContextPayload(source = ConversationContextSource.System(emptyList(), origin),
+            body = ConversationContextBody.Inline("original system")))
+        val owner = ContextMessageLocator(node.id, node.currentMessage.id)
+        val anchor = ContextMessageLocator(user.id, user.currentMessage.id)
+        snapshot = original.copy(nodes = listOf(user, node), modelContextEntries = listOf(system), contextAdmissions = listOf(
+            ConversationContextAdmission(owner, first.stepId, anchor,
+                TurnContextSelection(systemEntryId = system.id, ruleEntryIds = emptyList(), timeReminderEnabled = false, timeZoneId = "UTC"),
+                listOf(ConversationContextUse(system.id, me.rerere.ai.core.MessageRole.SYSTEM, ContextPlacement.System))),
+            ConversationContextAdmission(owner, second.stepId, anchor, null, emptyList())))
+        return node
+    }
+
+    @Test fun `message resources inherit original workspace despite assistant change and revoke on variant change`() = runTest {
+        val query = query()
+        val origin = WorkspaceContextOrigin(Uuid.random().toString(), "original-root", "/workspace/reports")
+        val node = installWorkspaceOrigin(origin)
+        val source = query.messageResourceSource(lease, original.conversationId, node.currentMessage.id)
+        assertEquals(origin, source.workspace)
+        snapshot = snapshot.copy(header = snapshot.header.copy(assistantId = me.rerere.common.configuration.ConfigurationReference.random()))
+        source.requireAccess()
+        assertEquals(origin, source.workspace)
+        snapshot = snapshot.copy(nodes = listOf(user, node.copy(messages = node.messages + UIMessage.assistant("replacement"), selectIndex = 1)))
+        assertFailure<IllegalArgumentException> { source.requireAccess() }
+        coVerify(exactly = 0) { artifacts.readContextText(any(), any()) }
+    }
+
+    @Test fun `historical missing resource provenance stays unknown and cannot borrow another conversation`() = runTest {
+        val query = query()
+        val source = query.messageResourceSource(lease, original.conversationId, assistant.currentMessage.id)
+        assertNull(source.workspace)
+        source.requireAccess()
+        assertFailure<IllegalStateException> { query.messageResourceSource(lease, Uuid.random(), assistant.currentMessage.id) }
+        lease.close()
+        assertFailure<IllegalStateException> { source.requireAccess() }
+    }
+
+    @Test fun `borrowed message resources reject changed durable origin`() = runTest {
+        val query = query()
+        val origin = WorkspaceContextOrigin(Uuid.random().toString(), "original-root", "/workspace")
+        val node = installWorkspaceOrigin(origin)
+        val source = query.messageResourceSource(lease, original.conversationId, node.currentMessage.id)
+        installWorkspaceOrigin(origin.copy(root = "replacement-root"))
+        assertFailure<IllegalStateException> { source.requireAccess() }
+    }
+
     private suspend fun query(): ConversationQueryService {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())).apply { recover() }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).apply { recover() }
         lease = ConversationViewLease(original.conversationId, RealmAccess.Personal, sessions.selectionRevision.value) {}
         every { registry.findRuntime(any()) } returns null
         coEvery { repository.getConversationSnapshotById(any()) } answers { snapshot }

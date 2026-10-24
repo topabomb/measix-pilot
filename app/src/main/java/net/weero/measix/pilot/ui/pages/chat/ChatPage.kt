@@ -76,8 +76,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.FileProvider
 import androidx.core.net.toFile
 import androidx.core.net.toUri
-import com.dokar.sonner.ToastType
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.ToastType
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.flow.catch
@@ -277,6 +277,20 @@ fun ChatPage(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val softwareKeyboardController = LocalSoftwareKeyboardController.current
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    if (vm.savingQueuedInput) {
+        LaunchedEffect(Unit) {
+            focusManager.clearFocus(force = true)
+            softwareKeyboardController?.hide()
+        }
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = {},
+            properties = androidx.compose.ui.window.DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        ) {
+            androidx.compose.material3.Surface(shape = MaterialTheme.shapes.medium) {
+                Box(Modifier.padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            }
+        }
+    }
 
     // Handle back press when drawer is open
     BackHandler(enabled = drawerState.isOpen) {
@@ -574,7 +588,12 @@ private fun ChatPageContent(
     onClearAllErrors: () -> Unit,
     assistantDetailsRequest: Int,
 ) {
-    val chatNavigation = rememberChatNavigation(navController)
+    val activity = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
+        ?: error("Chat page requires a ComponentActivity host")
+    val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
+    val draftFolder by drawerVm.draftFolder.collectAsStateWithLifecycle()
+    val chatNavigation = rememberChatNavigation(navController, draftFolder = draftFolder)
+    val pendingInputs by vm.pendingInputs.collectAsStateWithLifecycle()
     KeepScreenOn(enabled = turnPresentation.isActive)
 
     val scope = rememberCoroutineScope()
@@ -616,7 +635,7 @@ private fun ChatPageContent(
     val useStarter: (net.weero.measix.pilot.service.ConversationStarterUiModel) -> Unit = { starter ->
         if (starter.selected) showOpeningDetails = true
         else if (target != null) scope.launch {
-            try { vm.selectStarter(target, starter) }
+            try { vm.selectStarter(target, starter, inputState) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 logDiagnosticFailure("ChatPage", "Opening selection failed", error)
@@ -646,7 +665,7 @@ private fun ChatPageContent(
         if (target != null) scope.launch { acceptConfigurationResult(commitPreference(target, change)) }
     }
     val mcpChoices = configuration?.mcpChoices(mcpPresentations).orEmpty()
-    var showFilesSheet by remember(target) { mutableStateOf(false) }
+    var showFilesSheet by remember(target, inputState) { mutableStateOf(false) }
     var showMcpPicker by remember(target) { mutableStateOf(false) }
     var showUsageEditor by remember(target) { mutableStateOf(false) }
     var usageEditorSection by remember(target) { mutableStateOf<AssistantSettingsSection?>(null) }
@@ -829,13 +848,32 @@ private fun ChatPageContent(
                     val modelSelectionUi = net.weero.measix.pilot.ui.components.ai.assistantModelSelectionUi(configuration) {
                         commitPreference(configuration.target, it).getOrThrow()
                     }
+                    Column(Modifier.widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth).fillMaxWidth()) {
+                    pendingInputs?.takeIf { it.queueCount > 0 }?.let { queue ->
+                        ChatInputQueue(
+                            model = queue,
+                            previews = { itemId, version -> vm.queuedInputPreviews(configuration.target, itemId, version) },
+                            onRemove = { itemId, version -> vm.removeQueuedInput(configuration.target, itemId, version) },
+                            onResume = { vm.resumeInputQueue(configuration.target) },
+                            onClear = { vm.clearQueuedInputs(configuration.target, it) },
+                            onEdit = { itemId, version -> vm.beginQueuedInputEdit(configuration.target, itemId, version) },
+                        )
+                    }
+                    key(inputState) {
+                    var annotationTarget by remember { mutableStateOf<net.weero.measix.pilot.ui.hooks.ChatInputState.ImageEditTarget?>(null) }
+                    annotationTarget?.let { image ->
+                        ChatImageAnnotation(vm, configuration.target, inputState, image, onDismiss = { annotationTarget = null })
+                    }
                     ChatInput(
                         modifier = Modifier
                             .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
                             .fillMaxWidth(),
                         state = inputState,
                         artifactDraftScope = inputImports,
-                        requireInputOwner = { vm.requireConfigurationTarget(configuration.target) },
+                        requireInputOwner = { vm.requireInputOwner(configuration.target, inputState) },
+                        readInputPreviews = { vm.inputPreviews(configuration.target, it) },
+                        onAnnotateImage = { annotationTarget = it },
+                        onCancelEdit = vm::cancelInputEdit,
                         speechPage = configuration.target.conversation,
                         starters = configuration.starters,
                         opening = configuration.opening,
@@ -861,6 +899,10 @@ private fun ChatPageContent(
                         enableSearch = assistant.enableWebSearch,
                         onUpdateSearchMode = { mode -> changePreference(AssistantPreferenceChange.Search(mode)) },
                         onSendClick = {
+                            if (inputState.editingTarget is net.weero.measix.pilot.ui.hooks.ChatInputEditTarget.Queued) {
+                                scope.launch { vm.saveQueuedInput(configuration.target) }
+                                return@ChatInput
+                            }
                             if (!readiness.canSend) {
                                 toaster.show(modelRequiredMessage, type = ToastType.Error)
                                 return@ChatInput
@@ -905,6 +947,10 @@ private fun ChatPageContent(
                             }
                         },
                         onLongSendClick = {
+                            if (inputState.editingTarget is net.weero.measix.pilot.ui.hooks.ChatInputEditTarget.Queued) {
+                                scope.launch { vm.saveQueuedInput(configuration.target) }
+                                return@ChatInput
+                            }
                             if (!readiness.canSend) {
                                 toaster.show(modelRequiredMessage, type = ToastType.Error)
                                 return@ChatInput
@@ -934,6 +980,8 @@ private fun ChatPageContent(
                             showFilesSheet = true
                         },
                     )
+                    }
+                    }
                     } else {
                         Row {
                             TextButton(onClick = { showAssistantPicker = true }, enabled = target != null) {
@@ -950,6 +998,11 @@ private fun ChatPageContent(
         ) { innerPadding ->
             ChatList(
                 detailSource = configuration?.target?.let(vm::detailSource),
+                draftFolderLocation = {
+                    if (snapshot.header.newConversation && target != null) key(target) {
+                        DraftFolderLocation(vm, target, snapshot.header.folderId)
+                    }
+                },
                 innerPadding = innerPadding,
                 snapshot = snapshot,
                 favoriteNodeIds = favoriteNodeIds,
@@ -973,8 +1026,9 @@ private fun ChatPageContent(
                     if (readiness.canSend) vm.regenerateAtMessage(it)
                 },
                 onEdit = {
-                    inputState.editingMessage = it.id
-                    inputState.setContents(it.parts)
+                    vm.cancelInputEdit()
+                    vm.inputState.editingMessage = it.id
+                    vm.inputState.setContents(it.parts)
                 },
                 onForkMessage = {
                     scope.launch {
@@ -994,8 +1048,9 @@ private fun ChatPageContent(
                     vm.selectNode(newNode.id, newNode.selectIndex)
                 },
                 onClickSuggestion = { suggestion ->
-                    inputState.editingMessage = null
-                    inputState.setMessageText(suggestion)
+                    if (inputState.editingTarget is net.weero.measix.pilot.ui.hooks.ChatInputEditTarget.Queued) vm.cancelInputEdit()
+                    vm.inputState.editingMessage = null
+                    vm.inputState.setMessageText(suggestion)
                 },
                 onJumpToMessage = { index ->
                     readHistory()
@@ -1073,7 +1128,7 @@ private fun ChatPageContent(
             }
         }
 
-        if (showFilesSheet && assistant != null && inputImports != null) key(configuration.target) {
+        if (showFilesSheet && assistant != null && inputImports != null) key(configuration.target, inputState) {
             val modalToaster = rememberToasterState()
             ChatFilesPickerSheet(
                 inputState = inputState,
@@ -1241,6 +1296,73 @@ private fun ChatPageContent(
     }
 }
 
+@Composable
+private fun DraftFolderLocation(vm: ChatVM, target: ConversationAssistantTarget, folderId: Uuid?) {
+    val observedDirectory by vm.draftFolderDirectory.collectAsStateWithLifecycle()
+    val directory = observedDirectory?.takeIf {
+        it.access.selection == target.conversation.selection && it.access.assistantId == target.assistantId
+    }
+    var open by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var failure by remember { mutableStateOf<Throwable?>(null) }
+    val scope = rememberCoroutineScope()
+    TextButton(onClick = { open = true }, modifier = Modifier.padding(horizontal = 8.dp)) {
+        Text(directory?.folders?.firstOrNull { it.id == folderId }?.name
+            ?: stringResource(R.string.chat_page_move_to_folder), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+    if (!open) return
+    val select: (Uuid?) -> Unit = { id ->
+        val captured = directory
+        if (!busy && captured != null && captured.diagnostic == null) {
+            busy = true
+            failure = null
+            scope.launch {
+                try {
+                    vm.updateDraftFolder(target, captured.access, id)
+                    open = false
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    logDiagnosticFailure("DraftFolderLocation", "Draft location change failed", error)
+                    failure = error
+                } finally {
+                    busy = false
+                }
+            }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = { if (!busy) open = false },
+        title = { Text(stringResource(R.string.chat_page_move_to_folder)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (directory == null || busy) CircularProgressIndicator(Modifier.size(24.dp))
+                directory?.diagnostic?.let {
+                    net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it)
+                    TextButton(onClick = vm::retryConversationLoad, enabled = !busy) {
+                        Text(stringResource(R.string.application_recovery_retry))
+                    }
+                }
+                failure?.let {
+                    net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it.userVisibleDiagnostic())
+                }
+                TextButton(onClick = { select(null) }, enabled = !busy && directory != null && directory.diagnostic == null) {
+                    Text(stringResource(R.string.chat_page_remove_from_folder))
+                }
+                directory?.folders?.forEach { folder ->
+                    TextButton(onClick = { select(folder.id) }, enabled = !busy && directory.diagnostic == null) {
+                        Text(folder.name)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = { open = false }, enabled = !busy) { Text(stringResource(R.string.cancel)) }
+        },
+    )
+}
+
 private suspend fun LazyListState.scrollToAppendedItem(
     requestContext: AppendScrollContext,
     currentUiModel: () -> ConversationUiModel?,
@@ -1373,7 +1495,7 @@ private fun ChatFilesPickerSheet(
     mcpChoices: List<net.weero.measix.pilot.service.AssistantMcpChoice>,
     onPreferenceChange: (AssistantPreferenceChange) -> Unit,
     onConfigurationResult: (Result<Unit>) -> Boolean,
-    feedback: com.dokar.sonner.ToasterState,
+    feedback: net.weero.measix.pilot.ui.components.toast.ToasterState,
     onManageSharedConfiguration: (Screen) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1409,7 +1531,7 @@ private fun ChatFilesPickerSheet(
         ?: uri.toString()
 
     suspend fun importAttachments(uris: List<Uri>): List<Uri>? = try {
-        originalImports.importInputUris(uris) { vm.requireConfigurationTarget(originalTarget) }.map { it.uri }
+        originalImports.importInputUris(uris) { vm.requireInputOwner(originalTarget, inputState) }.map { it.uri }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {

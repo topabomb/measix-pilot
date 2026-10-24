@@ -83,6 +83,9 @@ data class Assistant(
     val useGradientBackground: Boolean = false, // 开启后聊天页使用动态渐变背景
     val modeInjectionIds: Set<ConfigurationReference> = emptySet(),      // 关联的模式注入 ID
     val enabledSkills: Set<String> = emptySet(),        // 启用的 skill 名称列表
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val timeReminderIntervalMinutes: Int = 60,
     val enableTimeReminder: Boolean = false,            // 时间间隔提醒注入
     val allowConversationSystemPrompt: Boolean = false, // 允许对话单独重写 system prompt
     val allowConversationPromptInjection: Boolean = false, // 允许对话单独绑定提示词注入
@@ -90,7 +93,9 @@ data class Assistant(
     val allowAsSubAssistant: Boolean = false, // 允许其他助手把独立任务交给它
     val isSubAssistantGloballyVisible: Boolean = false, // 全局可见：所有启用子助手工具的助手都能发现/调用/管理
     val allowedSubAssistantIds: Set<ConfigurationReference> = emptySet(), // 显式允许的子助手 ID；管理与调用共用
-)
+) {
+    init { require(timeReminderIntervalMinutes > 0) { "invalid_time_reminder_interval" } }
+}
 
 /**
  * 规范化路由描述：折叠空白、限长 240 Unicode code point（不截断 surrogate pair）。

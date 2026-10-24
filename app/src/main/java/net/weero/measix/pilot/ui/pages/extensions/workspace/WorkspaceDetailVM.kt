@@ -69,6 +69,9 @@ class WorkspaceDetailVM(
         }
     }
 
+    suspend fun guestPath(entry: WorkspaceFileEntry, area: WorkspaceStorageArea) =
+        workspaceQueryService.guestPath(id, area, entry.path)
+
     fun cancelExport() { exportJob?.cancel() }
     fun dismissExportResult() { if (exportJob?.isActive != true) _exportState.value = null }
 

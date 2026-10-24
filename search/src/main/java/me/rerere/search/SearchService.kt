@@ -22,6 +22,11 @@ class SearchHttpException(val provider: String, val statusCode: Int) :
 
 class SearchNoResultsException : IllegalStateException("Search returned no results")
 
+internal const val SEARCH_QUERY_DESCRIPTION =
+    "Concise search keywords, not a full sentence. Use the language of the best sources on the topic: " +
+        "usually English for technical, scientific and international topics, and the local language for regional topics. " +
+        "Keep proper nouns, product names and error messages verbatim."
+
 interface SearchService<T : SearchServiceOptions> {
     fun parameters(options: T): JsonObject?
 
@@ -142,6 +147,9 @@ sealed class SearchServiceOptions {
         override val id: ConfigurationReference = ConfigurationReference.random(),
         val apiKey: String = "",
         val depth: String = "advanced",
+        @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+        @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+        val includeAnswer: Boolean = true,
     ) : SearchServiceOptions()
 
     @Serializable

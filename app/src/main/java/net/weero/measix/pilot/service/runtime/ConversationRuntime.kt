@@ -64,6 +64,226 @@ class ConversationRuntime internal constructor(
 ) {
     private val ownedDraft = AtomicReference(draftAssets)
 
+    private val _inputQueue = MutableStateFlow(ConversationInputQueueSnapshot())
+    internal val inputQueue: StateFlow<ConversationInputQueueSnapshot> = _inputQueue.asStateFlow()
+    private var inputQueueLease: ConversationRuntimeLease? = null
+    private val inputEditCleanups = mutableMapOf<Uuid, () -> Unit>()
+    private var inputContextRevision = 0L
+    // releaseTurnWorker can retire a request inside finally, before its Job actually completes.
+    private var lastInstalledWorker: Job? = null
+    // A completed Job is not dispatch permission until its typed result has been reconciled.
+    private var pendingQueueOutcomeWorker: Job? = null
+
+    @Synchronized
+    internal fun lastRequestWorker(): Job? = lastInstalledWorker
+
+    @Synchronized
+    internal fun mustQueueInput(): Boolean = ownedRequests.isNotEmpty() || snapshot.value.stream != null ||
+        lastInstalledWorker?.isCompleted == false || pendingQueueOutcomeWorker != null || _inputQueue.value.items.isNotEmpty()
+
+    @Synchronized
+    internal fun enqueueInput(
+        selection: net.weero.measix.pilot.data.enterprise.RealmSelection,
+        assistantId: ConfigurationReference,
+        parts: List<me.rerere.ai.ui.UIMessagePart>,
+        answer: Boolean,
+        submission: net.weero.measix.pilot.service.ArtifactSubmission?,
+    ): QueuedConversationInput {
+        check(selection.access.scope == durable.header.scope && assistantId == durable.header.assistantId) {
+            "queue_context_mismatch"
+        }
+        val queue = _inputQueue.value
+        check(queue.items.all { it.selection.access == selection.access }) { "queue_session_mismatch" }
+        check(submission == null || queue.items.none { it.submission === submission }) { "queue_submission_already_owned" }
+        val item = QueuedConversationInput(Uuid.random(), 0, Uuid.random(), parts.toList(), answer,
+            selection, assistantId, inputContextRevision, QueuedInputPhase.WAITING, submission)
+        if (inputQueueLease == null) inputQueueLease = acquireLease()
+        _inputQueue.value = queue.copy(items = queue.items + item)
+        return item
+    }
+
+    @Synchronized
+    internal fun pauseInputQueue(reason: InputQueuePauseReason, contextChanged: Boolean = false) {
+        if (contextChanged) inputContextRevision++
+        val queue = _inputQueue.value
+        _inputQueue.value = queue.copy(pauseReason = reason, epoch = queue.epoch + 1)
+    }
+
+    @Synchronized
+    internal fun resumeInputQueue(
+        selection: net.weero.measix.pilot.data.enterprise.RealmSelection,
+        assistantId: ConfigurationReference,
+    ) {
+        check(selection.access.scope == durable.header.scope && assistantId == durable.header.assistantId) {
+            "queue_context_mismatch"
+        }
+        val queue = _inputQueue.value
+        check(queue.items.all { it.selection.access == selection.access }) { "queue_session_mismatch" }
+        check(queue.items.none { it.phase == QueuedInputPhase.SUBMITTING }) { "queue_submission_in_progress" }
+        check(queue.items.none { it.phase == QueuedInputPhase.EDITING }) { "queue_edit_in_progress" }
+        _inputQueue.value = queue.copy(pauseReason = null, epoch = queue.epoch + 1,
+            items = queue.items.map { it.copy(selection = selection, assistantId = assistantId,
+                contextRevision = inputContextRevision, version = it.version + 1) })
+    }
+
+    @Synchronized
+    internal fun beginQueuedInputEdit(itemId: Uuid, version: Long): QueuedConversationInput {
+        val item = requireQueuedInput(itemId, version)
+        check(item.phase == QueuedInputPhase.WAITING) { "queue_item_not_editable" }
+        return item.copy(version = item.version + 1, phase = QueuedInputPhase.EDITING,
+            editToken = Uuid.random()).also(::replaceQueuedInput)
+    }
+
+    @Synchronized
+    internal fun registerQueuedInputEditCleanup(itemId: Uuid, version: Long, editToken: Uuid, cleanup: () -> Unit) {
+        val item = requireQueuedInput(itemId, version)
+        check(item.phase == QueuedInputPhase.EDITING && item.editToken == editToken) { "queue_edit_changed" }
+        check(editToken !in inputEditCleanups) { "queue_edit_cleanup_already_registered" }
+        inputEditCleanups[editToken] = cleanup
+    }
+
+    @Synchronized
+    internal fun cancelQueuedInputEdit(itemId: Uuid, version: Long, editToken: Uuid): Boolean {
+        val item = _inputQueue.value.items.find { it.id == itemId && it.version == version }
+            ?: return false
+        if (item.phase != QueuedInputPhase.EDITING || item.editToken != editToken) return false
+        replaceQueuedInput(item.copy(version = item.version + 1, phase = QueuedInputPhase.WAITING,
+            editToken = null))
+        closeQueuedInputEditor(item)
+        return true
+    }
+
+    /** Replacement already owns its resources; the caller closes it if this CAS rejects. */
+    @Synchronized
+    internal fun replaceQueuedInputContents(
+        itemId: Uuid, version: Long, editToken: Uuid, parts: List<me.rerere.ai.ui.UIMessagePart>,
+        submission: net.weero.measix.pilot.service.ArtifactSubmission?,
+    ) {
+        val item = requireQueuedInput(itemId, version)
+        check(item.phase == QueuedInputPhase.EDITING) { "queue_item_not_editing" }
+        check(item.editToken == editToken) { "queue_edit_changed" }
+        check(submission == null || _inputQueue.value.items.none { it.submission === submission }) {
+            "queue_submission_already_owned"
+        }
+        val replacement = item.copy(version = item.version + 1, parts = parts.toList(),
+            phase = QueuedInputPhase.WAITING, submission = submission, editToken = null)
+        if (submission != null) item.submission?.transferRetainedCreationTo(submission)
+        replaceQueuedInput(replacement)
+        closeQueuedInputEditor(item)
+        item.submission?.close()
+    }
+
+    @Synchronized
+    internal fun removeQueuedInput(itemId: Uuid, version: Long) {
+        val item = requireQueuedInput(itemId, version)
+        check(item.phase != QueuedInputPhase.SUBMITTING) { "queue_submission_in_progress" }
+        item.submission?.close()
+        removeQueuedInput(item)
+    }
+
+    @Synchronized
+    internal fun nextQueuedInputDispatch(): QueuedInputDispatch? {
+        val queue = _inputQueue.value
+        val head = queue.items.firstOrNull() ?: return null
+        if (queue.pauseReason != null || head.phase != QueuedInputPhase.WAITING) return null
+        return QueuedInputDispatch(head.id, head.version, queue.epoch)
+    }
+
+    /** Confirmation covers exactly the observed revisions, never inputs added while the dialog was open. */
+    @Synchronized
+    internal fun clearQueuedInputs(expectedVersions: Map<Uuid, Long>) {
+        val items = _inputQueue.value.items
+        check(items.associate { it.id to it.version } == expectedVersions) { "queue_items_changed" }
+        check(items.none { it.phase == QueuedInputPhase.SUBMITTING }) { "queue_submission_in_progress" }
+        items.forEach(::closeQueuedInputEditor)
+        items.forEach { it.submission?.close() }
+        _inputQueue.value = _inputQueue.value.copy(items = emptyList())
+        releaseInputQueueLeaseIfEmpty()
+    }
+
+    /** Called under the original operation lock and Session authorization; never supersedes a worker. */
+    @Synchronized
+    internal fun installQueuedInputWorker(
+        dispatch: QueuedInputDispatch, selection: net.weero.measix.pilot.data.enterprise.RealmSelection,
+        turnId: Uuid, worker: Job, requireQueueOutcome: Boolean = false,
+    ): QueuedConversationInput? {
+        val queue = _inputQueue.value
+        val head = queue.items.firstOrNull() ?: return null
+        if (dispatch != nextQueuedInputDispatch() || head.selection != selection) return null
+        if (worker.isCancelled || worker.isCompleted) return null
+        if (head.assistantId != durable.header.assistantId || head.contextRevision != inputContextRevision) return null
+        if (ownedRequests.isNotEmpty() || snapshot.value.stream != null || lastInstalledWorker?.isCompleted == false ||
+            pendingQueueOutcomeWorker != null) return null
+        val accepted = head.copy(phase = QueuedInputPhase.SUBMITTING)
+        replaceQueuedInput(accepted)
+        installTurnWorker(turnId, worker, requireQueueOutcome = requireQueueOutcome)
+        return accepted
+    }
+
+    /** The original operation lock orders result publication with every dispatch installation. */
+    @Synchronized
+    internal fun reconcileInputQueueOutcome(worker: Job, epoch: Long, outcome: InputQueueRequestOutcome): Boolean {
+        if (pendingQueueOutcomeWorker !== worker || lastInstalledWorker !== worker || !worker.isCompleted) return false
+        if (_inputQueue.value.items.isNotEmpty() && _inputQueue.value.epoch == epoch &&
+            outcome != InputQueueRequestOutcome.COMPLETED && outcome != InputQueueRequestOutcome.AWAITING_USER) {
+            pauseInputQueue(if (outcome == InputQueueRequestOutcome.CANCELLED)
+                InputQueuePauseReason.USER_STOP else InputQueuePauseReason.REQUEST_FAILED)
+        }
+        pendingQueueOutcomeWorker = null
+        return true
+    }
+
+    /** A stop epoch cannot erase a USER transaction that already committed. */
+    @Synchronized
+    internal fun settleQueuedInputSubmission(dispatch: QueuedInputDispatch, committed: Boolean) {
+        val item = requireQueuedInput(dispatch.itemId, dispatch.version)
+        check(item.phase == QueuedInputPhase.SUBMITTING) { "queue_item_not_submitting" }
+        if (committed) {
+            // Publication belongs to the request, which still holds the same submission capability.
+            removeQueuedInput(item)
+        } else {
+            replaceQueuedInput(item.copy(phase = QueuedInputPhase.WAITING))
+            if (_inputQueue.value.pauseReason == null) pauseInputQueue(InputQueuePauseReason.REQUEST_FAILED)
+        }
+    }
+
+    @Synchronized
+    internal fun clearInputQueueAfterStop() {
+        check(ownedRequests.isEmpty() && snapshot.value.stream == null && lastInstalledWorker?.isCompleted != false) {
+            "queue_workers_must_finish_before_clear"
+        }
+        pauseInputQueue(InputQueuePauseReason.USER_STOP)
+        _inputQueue.value.items.forEach(::closeQueuedInputEditor)
+        _inputQueue.value.items.forEach { it.submission?.close() }
+        _inputQueue.value = _inputQueue.value.copy(items = emptyList())
+        releaseInputQueueLeaseIfEmpty()
+    }
+
+    private fun requireQueuedInput(itemId: Uuid, version: Long): QueuedConversationInput =
+        requireNotNull(_inputQueue.value.items.find { it.id == itemId && it.version == version }) { "queue_item_changed" }
+
+    private fun replaceQueuedInput(item: QueuedConversationInput) {
+        _inputQueue.value = _inputQueue.value.copy(items = _inputQueue.value.items.map { if (it.id == item.id) item else it })
+    }
+
+    private fun removeQueuedInput(item: QueuedConversationInput) {
+        _inputQueue.value = _inputQueue.value.copy(items = _inputQueue.value.items.filterNot { it.id == item.id })
+        closeQueuedInputEditor(item)
+        releaseInputQueueLeaseIfEmpty()
+    }
+
+    /** Resource revocation only; callbacks must not acquire Session or conversation operation locks. */
+    private fun closeQueuedInputEditor(item: QueuedConversationInput) {
+        item.editToken?.let { inputEditCleanups.remove(it)?.invoke() }
+    }
+
+    private fun releaseInputQueueLeaseIfEmpty() {
+        if (_inputQueue.value.items.isEmpty()) {
+            inputQueueLease?.close()
+            inputQueueLease = null
+        }
+    }
+
     internal fun draftArtifacts() = ownedDraft.get()?.artifacts.orEmpty()
 
     internal suspend fun publishDraftArtifacts() {
@@ -429,8 +649,11 @@ class ConversationRuntime internal constructor(
         turnContext: TurnContext? = null,
         modelExecutionLease: ModelExecutionLease? = null,
         mcpExecutionLease: McpExecutionLease? = null,
+        requireQueueOutcome: Boolean = false,
     ): InstalledTurnWorker {
         cancelIdleCheck()
+        lastInstalledWorker = worker
+        pendingQueueOutcomeWorker = worker.takeIf { requireQueueOutcome }
         val previous = _activeTurn.value
         if (previous != null && previous.turnId != turnId) {
             previous.requestCancel(supersedeReason ?: "superseded_by_new_turn")
@@ -477,7 +700,7 @@ class ConversationRuntime internal constructor(
      * A mismatched owner, phase or handle is rejected without cancelling the current request.
      */
     @Synchronized
-    internal fun continueAwaitingUser(handle: TurnHandle, worker: Job): InstalledTurnWorker {
+    internal fun continueAwaitingUser(handle: TurnHandle, worker: Job, requireQueueOutcome: Boolean = false): InstalledTurnWorker {
         val current = _activeTurn.value
         val stream = snapshot.value.stream
         if (
@@ -502,6 +725,7 @@ class ConversationRuntime internal constructor(
             turnContext = context,
             modelExecutionLease = current.modelExecutionLease,
             mcpExecutionLease = current.mcpExecutionLease,
+            requireQueueOutcome = requireQueueOutcome,
         ).also { current.modelExecutionLease = null; current.mcpExecutionLease = null }
     }
 
@@ -681,6 +905,7 @@ class ConversationRuntime internal constructor(
 
     @Synchronized
     fun cleanup() {
+        check(_inputQueue.value.items.isEmpty() && inputQueueLease == null) { "queued_inputs_must_close_before_eviction" }
         check(!hasAuxiliaryWork) { "auxiliary_workers_must_finish_before_eviction" }
         check(!hasExecutionLeases) { "turn_execution_leases_must_finish_before_eviction" }
         _activeTurn.value?.worker?.cancel()

@@ -29,6 +29,25 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class TurnRequestAdmissionTest {
+    @Test fun `workspace provenance is admitted with the original system and reused across steps`() = runTest {
+        val fixture = Fixture()
+        val origin = WorkspaceContextOrigin(Uuid.random().toString(), "original-root", "/workspace/reports")
+        fixture.context = fixture.context.copy(system = fixture.context.system.copy(workspace = origin))
+        fixture.admit()
+        val original = fixture.snapshot.modelContextEntries.single { it.payload.source is ConversationContextSource.System }
+        assertEquals(origin, (original.payload.source as ConversationContextSource.System).workspace)
+        assertEquals(original.payload, ConversationContextCodec.decode(ConversationContextCodec.encode(original.payload)))
+        assertTrue(fixture.output.none { it.toText().contains(origin.workspaceId) })
+        fixture.nextStep()
+        fixture.admit()
+        assertEquals(original, fixture.snapshot.modelContextEntries.single { it.payload.source is ConversationContextSource.System })
+        val steps = fixture.snapshot.nodes.last().currentMessage.parts.filterIsInstance<UIMessagePart.Step>()
+        fixture.snapshot.contextAdmissions.forEach { admission ->
+            assertEquals(original.id, resolveUsesAt(fixture.snapshot.contextAdmissions, admission.owner, admission.stepId, steps)
+                .selection?.systemEntryId)
+        }
+    }
+
     @Test fun `regenerating application USER history retains origins without user templates or clocks`() = runTest {
         for (summary in listOf(false, true)) {
             for (background in listOf(false, true)) {

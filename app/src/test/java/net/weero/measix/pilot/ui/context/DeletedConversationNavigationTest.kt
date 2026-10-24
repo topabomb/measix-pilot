@@ -15,6 +15,13 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class DeletedConversationNavigationTest {
+    @Test fun `repeated back callbacks keep the root without waiting for recomposition`() {
+        val stack = mutableListOf<NavKey>(Screen.Enterprise, Screen.History)
+        val navigator = Navigator(stack)
+        repeat(3) { navigator.popBackStack() }
+        assertEquals(listOf(Screen.Enterprise), stack)
+    }
+
     @Test fun `history replacement preserves its current page and touches only the deleted original Session`() {
         val id = Uuid.random()
         val assistant = ConfigurationReference.random()

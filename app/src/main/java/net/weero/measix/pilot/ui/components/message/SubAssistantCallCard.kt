@@ -81,6 +81,7 @@ fun SubAssistantCallCard(
     detailSource: net.weero.measix.pilot.service.ConversationViewLease?,
     modifier: Modifier = Modifier,
     onAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
+    durationMillis: Long? = null,
 ) {
     val json = JsonInstant
     val metadata = remember(tool.metadata) {
@@ -202,6 +203,9 @@ fun SubAssistantCallCard(
                             strokeWidth = 1.5.dp,
                             color = statusColor
                         )
+                    }
+                    if (!isRunning && durationMillis != null && durationMillis >= 0) {
+                        ToolExecutionDuration(durationMillis)
                     }
                     val phaseText = if (isRunning) {
                         metadata.activeToolName?.let { toolName ->

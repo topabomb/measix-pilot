@@ -46,6 +46,14 @@ MCP 图片、生成结果、配置图片及生成预览在各专用入口执行�
 
 - MCP `ImageContent` 先限制 base64 字符与解码字节，再按文件头与容器结构识别 MIME；声明 MIME 不能覆盖实际格式。
 - 本端图片在 `FileEncoder` 请求编码时修正方向，按平台滤波等比缩小至最长边 2560，不放大小图，输出 WebP Q90 并保留透明通道；GIF 沿用原字节。解码保留像素预算，文件和识图内存快照共用同一处理，不改写原件。
+  `withPreparedStaticImage` 与原请求编码共用静态像素准备路径，借用经过同样方向/预算/缩放处理的 Bitmap；
+  回调结束、失败或取消后回收像素。该入口不提前做 WebP 有损编码，不接受 GIF，也不携带空间或 Artifact 状态。
+  `ImageAnnotationRenderer` 在借用回调中另建 Bitmap 合成无损 PNG，并在 finally 回收；预览和合成共享
+  `drawImageAnnotations`。笔画使用规范化图像坐标，缩放和平移只改变 `ImageAnnotationViewport` 映射。
+  `ArtifactDraftScope.acceptAnnotatedImage` 在原选择授权下创建用户图片，IO 后复验授权、视图和草稿，
+  创建前校验 PNG 不超过既有 20 MiB 图片读取上限；超限保留原附件并返回包含实际大小的诊断，不再增加独立压缩规则。
+  通过调用者条件接纳后交给原草稿管理；拒绝或失败只回滚新资源，清理失败保留诊断并释放创建 pin。
+  新图片不继承源图片的 metadata；源历史附件的生命周期仍归原会话引用管理。
 - 外部 MCP 图片通过 `ImageEncodingMetadata.preserveOriginal` 保留 JPEG、PNG、WebP、GIF 的生产端字节，落盘、复制与回放后仍不缩放或重编码；HEIC 等本端接纳但不通用的格式复用原 WebP 编码，不按 Provider 增加格式或限额适配。原件与既有 20 MiB 入站校验保留。旧 MCP 工具结果在请求投影时补充同样的临时标记。主动调用本端识图工具读取文件是独立输入，使用本端规则。
 - 模型可见的图片说明仅披露路径、文件格式与可读大小，不披露尺寸、透明度、缩放或编码参数；内部校验和 UI metadata 不受此约束。
 - `GeneratedMediaStore` 对 URL/base64 结果使用同一尺寸上限与结构检查，并以检测 MIME 决定扩展名；容器头存在不等于图片完整。Gallery 只通过 `resolveCanonicalFile` 解析根目录内路径。
@@ -118,6 +126,16 @@ Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadS
 会话写入在原 Artifact lifecycle lock 内，用 durable header 的 scope 准备引用 delta；跨域文件使提交失败，不静默删除引用。启动时 `ensureReferenceProjection` 同样核验归属，并在全量准备成功后才事务替换投影与完成标记。`Migration_11_12` 将既有行归为个人，保留文件、ID 和路径。
 
 `GeneratedMediaStore.commit` 以同步 `receiveChatArtifact` 回调明确聊天副本的接收者，图库 row 提交后、可取消返回边界前交给原 `ToolExecutionContext.registerUnpublishedResource`。接收后由工具 checkpoint 协议发布或丢弃；接收失败只清理未交付副本，保留已提交图库。未提供接收者的页面任务只生成图库原件，不先创建无人管理的聊天副本。
+
+`GeneratedMediaStore.deleteDetailed` 沿原重命名、删行及删除回执恢复协议执行，区分 Completed、AlreadyAbsent、
+CleanupPending 与 Failed；后两者保留异常，不能把已删记录但清理待恢复当作尚未删除。
+`FileManagementApplicationService.saveGeneratedBatch/deleteGeneratedBatch` 只接收同一原 RealmSelection 的 keys，
+逐项复验并同步交付结果；取消不继续余项，已交付的成功回执不因后续失败丢失。导出复用 MediaExportService，
+不在外层持有 Session 锁后再次嵌套授权读取。
+图库的多选只保存页面内 ID 集合，选择已加载项不代表全库全选。成功项及已提交删除但清理待恢复项移出选择，
+失败项保留重试；结果按原空间显示，取消保留已完成回执但停止余项。离开图库页或切域撤下确认/结果并取消操作。
+`FileManagementQueryService.existingGeneratedIds` 经原选择授权调用 Store 的有界 ID 查询，供页面对账外部删除；
+分页刷新暂时缺项不视为删除，查询失败保留原选择，IO 后重新核对原选择有效性。
 
 消息引用提取统一使用 `collectArtifactReferences`，递归覆盖媒体、工具直接 artifact 与子助手交付 manifest。
 资源提交复用原 Turn 检查点；未知副作用、终态比较并交换和主/子恢复顺序见 [Turn/Step](turn-step-execution.md)，

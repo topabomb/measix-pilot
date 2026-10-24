@@ -22,6 +22,8 @@ import net.weero.measix.pilot.data.db.migrations.Migration_12_13
 import net.weero.measix.pilot.data.db.migrations.Migration_13_14
 import net.weero.measix.pilot.data.db.migrations.Migration_14_15
 import net.weero.measix.pilot.data.db.migrations.Migration_15_16
+import net.weero.measix.pilot.data.db.migrations.Migration_16_17
+import net.weero.measix.pilot.data.db.fts.createMessageFtsTable
 
 /**
  * The single Room construction recipe for [AppDatabase]: migration chain, FTS/dictionary open
@@ -48,8 +50,13 @@ fun createAppDatabase(context: Context, name: String): AppDatabase =
             Migration_13_14,
             Migration_14_15,
             Migration_15_16,
+            Migration_16_17,
         )
         .addCallback(object : RoomDatabase.Callback() {
+            override fun onCreate(db: SupportSQLiteDatabase) {
+                createMessageFtsTable(db)
+            }
+
             override fun onOpen(db: SupportSQLiteDatabase) {
                 // FK 约束运行时启用（每个连接）：v7 自引用 CASCADE（孤儿 child
                 // 结构性不可能）与 message_node / artifact_reference 的级联清理
@@ -70,19 +77,6 @@ fun createAppDatabase(context: Context, name: String): AppDatabase =
                         }
                     }
                 }
-                db.execSQL(
-                    """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-                        text,
-                        node_id UNINDEXED,
-                        message_id UNINDEXED,
-                        conversation_id UNINDEXED,
-                        title UNINDEXED,
-                        update_at UNINDEXED,
-                        tokenize = 'simple'
-                    )
-                    """.trimIndent()
-                )
             }
         })
         .openHelperFactory(

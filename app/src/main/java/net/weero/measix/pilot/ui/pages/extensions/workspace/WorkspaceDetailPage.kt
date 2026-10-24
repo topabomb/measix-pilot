@@ -59,6 +59,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -130,6 +131,8 @@ import java.time.format.FormatStyle
 
 @Composable
 fun WorkspaceDetailPage(id: String) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboard.current
+    var copyPathError by remember(id) { mutableStateOf<String?>(null) }
     val navController = LocalNavController.current
     val vm: WorkspaceDetailVM = koinViewModel(parameters = { parametersOf(id) })
     val state by vm.state.collectAsStateWithLifecycle()
@@ -153,6 +156,8 @@ fun WorkspaceDetailPage(id: String) {
     var showInstallDialog by remember { mutableStateOf(false) }
     var previewImage by remember { mutableStateOf<WorkspaceImagePreview?>(null) }
     val context = LocalContext.current
+    val shadowedPathMessage by rememberUpdatedState(stringResource(R.string.workspace_copy_path_shadowed))
+    val symbolicParentMessage by rememberUpdatedState(stringResource(R.string.workspace_copy_path_symbolic_parent))
     val resources = LocalResources.current
     val imageDeleteFailed = stringResource(R.string.image_viewer_delete_failed)
     val filePicker = rememberLauncherForActivityResult(
@@ -293,6 +298,31 @@ fun WorkspaceDetailPage(id: String) {
                 )
 
                 1 -> WorkspaceFilesPage(
+                    onCopyPath = { entry ->
+                        val area = state.area
+                        scope.launch {
+                            try {
+                                when (val result = vm.guestPath(entry, area)) {
+                                    is me.rerere.workspace.WorkspaceGuestPath.Available -> {
+                                        clipboard.setClipEntry(androidx.compose.ui.platform.ClipEntry(
+                                            android.content.ClipData.newPlainText("path", result.path)))
+                                        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+                                            android.widget.Toast.makeText(context, R.string.copied, android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    is me.rerere.workspace.WorkspaceGuestPath.Unavailable -> copyPathError =
+                                        when (result.reason) {
+                                            me.rerere.workspace.WorkspaceGuestPath.Reason.MOUNT_SHADOWED -> shadowedPathMessage
+                                            me.rerere.workspace.WorkspaceGuestPath.Reason.SYMBOLIC_PARENT -> symbolicParentMessage
+                                        }
+                                }
+                            } catch (cancelled: CancellationException) { throw cancelled }
+                            catch (failure: Exception) {
+                                android.util.Log.e("WorkspaceCopyPath", "Guest path lookup failed", failure)
+                                copyPathError = failure.userVisibleDiagnostic()
+                            }
+                        }
+                    },
                     state = state,
                     onRefresh = vm::refresh,
                     selected = selectedFiles,
@@ -358,6 +388,15 @@ fun WorkspaceDetailPage(id: String) {
                 )
             }
         }
+    }
+
+    copyPathError?.let { diagnostic ->
+        AlertDialog(
+            onDismissRequest = { copyPathError = null },
+            title = { Text(stringResource(R.string.workspace_copy_path)) },
+            text = { SelectionContainer { Text(diagnostic) } },
+            confirmButton = { TextButton(onClick = { copyPathError = null }) { Text(stringResource(R.string.common_confirm)) } },
+        )
     }
 
     exportState?.let { exporting ->
@@ -739,6 +778,7 @@ private fun InstallRootfsDialog(
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun WorkspaceFilesPage(
+    onCopyPath: (WorkspaceFileEntry) -> Unit,
     state: WorkspaceDetailState,
     onRefresh: () -> Unit,
     selected: Set<String>,
@@ -785,6 +825,7 @@ private fun WorkspaceFilesPage(
 
                 items(state.entries, key = { "${state.area.name}:${it.path}" }) { entry ->
                     WorkspaceFileCard(
+                        onCopyPath = { onCopyPath(entry) },
                         entry = entry,
                         selected = entry.path in selected,
                         selecting = selected.isNotEmpty(),
@@ -858,6 +899,7 @@ private fun WorkspacePathBar(
 
 @Composable
 private fun WorkspaceFileCard(
+    onCopyPath: () -> Unit,
     entry: WorkspaceFileEntry,
     selected: Boolean,
     selecting: Boolean,
@@ -885,6 +927,8 @@ private fun WorkspaceFileCard(
                 contentScale = ContentScale.Crop, modifier = Modifier.size(40.dp).clip(MaterialTheme.shapes.small))
         } },
     ) { dismiss ->
+        DropdownMenuItem(text = { Text(stringResource(R.string.workspace_copy_path)) },
+            onClick = { dismiss(); onCopyPath() })
         if (!entry.isDirectory) {
             DropdownMenuItem(text = { Text(stringResource(R.string.common_export)) },
                 leadingIcon = { Icon(HugeIcons.FileImport, null) }, onClick = { dismiss(); onExport() })

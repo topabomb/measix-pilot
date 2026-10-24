@@ -51,7 +51,7 @@ class ModelExecutionServiceImageTest {
     @Test
     fun `enterprise image capture freezes profile and exact routed request`() = runTest {
         val appScope = AppScope(StandardTestDispatcher(testScheduler))
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         val available = sessions.enrollFixture(packet)
         val selection = requireNotNull(sessions.readPresentation().selection)
@@ -117,7 +117,7 @@ class ModelExecutionServiceImageTest {
 
     @Test fun `managed image barrier cancels original worker and awaits owner cleanup without synchronizing or replaying`() = runTest {
         val appScope = AppScope(StandardTestDispatcher(testScheduler))
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         val packet = exampleEnterprisePackage()
         val available = sessions.enrollFixture(packet)
         val selection = requireNotNull(sessions.readPresentation().selection)

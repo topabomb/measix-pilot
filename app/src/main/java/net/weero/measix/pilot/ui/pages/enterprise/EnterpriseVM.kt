@@ -37,12 +37,14 @@ internal data class PortalPresentation(
     val selection: RealmSelection,
     val destination: PortalDestination = PortalDestination.HOME,
 )
-internal data class EnterpriseExitConfirmation(val request: EnterpriseExitRequest, val enterpriseName: String?)
+internal data class EnterpriseExitConfirmation(val request: net.weero.measix.pilot.service.EnterpriseExitPreview, val enterpriseName: String?)
 internal data class EnterpriseAddressEditor(val request: EnterpriseAddressChangeRequest, val origin: String)
 internal data class EnterpriseResetConfirmation(
-    val request: EnterpriseDataResetRequest,
+    val preview: net.weero.measix.pilot.service.EnterpriseResetPreview,
     val path: net.weero.measix.pilot.service.EnterpriseResetPath,
-)
+) {
+    val request get() = preview.request
+}
 
 internal data class EnterpriseBudgetPresentation(
     val selection: RealmSelection,
@@ -126,6 +128,7 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
     val resetChoice = _resetChoice.asStateFlow()
     private val _resetConfirmation = MutableStateFlow<EnterpriseResetConfirmation?>(null)
     val resetConfirmation = _resetConfirmation.asStateFlow()
+    private var resetPreparationId: Uuid? = null
     private val _budgets = MutableStateFlow<EnterpriseBudgetPresentation?>(null)
     val budgets = combine(_budgets, overview) { value, state ->
         value?.takeIf { it.selection == state?.selection && it.access == state.access &&
@@ -324,18 +327,26 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
         if (_busy.value || overview.value?.reset != null) return
         _resetChoice.value = overview.value?.resetPath
     }
-    fun dismissReset() { _resetChoice.value = null; _resetConfirmation.value = null }
+    fun dismissReset() { resetPreparationId = null; _resetChoice.value = null; _resetConfirmation.value = null }
     /** Reset formats every enterprise realm on this device, so both branches are offered in every state. */
     fun requestReset(mode: EnterpriseDataResetMode) {
+        if (_busy.value) return
         val path = _resetChoice.value ?: return
         _resetChoice.value = null
-        _resetConfirmation.value = EnterpriseResetConfirmation(
-            EnterpriseDataResetRequest(Uuid.random(), mode), path)
+        val preparationId = Uuid.random()
+        resetPreparationId = preparationId
+        val selection = overview.value?.selection
+        command(isCurrent = { resetPreparationId == preparationId }) {
+            val preview = service.prepareLocalDataReset(mode)
+            if (resetPreparationId == preparationId && overview.value?.selection == selection) {
+                _resetConfirmation.value = EnterpriseResetConfirmation(preview, path)
+            }
+        }
     }
     fun confirmReset(onReset: () -> Unit) {
         val original = _resetConfirmation.value ?: return
         _resetConfirmation.value = null
-        command { service.localDataReset(original.request); onReset() }
+        command { service.localDataReset(original.preview); onReset() }
     }
     fun retryReset() { if (overview.value?.reset?.running == false) command { service.retryLocalDataReset() } }
     fun showPortal() { overview.value?.selection?.let {
@@ -412,6 +423,8 @@ internal class EnterpriseVM(private val service: EnterpriseApplicationService,
                 val enrollmentCode = if (enrollment) error.enrollmentCode() else null
                 if (isCurrent()) _error.value = Failure(when {
                     error is EnterpriseConfigurationException && error.reason == "enterprise_selection_revoked" -> R.string.enterprise_selection_changed
+                    error is EnterpriseConfigurationException && error.reason == "enterprise_pending_inputs_changed" -> R.string.chat_queue_changed
+                    error is EnterpriseConfigurationException && error.reason == "enterprise_enrollment_in_progress" -> R.string.enterprise_reset_enrollment_pending
                     enrollmentCode == ENROLLMENT_EXPIRED -> R.string.enterprise_enrollment_expired
                     enrollmentCode == "enrollment_already_used" ->
                         R.string.enterprise_enrollment_already_used

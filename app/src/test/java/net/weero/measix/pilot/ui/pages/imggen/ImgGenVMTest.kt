@@ -11,6 +11,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -43,6 +44,103 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ImgGenVMTest {
+    @Test
+    fun `gallery export forwards the page context instead of the application`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val owner = ViewModelStore()
+        try {
+            val selected = RealmSelection(RealmAccess.Personal, 3)
+            val fixture = galleryFixture(owner, MutableStateFlow(selected))
+            runCurrent()
+            val pageContext = mockk<android.content.Context>()
+            val exporter = mockk<net.weero.measix.pilot.service.MediaExportService>()
+            val keys = listOf(net.weero.measix.pilot.service.ManagedFileKey.Generated(1, selected))
+            coEvery { fixture.commands.saveGeneratedBatch(keys, pageContext, exporter, any()) } returns emptyList()
+            fixture.vm.saveGallerySelection(selected, setOf(1), pageContext, exporter) {}
+            io.mockk.coVerify(exactly = 1) { fixture.commands.saveGeneratedBatch(keys, pageContext, exporter, any()) }
+        } finally { owner.clear(); runCurrent(); Dispatchers.resetMain() }
+    }
+    @Test
+    fun `gallery batch binds selected IDs to the original selection and publishes each receipt`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val owner = ViewModelStore()
+        try {
+            val selected = RealmSelection(RealmAccess.Personal, 3)
+            val fixture = galleryFixture(owner, MutableStateFlow(selected))
+            runCurrent()
+            val keys = listOf(1, 4).map { net.weero.measix.pilot.service.ManagedFileKey.Generated(it, selected) }
+            val results = keys.map { net.weero.measix.pilot.service.GeneratedImageBatchItemResult.Deleted(it) }
+            coEvery { fixture.commands.deleteGeneratedBatch(keys, any()) } coAnswers {
+                val callback = secondArg<(net.weero.measix.pilot.service.GeneratedImageBatchItemResult) -> Unit>()
+                results.forEach(callback)
+                results
+            }
+            val received = mutableListOf<net.weero.measix.pilot.service.GeneratedImageBatchItemResult>()
+            fixture.vm.deleteGallerySelection(selected, linkedSetOf(1, 4), received::add)
+            assertEquals(results, received)
+        } finally { owner.clear(); runCurrent(); Dispatchers.resetMain() }
+    }
+
+    @Test
+    fun `gallery late receipts and reconciliation cannot update another selected space`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val owner = ViewModelStore()
+        try {
+            val original = RealmSelection(RealmAccess.Personal, 3)
+            val selection = MutableStateFlow(original)
+            val fixture = galleryFixture(owner, selection)
+            runCurrent()
+            val released = CompletableDeferred<Unit>()
+            coEvery { fixture.commands.deleteGeneratedBatch(any(), any()) } coAnswers {
+                val callback = secondArg<(net.weero.measix.pilot.service.GeneratedImageBatchItemResult) -> Unit>()
+                released.await()
+                val result = net.weero.measix.pilot.service.GeneratedImageBatchItemResult.Deleted(
+                    net.weero.measix.pilot.service.ManagedFileKey.Generated(1, original))
+                callback(result)
+                listOf(result)
+            }
+            coEvery { fixture.queries.existingGeneratedIds(original, setOf(1)) } coAnswers {
+                released.await()
+                setOf(1)
+            }
+            var receipts = 0
+            val batch = async { fixture.vm.deleteGallerySelection(original, setOf(1)) { receipts++ } }
+            val reconciliation = async { runCatching { fixture.vm.reconcileGallerySelection(original, setOf(1)) } }
+            runCurrent()
+            selection.value = original.copy(revision = 4)
+            runCurrent()
+            released.complete(Unit)
+            batch.await()
+            assertEquals(0, receipts)
+            assertEquals("gallery_selection_changed", reconciliation.await().exceptionOrNull()?.message)
+            assertEquals("gallery_selection_changed", runCatching {
+                fixture.vm.deleteGallerySelection(original, setOf(1)) {}
+            }.exceptionOrNull()?.message)
+            io.mockk.coVerify(exactly = 1) { fixture.commands.deleteGeneratedBatch(any(), any()) }
+        } finally { owner.clear(); runCurrent(); Dispatchers.resetMain() }
+    }
+
+    private data class GalleryFixture(
+        val vm: ImgGenVM,
+        val commands: net.weero.measix.pilot.service.FileManagementApplicationService,
+        val queries: FileManagementQueryService,
+    )
+
+    private fun galleryFixture(owner: ViewModelStore, selection: MutableStateFlow<RealmSelection>): GalleryFixture {
+        val settings = mockk<SettingsStore>()
+        every { settings.userSettings } returns MutableStateFlow(Settings())
+        val configuration = mockk<ConfigurationQueryService>()
+        every { configuration.observeModelCatalog() } returns flowOf(ModelCatalogReadState.Loading)
+        val queries = mockk<FileManagementQueryService>()
+        every { queries.observeSelection() } returns selection
+        every { queries.observeGeneratedPaging() } returns flowOf(PagingData.empty())
+        val commands = mockk<net.weero.measix.pilot.service.FileManagementApplicationService>()
+        val vm = ImgGenVM(ApplicationProvider.getApplicationContext<Application>(), settings, mockk(), queries, commands,
+            configuration, mockk())
+        owner.put("gallery", vm)
+        return GalleryFixture(vm, commands, queries)
+    }
+
     @Test
     fun `picker target is consumed once and only actual request inputs wait for completion`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))

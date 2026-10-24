@@ -33,7 +33,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -329,6 +329,8 @@ class ChatScrollEntryAndroidTest {
             assertTrue("The production setup must exceed the actual list viewport",
                 last.bottom - title.top > viewport.bottom - viewport.top)
             assertEquals("An empty draft must open at the start of its setup", 0f, position(), 0f)
+            compose.onNode(hasText(activityText(R.string.chat_page_move_to_folder)) and
+                hasAnyAncestor(historyMatcher()), useUnmergedTree = true).assertIsDisplayed()
             capture("empty-draft-setup")
             val initial = runBlocking { query.conversationUiModel(lease).first { it != null }!! }
             assertTrue(initial.snapshot.nodes.isEmpty())
@@ -338,7 +340,7 @@ class ChatScrollEntryAndroidTest {
             val list = history().fetchSemanticsNode().boundsInRoot
             val input = compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot
             val touchableHeight = input.top - list.top
-            assertTrue("The setup needs a real gesture area above the composer", touchableHeight > 0f)
+            assertTrue("The setup needs a real gesture area above the composer: list=$list input=$input", touchableHeight > 0f)
             history().performTouchInput {
                 swipeUp(startY = touchableHeight * 0.75f, endY = touchableHeight * 0.2f, durationMillis = 800)
             }

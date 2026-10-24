@@ -76,9 +76,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
-import com.dokar.sonner.ToastType
-import com.dokar.sonner.Toaster
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.ToastType
+import net.weero.measix.pilot.ui.components.toast.Toaster
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import com.jvziyaoyao.scale.image.pager.ImagePager
 import com.jvziyaoyao.scale.zoomable.pager.PagerGestureScope
 import com.jvziyaoyao.scale.zoomable.pager.rememberZoomablePagerState
@@ -146,6 +146,7 @@ fun ImagePreviewDialog(
     overlay: (@Composable () -> Unit)? = null,
     onInfoRetry: suspend () -> Unit = {},
     showSaveAction: Boolean = true,
+    onEditImage: ((Int) -> Unit)? = null,
 ) {
     if (images.isEmpty()) {
         LaunchedEffect(Unit) { onDismissRequest() }
@@ -157,6 +158,7 @@ fun ImagePreviewDialog(
     val scope = rememberCoroutineScope()
     val dismissState = rememberUpdatedState(onDismissRequest)
     val extraActionsState = rememberUpdatedState(extraActions)
+    val editImageState = rememberUpdatedState(onEditImage)
     val deleteActionState = rememberUpdatedState(deleteAction)
     val overlayState = rememberUpdatedState(overlay)
     val infoRetryState = rememberUpdatedState(onInfoRetry)
@@ -454,6 +456,14 @@ fun ImagePreviewDialog(
                                 }
                             }
                         }
+                        editImageState.value?.let { edit ->
+                            androidx.compose.material3.TextButton(
+                                enabled = !saving && !deleting,
+                                onClick = { edit(state.currentPage) },
+                            ) {
+                                Text(stringResource(R.string.image_annotation_title), color = Color.White)
+                            }
+                        }
                         extraActionsState.value.forEach { action ->
                             IconButton(
                                 enabled = !saving && !deleting,
@@ -502,11 +512,8 @@ fun ImagePreviewDialog(
                 ) {
                     Toaster(
                         state = dialogToaster,
-                        darkTheme = true,
-                        richColors = true,
                         alignment = Alignment.TopCenter,
-                        showCloseButton = true,
-                    )
+                        )
                 }
                 overlayState.value?.invoke()
             }

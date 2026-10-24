@@ -50,7 +50,7 @@ class ChatNotificationManagerTest {
         val scope = AppScope(StandardTestDispatcher(testScheduler))
         val settings = mockk<SettingsStore> { every { userSettings } returns MutableStateFlow(Settings()) }
         var now = 1_000L
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())) { now }
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
         val owner = ChatNotificationManager(app, scope, AppEventBus(), settings, sessions)
         try {
             val packet = exampleEnterprisePackage()

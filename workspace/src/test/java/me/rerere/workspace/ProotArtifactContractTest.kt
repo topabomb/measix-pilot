@@ -18,11 +18,11 @@ class ProotArtifactContractTest {
     fun `manifest pins and verifies every shipped exec and loader artifact`() {
         val root = locateRepositoryRoot()
         val manifest = Json.parseToJsonElement(File(root, "workspace/proot-lock.json").readText()).jsonObject
-        assertEquals("v5.1.107.92", manifest.getValue("proot").jsonObject.getValue("tag").jsonPrimitive.content)
+        assertEquals("v5.1.107.96", manifest.getValue("proot").jsonObject.getValue("tag").jsonPrimitive.content)
         assertEquals("r29", manifest.getValue("build").jsonObject.getValue("ndk").jsonPrimitive.content)
         assertEquals("24", manifest.getValue("build").jsonObject.getValue("api").jsonPrimitive.content)
-        assertEquals("7266fb3e8516535682f5a9c8f3a7e70f6506eddb", manifest.getValue("proot").jsonObject.getValue("commit").jsonPrimitive.content)
-        assertEquals("29385d1ddb619a9c4449ab512bfd55032034b22f724ddf98fc95ff300ea32135", manifest.getValue("proot").jsonObject.getValue("sourceZipSha256").jsonPrimitive.content)
+        assertEquals("a179d3e8a4e045aaa1fb8cc3284f23509d96d353", manifest.getValue("proot").jsonObject.getValue("commit").jsonPrimitive.content)
+        assertEquals("75f654fe60dea92dabff2bf083ae8bfe4f91baa6a1a374786a6bf391015eebaa", manifest.getValue("proot").jsonObject.getValue("sourceZipSha256").jsonPrimitive.content)
         assertEquals("f4508dfac2255cf83e75859a8fe37dd7da6778a3", manifest.getValue("proot").jsonObject.getValue("upstreamBinaryCommit").jsonPrimitive.content)
         assertEquals("locally-patched-source-build", manifest.getValue("proot").jsonObject.getValue("upstreamBinaryMatch").jsonPrimitive.content)
         assertEquals("08b49b3ce00b1e14a3a0365200f30e50f8dfafe1", manifest.getValue("termuxPackage").jsonObject.getValue("recipeCommit").jsonPrimitive.content)
@@ -61,7 +61,7 @@ class ProotArtifactContractTest {
             }
             if (file.name == "libproot_exec.so") {
                 val ascii = bytes.toString(Charsets.ISO_8859_1)
-                assertTrue("missing embedded PRoot version", ascii.contains("5.1.107.92"))
+                assertTrue("missing embedded PRoot version", ascii.contains("5.1.107.96"))
                 assertTrue("missing SysV shared-memory implementation", ascii.contains("ashv_key_%d"))
             } else {
                 assertEquals("loader must remain platform-independent", emptyList<String>(), elf.neededLibraries())

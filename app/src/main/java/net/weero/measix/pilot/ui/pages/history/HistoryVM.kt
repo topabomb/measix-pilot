@@ -91,10 +91,20 @@ class HistoryVM internal constructor(
     internal val deletedNavigation = _deletedNavigation.asStateFlow()
     private val _undo = MutableStateFlow<ConversationApplicationService.RestoreToken?>(null)
     internal val undo = _undo.asStateFlow()
+    internal data class PendingDeletion(
+        val conversations: List<ConversationSummary>,
+        val targets: List<net.weero.measix.pilot.service.ConversationCommandTarget>,
+        val preview: net.weero.measix.pilot.service.ConversationDeletionPreview,
+        val allowUndo: Boolean,
+    )
+    private val _pendingDeletion = MutableStateFlow<PendingDeletion?>(null)
+    internal val pendingDeletion = _pendingDeletion.asStateFlow()
     init {
         viewModelScope.launch {
             conversationQueryService.observeCurrentSelection().collect { selection ->
                 _undo.value?.takeIf { it.selection != selection }?.let(::discardRestoreToken)
+                _pendingDeletion.value?.takeIf { it.conversations.first().commandTarget.selection != selection }
+                    ?.let { _pendingDeletion.compareAndSet(it, null) }
             }
         }
     }
@@ -144,8 +154,11 @@ class HistoryVM internal constructor(
         }
     }
 
-    fun deleteForUndo(conversation: ConversationSummary) = command(conversation.commandTarget.selection) {
-        val token = conversationApplicationService.deleteForUndo(conversation.commandTarget)
+    fun deleteForUndo(conversation: ConversationSummary) = requestDeletion(listOf(conversation), allowUndo = true)
+
+    private suspend fun deleteForUndoConfirmed(target: net.weero.measix.pilot.service.ConversationCommandTarget,
+        preview: net.weero.measix.pilot.service.ConversationDeletionPreview) {
+        val token = conversationApplicationService.deleteForUndo(target, preview)
         try {
             deleted(token.deletion)
             if (conversationQueryService.observeCurrentSelection().first() == token.selection) {
@@ -155,11 +168,33 @@ class HistoryVM internal constructor(
         } catch (error: Throwable) { token.close(); throw error }
     }
 
-    fun deleteConversations(conversations: List<ConversationSummary>) {
-        val selection = conversations.firstOrNull()?.commandTarget?.selection ?: return
-        command(selection) {
-            conversationApplicationService.deleteConversations(conversations.map { it.commandTarget }, ::deleted)
+    fun deleteConversations(conversations: List<ConversationSummary>) { requestDeletion(conversations, allowUndo = false) }
+
+    private fun requestDeletion(conversations: List<ConversationSummary>, allowUndo: Boolean): Job? {
+        val captured = conversations.toList()
+        val selection = captured.firstOrNull()?.commandTarget?.selection ?: return null
+        if (_pendingDeletion.value != null) return null
+        val targets = captured.map { it.commandTarget }
+        return command(selection) {
+            val preview = conversationApplicationService.prepareDeletion(targets)
+            if (conversationQueryService.observeCurrentSelection().first() != selection) return@command
+            val pending = PendingDeletion(captured, targets, preview, allowUndo)
+            if (preview.pendingInputCount > 0) _pendingDeletion.value = pending
+            else deleteConfirmed(pending)
         }
+    }
+
+    internal fun dismissDeletion(expected: PendingDeletion) { _pendingDeletion.compareAndSet(expected, null) }
+
+    internal fun confirmDeletion(expected: PendingDeletion) {
+        if (_running.value) return
+        if (!_pendingDeletion.compareAndSet(expected, null)) return
+        command(expected.conversations.first().commandTarget.selection) { deleteConfirmed(expected) }
+    }
+
+    private suspend fun deleteConfirmed(pending: PendingDeletion) {
+        if (pending.allowUndo) deleteForUndoConfirmed(pending.targets.single(), pending.preview)
+        else conversationApplicationService.deleteConversations(pending.targets, pending.preview, ::deleted)
     }
 
     fun togglePinStatus(conversation: ConversationSummary) = command(conversation.commandTarget.selection) {

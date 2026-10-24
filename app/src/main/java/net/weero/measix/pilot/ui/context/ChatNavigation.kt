@@ -7,7 +7,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import me.rerere.common.configuration.ConfigurationReference
@@ -34,6 +34,7 @@ class ChatNavigation internal constructor(
 fun rememberChatNavigation(
     navigator: Navigator = LocalNavController.current,
     renderedSelection: net.weero.measix.pilot.data.enterprise.RealmSelection? = null,
+    draftFolder: Pair<net.weero.measix.pilot.service.ConversationFolderAccess, Uuid>? = null,
 ): ChatNavigation {
     val query = koinInject<ConversationQueryService>()
     val application = koinInject<ConversationApplicationService>()
@@ -42,13 +43,13 @@ fun rememberChatNavigation(
     val toaster = LocalToaster.current
     val failure = stringResource(R.string.error_title_operation)
     val capturedSelection = renderedSelection ?: selection
-    return remember(navigator, capturedSelection, application, scope, toaster, failure) {
+    return remember(navigator, capturedSelection, draftFolder, application, scope, toaster, failure) {
         ChatNavigation(
             create = { assistant, text, files ->
                 val original = capturedSelection
                 if (original == null) toaster.show(failure, type = ToastType.Error) else scope.launch {
                     try {
-                        val request = application.newDraftRequest(original, assistant)
+                        val request = application.newDraftRequest(original, assistant, draftFolder)
                         navigator.clearAndNavigate(Screen.Chat(request, text, files.map(Uri::toString)))
                     } catch (cancelled: CancellationException) {
                         throw cancelled

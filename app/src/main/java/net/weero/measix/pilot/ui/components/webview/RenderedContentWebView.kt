@@ -13,6 +13,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.files.ArtifactProjectionException
@@ -31,7 +36,7 @@ internal sealed interface RenderedContentReadState {
 private fun renderedContentFailure(error: Exception): RenderedContentReadState {
     val unavailable = error is EnterpriseConfigurationException && error.reason in setOf(
         "enterprise_data_access_unavailable", "enterprise_selection_revoked", "enterprise_session_required",
-    ) || error is IllegalStateException && error.message in setOf("conversation_view_closed", "conversation_view_revoked")
+    ) || error is IllegalStateException && error.message in setOf("conversation_view_closed", "conversation_view_revoked", "rendered_file_closed", "rendered_file_revoked")
     if (unavailable) return RenderedContentReadState.Unavailable
     logDiagnosticFailure("RenderedContent", "Preview read failed", error)
     return RenderedContentReadState.Failed(error)
@@ -50,28 +55,48 @@ internal fun rememberRenderedContentState(
     val state = remember(document, files, queries, readRevision, handler) {
         mutableStateOf<RenderedContentReadState>(if (document == null) RenderedContentReadState.Unavailable else RenderedContentReadState.Loading)
     }
+    val reads = remember(state) { SupervisorJob() }
+    DisposableEffect(reads) {
+        onDispose { reads.cancel() }
+    }
     LaunchedEffect(state) {
-        val current = document ?: return@LaunchedEffect
-        val source = current.source
         try {
+            val current = document ?: return@LaunchedEffect
+            val source = current.source
             files.requireContentAccess(source)
-            val webView = renderedContentWebViewState(current, files, handler) { error ->
+            val webView = renderedContentWebViewState(current, files, handler, reads) { error ->
+                reads.cancel()
                 if (state.value is RenderedContentReadState.Ready) state.value = renderedContentFailure(error)
             }
             val view = when (source) {
                 is RenderedContentSource.Conversation -> source.view
                 is RenderedContentSource.RealmConfiguration -> source.view
+                is RenderedContentSource.WorkspaceFile -> null
                 RenderedContentSource.Static, RenderedContentSource.UserConfiguration -> null
             }
-            if (view == null) state.value = RenderedContentReadState.Ready(webView)
+            if (source is RenderedContentSource.WorkspaceFile) {
+                source.file.accessChanges.collect {
+                    files.requireContentAccess(source)
+                    if (state.value == RenderedContentReadState.Loading) state.value = RenderedContentReadState.Ready(webView)
+                }
+            } else if (view == null) state.value = RenderedContentReadState.Ready(webView)
             else queries.observeViewAccess(view).collect { allowed ->
-                if (!allowed) state.value = RenderedContentReadState.Unavailable
+                if (!allowed) {
+                    reads.cancel()
+                    state.value = RenderedContentReadState.Unavailable
+                }
                 else if (state.value == RenderedContentReadState.Loading) state.value = RenderedContentReadState.Ready(webView)
             }
+            // Finite access observations must not end the lifetime of a displayed document.
+            awaitCancellation()
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
             currentCoroutineContext().ensureActive()
             state.value = renderedContentFailure(error)
+        } finally {
+            reads.cancel()
+            // Cancellation closes admission synchronously; joining suspended IO never blocks Main.
+            withContext(NonCancellable) { reads.join() }
         }
     }
     return state.value
@@ -81,12 +106,16 @@ private fun renderedContentWebViewState(
     document: RenderedContent,
     files: FileManagementApplicationService,
     handler: androidx.compose.ui.platform.UriHandler,
+    reads: Job,
     onFailure: (Exception) -> Unit,
 ): WebViewState {
     // Independent registrable origins prevent cookies, IndexedDB and browser caches from becoming a cross-source store.
     val origin = android.net.Uri.parse("https://measix-preview-${java.util.UUID.randomUUID()}.invalid")
+    val fileSource = (document.source as? RenderedContentSource.WorkspaceFile)?.file
+    val messageSource = (document.source as? RenderedContentSource.Conversation)?.message
+    val baseUrl = origin.toString() + (fileSource?.documentUrlPath ?: messageSource?.documentUrlPath).orEmpty()
     return WebViewState(
-        initialContent = WebContent.Data(prepareRenderedHtml(document.html, origin.toString()), origin.toString(), "UTF-8", "text/html"),
+        initialContent = WebContent.Data(prepareRenderedHtml(document.html, origin.toString(), fileSource != null), baseUrl, "UTF-8", "text/html"),
         settings = {
             domStorageEnabled = false
             builtInZoomControls = true
@@ -103,9 +132,13 @@ private fun renderedContentWebViewState(
         interceptRequest = { uri ->
             fun denied() = WebResourceResponse("text/plain", "UTF-8", 403, "Unavailable", emptyMap(), java.io.ByteArrayInputStream(byteArrayOf()))
             try {
-                runBlocking {
+                runBlocking(reads) {
+                    ensureActive()
                     files.requireContentAccess(document.source)
                     val localUrl = when {
+                        fileSource != null && uri.host == origin.host -> uri.encodedPath
+                        fileSource != null -> null
+                        messageSource?.documentUrlPath != null && uri.host == origin.host -> renderedLocalFileUrl(uri) ?: uri.encodedPath
                         uri.scheme.equals("file", ignoreCase = true) -> uri.toString()
                         uri.host == origin.host || uri.host.equals("measix.local", ignoreCase = true) -> renderedLocalFileUrl(uri)
                         else -> null
@@ -113,7 +146,8 @@ private fun renderedContentWebViewState(
                     when {
                         // loadDataWithBaseURL itself enters through a synthetic data URL; inline document resources have no filesystem authority.
                         uri.scheme.equals("data", ignoreCase = true) -> null
-                        localUrl != null -> files.readRenderedImage(document.source, localUrl)?.let { (mime, bytes) ->
+                        localUrl != null -> (if (fileSource != null) files.readRenderedResource(document.source, localUrl)
+                            else files.readRenderedImage(document.source, localUrl))?.let { (mime, bytes) ->
                             WebResourceResponse(mime, null, java.io.ByteArrayInputStream(bytes))
                         } ?: denied()
                         uri.scheme.equals("content", ignoreCase = true) -> denied()
@@ -122,7 +156,9 @@ private fun renderedContentWebViewState(
                         else -> null
                     }
                 }
-            } catch (cancelled: CancellationException) { throw cancelled }
+            // This is a native WebView callback, not a suspending caller. IO has already unwound;
+            // a disposed document receives a denied response without reporting cancellation as failure.
+            } catch (cancelled: CancellationException) { denied() }
             catch (_: ArtifactProjectionException) { denied() }
             catch (error: Exception) { onFailure(error); denied() }
         },
@@ -151,8 +187,13 @@ internal fun RenderedContentReadFailure(error: Throwable, onRetry: () -> Unit, m
 }
 
 /** Native file access stays disabled. Dynamic HTML and Markdown-created nodes use the same owned resource path. */
-private fun prepareRenderedHtml(html: String, origin: String): String {
+private fun prepareRenderedHtml(html: String, origin: String, fileDocument: Boolean): String {
     val document = org.jsoup.Jsoup.parse(html)
+    // A file document's base is its borrowed directory; model-supplied base tags cannot rebind it.
+    if (fileDocument) {
+        document.select("base").remove()
+        return document.outerHtml()
+    }
     val script = """
         (() => {
           const origin = '$origin';

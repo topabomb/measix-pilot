@@ -12,13 +12,12 @@ import kotlin.time.Instant
 import kotlin.time.toJavaInstant
 import kotlin.uuid.Uuid
 
-private const val TIME_GAP_THRESHOLD_SECONDS = 3600L
-
 /** The reminder describes the actual user message, never the time at which the model answers. */
 object TimeReminderTransformer : InputMessageTransformer {
     override suspend fun transform(ctx: TransformerContext, messages: List<UIMessage>): List<UIMessage> {
         if (!ctx.promptInputs.enableTimeReminder) return messages
         val transformed = applyTimeReminder(messages, ctx.promptInputs.zoneId,
+            intervalMinutes = ctx.promptInputs.timeReminderIntervalMinutes,
             isRealUser = ctx.requestOrigins::isRealUser,
             previousRealUserTimes = ctx.requestOrigins.previousRealUserTimes(),
             admittedZone = ctx.requestOrigins::messageTimeZone,
@@ -43,7 +42,10 @@ internal fun applyTimeReminder(
     previousRealUserTimes: Map<Uuid, RealUserTime?> = emptyMap(),
     admittedZone: (Uuid) -> String? = { null },
     admittedText: (Uuid) -> String? = { null },
+    intervalMinutes: Int = 60,
 ): List<UIMessage> {
+    require(intervalMinutes > 0) { "invalid_time_reminder_interval" }
+    val threshold = (intervalMinutes.toLong() * 60).seconds
     var previousUserInstant: Instant? = null
     return buildList {
         for (message in messages) {
@@ -60,7 +62,7 @@ internal fun applyTimeReminder(
                 val original = admittedText(message.id)
                 if (original != null) {
                     add(UIMessage.user(original))
-                } else if (gap == null || gap > TIME_GAP_THRESHOLD_SECONDS.seconds) {
+                } else if (gap == null || gap > threshold) {
                     val time = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(instant.toJavaInstant().atZone(ZoneId.of(messageZone)))
                     val suffix = gap?.inWholeSeconds?.let { "; gap: ${if (it < 86400) "${it / 3600} h" else "${it / 86400} d"}" }.orEmpty()
                     add(UIMessage.user("<time_reminder>Message time: $time$suffix</time_reminder>"))

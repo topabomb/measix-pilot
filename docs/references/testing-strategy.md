@@ -158,7 +158,7 @@ SDK 或宿主网络变化后重新验证，不额外重复传入 `-netsim-args -
 | 个人 DAV 视频与取消 | `WebDavPreviewLiveAndroidTest`；`webdavPreviewLive=true`、同上连接参数、根目录下的 `webdavPreviewPath` 视频，至少 4 GiB | 正式管理器播放/近尾解码/关闭；取消下载不发布附件并回滚本次 Artifact 创建；临时连接清理，恢复原当前项并核验备份选择未改 |
 | 企业 DAV Core | `EnterpriseWebDavLiveAndroidTest`；`coreWebDavInput` 指向未接入专用设备 app cache 内的一次性接入文件，含 enrollment、resourceId、agentSpaceId、server；隔离 Core 使用 15 秒 access token | 正式接入/同步/当前绑定、特殊文件名、分块上传/摘要、覆盖冲突、跨短 token 到期的已准入长流、令牌刷新、实时只读切换与正式退出；管理 adapter 为 fixture 时不声称真实 Agent Space 验收 |
 | 已接入企业 DAV 托管附件 | `WebDavManagedTransferLiveAndroidTest`；`webDavManagedTransfersLive=true`；专用且已接入企业设备、当前 DAV 可写，保留数据安装与直接 instrumentation | 正式工具定义/执行、真实 DAV、任意二进制/PNG/文本摘要、重复下载独立身份、先提交引用后发布、下载后再次上传；不包含 Provider 自主调用，清理仅本次目录和测试会话 |
-| Linux Rootfs | `prootRootfsUrl`；匹配 ABI 的已核验镜像 | `WorkspaceProotAndroidTest` 使用临时 Workspace；native PTY 不证明 PRoot，页大小和 ABI 分别记录 |
+| Linux Rootfs | `prootRootfsUrl`；匹配 ABI 的已核验镜像；Ubuntu 26.04 离线 dpkg 验收另开 `prootUbuntu2604=true` | `WorkspaceProotAndroidTest` 使用临时 Workspace；native PTY 不证明 PRoot，页大小和 ABI 分别记录 |
 | HTTP ASR 控制器录音与交接 | `httpAsrLiveAudio=true`；持续有效麦克风输入 | `HttpAsrLifecycleInstrumentedTest` 使用转写替身，证明 WAV、有效信号、取消与清理，不证明真实 HTTP 上传或服务器识别 |
 | MCP 目录冷启动 | `McpLifecycleUiAndroidTest#confirmedDirectoryRestoresWithoutFailureAfterProcessRestart`，先 `mcpColdSeed=true`，停止目标进程后再 `mcpColdVerify=true` | 同一专用设备保留安装和数据；真实 Catalog 持久化与正式设置页，HTTP 为本地 fixture |
 
@@ -268,7 +268,22 @@ python tools/verify_android_apk.py --variant release --apk <最终签名APK> --t
 包含上述核验产物的 applicationId/versionName/versionCode/expectedBuildContract，以及所选 artifact 的
 variant/signingCertificateSha256，和命名为 apkSha256 的实际 APK 摘要。测试读取目标 PackageManager、
 安装包字节与目标 ClassLoader 的 BuildConfig，避免测试包常量内联冒充实际身份。
-Release 测试包可用 `-PandroidConsumerVariant=release` 独立构建并使用目标签名；普通门禁仍使用 Debug。
+Release 测试包可用 `-PandroidConsumerVariant=release` 构建并使用目标签名；普通门禁仍使用 Debug。
+该参数不保证白盒测试可在优化包运行：共享测试依赖和内部调用入口可能已被 R8 内联或删除，applymapping 不能恢复它们。
+不得为运行白盒测试放宽正式 keep 或关闭优化，再将结果当作原正式包的验收。
+
+正式 Release 的 UI 消费验证使用现有 `baselineprofile` 模块中的 `ReleaseConsumers`，测试进程 instrument 自身，
+只通过 UI 操作已安装的 `net.weero.measix.pilot`，并检查目标非 debuggable；不依赖应用内部类或夹具 Activity。
+先固定正式 APK/mapping 并安装正式 APK，再单独构建、安装该测试 APK，通过直接 instrumentation 传入 `targetAppId`。
+`ReleaseRenderingConsumers` 经正式 Provider 粘贴导入与选模，使用设备 loopback 模型返回指定内容，检查流式结束、默认预览、源码切换及原文回退；以实际截图复核公式字形和图形，不能用 WebView 容器存在代替内容已绘制。每个用例按唯一标记清理自己的聊天和 Provider。`ReleaseConsumers` 的语言场景在原应用 locales 为空时通过 Android locale 命令验证五语和区域回退，结束后恢复空列表并核对实际英文界面；不修改应用语言偏好。
+此场景不能运行会安装 benchmark 目标的 connected 任务；编译测试包不等于完成实际消费者验证。
+`ReleaseCameraConsumers` 同样从独立测试进程操作已安装的正式 APK。生命周期方法覆盖拒绝/重试授权、关闭、
+前后台和旋转，并读取 CameraService 当前客户端及实际解码线程；不能用历史事件记录判断相机仍被占用。
+`shippingScannerDeliversSelectedCameraFixture` 接收 `cameraFixtureKind`（provider、mcp、enterprise 或相应 invalid- 前缀）
+和 `cameraFixtureName=P96-QR-UUID`，验证相机输入经原导入命令消费。Provider/MCP 只清理预先确认不存在且本次创建的唯一定义；
+企业仅到接入确认后取消。无效码检查实际诊断与无新增配置。两个方法均要求初始 CAMERA 未授权且无用户设置标志，结束时恢复。
+专用模拟器的 imagefile 输入需完整覆盖实际取景区域；离线解码成功不代表 CameraX 可读到完整图形。重启前拉取证据、
+等待系统权限异步保存并同步文件系统，恢复原启动参数后再次核对权限。模拟器不证明实机镜头和厂商驱动兼容。
 
 Snapshot、Runtime、Portal 复用本节已有真实设备场景，按变更影响选择回归，保留既有 CI/JUnit 和原始日志。
 首次关联需覆盖实际边界，工具 fixture 和本地协议回归不能登记真实兼容。
@@ -276,7 +291,25 @@ Snapshot、Runtime、Portal 复用本节已有真实设备场景，按变更影�
 
 ## 6. 性能证据
 
-性能入口为 `:app:baselineprofile:connectedBenchmarkReleaseAndroidTest`：`StartupBenchmarks` 测冷启动，
+`BaselineProfileGenerator.generate` 采集启动；`chat` 通过设备 loopback 模型走真实输入框发送、流式渲染和聊天滚动。
+`nonMinifiedRelease` 与 `benchmarkRelease` 共用 `app/src/profileFixture` 中的 `ProfileFixtureActivity`，
+它经原 Settings owner 配置专用个人助手，随后由正常 RouteActivity 首发；
+正式 Release 不包含夹具入口，仍开启 optimization。生成变体关闭 optimization，避免把内联后的方法录为源码 profile。
+每轮生成唯一请求标记，聊天页保持前台直到本轮回复尾标志出现，再以原 query 核对无流式投影、Final 与 finishedAt；
+看到尾文本不能代替终态提交。生成器关闭监听/活动 socket 并等待线程退出，不连接真实模型服务。
+
+生成使用 `:app:generateReleaseBaselineProfile -Pandroid.testInstrumentationRunnerArguments.class=me.rerere.baselineprofile.BaselineProfileGenerator --no-parallel --max-workers=1`，仅在专用设备运行；该过程会配置目标安装，
+不能用于日常演示设备。重录后核查 baseline/startup 两份产物、实际覆盖方法，以及正式 Release merged manifest/dex
+不含夹具、Mock endpoint 或非正式入口；成功编译不证明 profile 已生成或改善性能。
+
+性能入口为 `:app:baselineprofile:connectedBenchmarkReleaseAndroidTest`：`StartupBenchmarks` 测冷启动；
+`ChatBenchmarks` 分别以 `CompilationMode.None` 和 `Partial(BaselineProfileMode.Require)` 各测十轮真实聊天。
+它与采集器共用 `ProfileChatJourney`、loopback 模型和唯一请求标记；每轮新建聊天，实际点击发送，等待流式回复尾部并滚动。
+`FrameTimingMetric` 只采集发送、流式渲染和滚动期间的帧耗时/超时分布；没有测量模型端到端延迟，loopback 固定分块延迟
+也不代表真实服务速度。配置准备、输入文本及 RouteActivity 启动在测量段外，前一轮 Final/finishedAt/无流式投影核验
+放在下一轮 setup，最后一轮在 measureRepeated 返回后核验；任一终态不成立即失败，不能用尾文本替代提交。
+冷启动由独立 StartupBenchmarks 测量，聊天用例不混入 Activity 启动耗时。模拟器结果仅供回归诊断，性能结论需物理设备。
+
 `TurnWorkloadBenchmarks` 以完整编译、冷启动和重复采样调用真实生产 owner：
 
 - 10,000 次活跃 Assistant chunk 合并、1,000 条历史请求装配、100 个大型工具结果压缩计划、50 个工具 schema 冻结与预算。
@@ -284,11 +317,12 @@ Snapshot、Runtime、Portal 复用本节已有真实设备场景，按变更影�
 - 100 MB 工具输出经 ArtifactStore/ToolOutputStore 执行 read 与 grep。
 - 1,000 条历史下进行 100 次活跃 Assistant 更新，分别测有/无上下文投影，并采集 `FrameTimingMetric`。
 
-驱动 Activity、数据库与 payload fixture 位于 `app/src/benchmarkRelease`，不进入正式 Debug/Release APK。
+工作负载驱动、数据库与 payload fixture 位于 `app/src/benchmarkRelease`，聊天夹具位于上述共享测试源集，均不进入正式 Debug/Release APK。
 输入构造在测量段外，设备要求 API 29+。在已连接专用设备上执行：
 
 ```powershell
 .\gradlew.bat :app:baselineprofile:connectedBenchmarkReleaseAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=me.rerere.baselineprofile.TurnWorkloadBenchmarks' --no-parallel --max-workers=1
+.\gradlew.bat :app:baselineprofile:connectedBenchmarkReleaseAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=me.rerere.baselineprofile.StartupBenchmarks,me.rerere.baselineprofile.ChatBenchmarks' --no-parallel --max-workers=1
 ```
 
 `measureWorkload` 用 Perfetto slice 记录同步耗时，边界前后 ART `art.gc.bytes-allocated` 差值记录近似 Java/Kotlin 分配。
@@ -301,5 +335,11 @@ AndroidX JSON 的 `sampledMetrics` 保留耗时与分配的原始 `runs` 及分�
 `migratedRows` 是 SQL 验证行数，`toolOutputInputBytes` 是输入文件大小，`activeAssistantCompositions` 是含初次渲染的活跃消息 composition 次数，
 后两者分别不代表操作系统 IO 字节或 Compose 内全部函数重组次数。
 
+`MessageFtsMigrationAndroidTest.longConversationIncrementalIndexTransactionCost` 在真实文件库上对照单节点增量索引与全量重建：
+100/1000 节点各含两个约 1 KiB 的中英文 variant，3 轮预热、10 轮交替先后测量。计时包围原 MessageFtsManager 的 Room
+事务直到提交返回；建库、文本生成、初始索引、canonical 行更新与正确性校验不计时。校验未改正文及增量路径未改 FTS
+行的 rowid/内容、两表配对、旧词移除、新词命中及两路径结果等价。结果写 targetContext.cacheDir 下本次唯一
+`fts-index-cost-<uuid>/index-transactions.json`，保存全部原始样本，数据库在 finally 清理。
+这只衡量索引事务成本，不能推导整个 Turn 提交的复杂度或耗时；比较时记录设备、数据规模、样本量与分位数定义。
 `.github/workflows/benchmark.yml` 仅供手动模拟器诊断，保留 JSON 与 trace，不设性能通过阈值。
 只有固定实机和系统下的结果适合与同环境 baseline 比较；有执行入口不代表已经采集基线。

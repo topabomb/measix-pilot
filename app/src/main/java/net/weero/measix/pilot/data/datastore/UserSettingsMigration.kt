@@ -5,6 +5,7 @@ import androidx.datastore.core.DataMigration
 import androidx.datastore.preferences.core.Preferences
 import kotlinx.serialization.json.*
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
+import net.weero.measix.pilot.data.ai.prompts.migrateLegacyCompressPrompt
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_SUGGESTION_PROMPT
 import net.weero.measix.pilot.data.ai.prompts.DEFAULT_TITLE_PROMPT
 import net.weero.measix.pilot.data.sync.s3.S3Config
@@ -65,8 +66,8 @@ internal class UserSettingsMigration : DataMigration<Preferences> {
     override suspend fun shouldMigrate(currentData: Preferences): Boolean {
         val encoded = currentData[SettingsStore.USER_SETTINGS] ?: return true
         if (userSettingsSchemaVersion(encoded) < UserSettingsDocument.SCHEMA_VERSION) return true
-        JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
-        return false
+        val document = JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
+        return migrateLegacyCompressPrompt(document.configuration.compressPrompt) != document.configuration.compressPrompt
     }
 
     override suspend fun migrate(currentData: Preferences): Preferences {
@@ -92,9 +93,15 @@ internal class UserSettingsMigration : DataMigration<Preferences> {
                     "preferences" to if (scopes == null) preferences else JsonObject(preferences + ("scopes" to JsonArray(scopes))),
                 )).toString()
             } else encoded
-            JsonInstant.decodeFromString<UserSettingsDocument>(upgraded)
+            val upgradedRoot = JsonInstant.parseToJsonElement(upgraded).jsonObject
+            val configuration = upgradedRoot["configuration"]?.jsonObject
+            val migratedConfiguration = configuration?.migrateDefaultCompressPrompt()
+            val migrated = if (configuration != migratedConfiguration) {
+                JsonObject(upgradedRoot + ("configuration" to requireNotNull(migratedConfiguration))).toString()
+            } else upgraded
+            JsonInstant.decodeFromString<UserSettingsDocument>(migrated)
             return currentData.toMutablePreferences().apply {
-                this[SettingsStore.USER_SETTINGS] = upgraded
+                this[SettingsStore.USER_SETTINGS] = migrated
             }.toPreferences()
         }
         val old = readLegacySettings(currentData)
@@ -185,7 +192,7 @@ private fun readLegacySettings(preferences: Preferences): Settings {
         suggestionPrompt = preferences[SUGGESTION_PROMPT] ?: DEFAULT_SUGGESTION_PROMPT,
         attachmentInspectionModelId = preferences[ATTACHMENT_INSPECTION_MODEL]?.let { ConfigurationReference.parse(it) },
         compressModelId = preferences[COMPRESS_MODEL]?.let { ConfigurationReference.parse(it) } ?: DEFAULT_AUTO_MODEL_ID,
-        compressPrompt = preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT,
+        compressPrompt = migrateLegacyCompressPrompt(preferences[COMPRESS_PROMPT] ?: DEFAULT_COMPRESS_PROMPT),
         assistantId = preferences[SELECT_ASSISTANT]?.let { ConfigurationReference.parse(it) }
             ?: DEFAULT_ASSISTANT_ID,
         assistantTags = preferences.json(ASSISTANT_TAGS, emptyList()),
@@ -251,3 +258,10 @@ internal fun migrateSettingsFormat(source: String): String {
 }
 
 internal const val SETTINGS_FORMAT_VERSION = 2
+
+/** Only the exact released default is upgraded; user templates and all other fields remain intact. */
+internal fun JsonObject.migrateDefaultCompressPrompt(): JsonObject {
+    val original = (get("compressPrompt") as? JsonPrimitive)?.contentOrNull ?: return this
+    val migrated = migrateLegacyCompressPrompt(original)
+    return if (migrated == original) this else JsonObject(this + ("compressPrompt" to JsonPrimitive(migrated)))
+}

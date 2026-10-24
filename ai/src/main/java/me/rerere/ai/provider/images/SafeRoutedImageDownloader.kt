@@ -296,17 +296,16 @@ internal fun Response.readBoundedImageGenerationResponse(requestedImages: Int): 
     val maxBytes = maxRoutedImageResponseBytes(requestedImages)
     val length = body.contentLength()
     if (length > maxBytes) throw IOException("routed_image_response_limit_exceeded")
-    return parseImageGenerationResponseStream(BoundedImageResponseInputStream(body.byteStream(), maxBytes))
+    return BoundedImageResponseInputStream(body.byteStream(), maxBytes).parse(::parseImageGenerationResponseStream)
 }
 
 internal fun Response.readBoundedDashScopeImageGenerationResponse(requestedImages: Int): ImageGenerationResponseParse {
     val maxBytes = maxRoutedDashScopeImageResponseBytes(requestedImages)
     val length = body.contentLength()
     if (length > maxBytes) throw IOException("routed_image_response_limit_exceeded")
-    return parseDashScopeImageGenerationResponseStream(
-        BoundedImageResponseInputStream(body.byteStream(), maxBytes),
-        requestedImages,
-    )
+    return BoundedImageResponseInputStream(body.byteStream(), maxBytes).parse {
+        parseDashScopeImageGenerationResponseStream(it, requestedImages)
+    }
 }
 
 private class BoundedImageResponseInputStream(
@@ -314,6 +313,14 @@ private class BoundedImageResponseInputStream(
     private val maxBytes: Long,
 ) : FilterInputStream(input) {
     private var total = 0L
+    private var limitFailure: IOException? = null
+
+    fun <T> parse(decode: (InputStream) -> T): T = try {
+        decode(this)
+    } catch (failure: kotlinx.serialization.SerializationException) {
+        // Streaming JSON decoding can wrap IO failures; retain this stream owner's size-limit contract.
+        throw limitFailure ?: failure
+    }
 
     override fun read(): Int {
         val value = super.read()
@@ -331,6 +338,8 @@ private class BoundedImageResponseInputStream(
 
     private fun record(bytes: Long) {
         total += bytes
-        if (total > maxBytes) throw IOException("routed_image_response_limit_exceeded")
+        if (total > maxBytes) {
+            throw IOException("routed_image_response_limit_exceeded").also { limitFailure = it }
+        }
     }
 }

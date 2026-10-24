@@ -28,6 +28,7 @@ internal data class TurnContext(
 internal data class FrozenTurnSystem(
     val text: String,
     val contributions: List<net.weero.measix.pilot.data.model.SystemContextContribution>,
+    val workspace: net.weero.measix.pilot.data.model.WorkspaceContextOrigin? = null,
 )
 
 /**
@@ -80,4 +81,5 @@ data class TurnPromptSnapshot(
     val modeInjectionIds: Set<ConfigurationReference>,
     val enableTimeReminder: Boolean,
     val placeholderValues: Map<String, String>,
+    val timeReminderIntervalMinutes: Int = 60,
 )

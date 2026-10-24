@@ -86,10 +86,115 @@ class ArtifactUploadImageReadIntegrationTest {
     }
 
     @Test
+    fun queueEditTransfersUnpublishedImageTokenAndRevokesOldPreviewWithoutCopyingPayload() = runBlocking {
+        val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
+            net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(File(root, "queue-edit-session")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
+        sessions.recover()
+        val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal
+        val view = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(), access,
+            sessions.selectionRevision.value, closeAction = {})
+        val useCase = net.weero.measix.pilot.service.ArtifactUseCase(store,
+            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }, sessions)
+        val draft = useCase.openDraftScope(view)
+        val edit = useCase.openDraftScope(view)
+        val input = File(root, "queue-edit-input.png").apply { writeBytes(png) }
+        val imported = draft.importUrisOrThrow(listOf(android.net.Uri.fromFile(input))).single()
+        val part = me.rerere.ai.ui.UIMessagePart.Image(imported.uri.toString())
+        val original = draft.claimSubmission(view.commandTarget, listOf(part))
+        val oldPreview = requireNotNull(original.describeInputs(listOf(part)) {}[part.url]?.image)
+        val replacement = edit.claimSubmission(view.commandTarget, listOf(part))
+        draft.close()
+        edit.close()
+        view.close()
+
+        original.transferRetainedCreationTo(replacement)
+        assertEquals("artifact_submission_ownership_transferred", runCatching { oldPreview.readBytes() }.exceptionOrNull()?.message)
+        original.close()
+        val preview = requireNotNull(replacement.describeInputs(listOf(part)) {}[part.url]?.image)
+        assertArrayEquals(png, preview.readBytes())
+        val artifact = store.list(ConfigurationScope.Personal).single()
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Rejected)
+        replacement.close()
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, artifact.id) is ArtifactDeleteResult.Completed)
+    }
+
+    @Test
+    fun acceptedSubmissionPreviewSurvivesEditorCloseButNotItemRevocationOrRelease() = runBlocking {
+        withTimeout(10_000) {
+            val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
+                net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(File(root, "preview-session")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
+            sessions.recover()
+            val access = net.weero.measix.pilot.data.enterprise.RealmAccess.Personal
+            val view = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(), access,
+                sessions.selectionRevision.value, closeAction = {})
+            val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
+                net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }, sessions).openDraftScope(view)
+            val input = File(root, "input.png").apply { writeBytes(png) }
+            val imported = draft.importUrisOrThrow(listOf(android.net.Uri.fromFile(input))).single()
+            val part = me.rerere.ai.ui.UIMessagePart.Image(imported.uri.toString())
+            val submission = draft.claimSubmission(view.commandTarget, listOf(part))
+            draft.close()
+            view.close()
+            var itemAvailable = true
+            // The item verifier may take Session itself; holding it around this callback deadlocks.
+            val previews = submission.describeInputs(listOf(part)) {
+                sessions.withSelectedRealmAccess(access) { check(itemAvailable) { "queue_item_replaced" } }
+            }
+            val image = requireNotNull(previews[part.url]?.image)
+            assertArrayEquals(png, image.readBytes())
+            val foreign = me.rerere.ai.ui.UIMessagePart.Image("file:///unretained.png")
+            assertEquals("artifact_submission_input_mismatch", runCatching {
+                submission.describeInputs(listOf(foreign)) {}
+            }.exceptionOrNull()?.message)
+            itemAvailable = false
+            assertEquals("queue_item_replaced", runCatching { image.readBytes() }.exceptionOrNull()?.message)
+            itemAvailable = true
+            submission.close()
+            assertEquals("artifact_submission_closed", runCatching { image.requireAccess() }.exceptionOrNull()?.message)
+            assertTrue(store.deleteUserRequested(ConfigurationScope.Personal,
+                store.list(ConfigurationScope.Personal).single().id) is ArtifactDeleteResult.Completed)
+        }
+    }
+
+    @Test
+    fun submissionPublishedPreviewRechecksItemAfterReadAndPreservesCancellation() = runBlocking {
+        val entity = register("published-preview.png")
+        val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
+            net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(File(root, "published-preview-session")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
+        sessions.recover()
+        val view = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(),
+            net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, sessions.selectionRevision.value, closeAction = {})
+        val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
+            net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() }, sessions).openDraftScope(view)
+        val part = me.rerere.ai.ui.UIMessagePart.Image(android.net.Uri.fromFile(File(root, entity.relativePath)).toString())
+        val first = draft.claimSubmission(view.commandTarget, listOf(part))
+        val second = draft.claimSubmission(view.commandTarget, listOf(part))
+        draft.close()
+        view.close()
+        var checks = 0
+        var failAt = Int.MAX_VALUE
+        val source = requireNotNull(first.describeInputs(listOf(part)) {
+            checks++
+            check(checks != failAt) { "queue_item_replaced_after_read" }
+        }[part.url]?.image)
+        val other = requireNotNull(second.describeInputs(listOf(part)) {}[part.url]?.image)
+        assertFalse(source.cacheKey == other.cacheKey)
+        assertArrayEquals(png, source.readBytes())
+        failAt = checks + 2
+        assertEquals("queue_item_replaced_after_read", runCatching { source.readBytes() }.exceptionOrNull()?.message)
+        val cancelled = kotlinx.coroutines.CancellationException("preview cancelled")
+        val cancellation = runCatching { first.describeInputs(listOf(part)) { throw cancelled } }.exceptionOrNull()
+        assertTrue(cancellation === cancelled)
+        first.close()
+        assertArrayEquals(png, other.readBytes())
+        second.close()
+    }
+
+    @Test
     fun replacingARequestWithTheSameInputKeepsAnIndependentRetentionPin() = runBlocking {
         val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
             net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
-            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(File(root, "draft-session")))).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
+            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(File(root, "draft-session")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
             kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, closeAction = {}))
         val document = draft.createTextDocument("shared input")
         val first = draft.claimSubmission(draft.target, listOf(document))
@@ -108,7 +213,7 @@ class ArtifactUploadImageReadIntegrationTest {
         for (closed in listOf(false, true)) {
             val draft = net.weero.measix.pilot.service.ArtifactUseCase(store,
                 net.weero.measix.pilot.service.ApplicationRecoveryGate().apply { ready() },
-            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(File(root, "draft-session")))).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
+            net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore(File(root, "draft-session")), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))).openDraftScope(net.weero.measix.pilot.service.ConversationViewLease(
             kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L, closeAction = {}))
             val document = draft.createTextDocument("unaccepted input")
             val submission = draft.claimSubmission(draft.target, listOf(document))

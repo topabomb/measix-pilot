@@ -10,8 +10,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import com.dokar.sonner.Toaster
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.Toaster
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import kotlinx.coroutines.channels.Channel
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.*
@@ -69,7 +69,7 @@ internal fun ComposeTurnWorkload(withContext: Boolean = false) {
         LocalToaster provides toaster,
     ) {
         MeasixTheme(colorMode = ColorMode.LIGHT) {
-            Toaster(state = toaster, darkTheme = false, richColors = true, showCloseButton = true)
+            Box(Modifier.fillMaxSize()) {
             if (complete) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("done:$workload")
             } else LazyColumn(
@@ -92,6 +92,8 @@ internal fun ComposeTurnWorkload(withContext: Boolean = false) {
                         }
                     }
                 }
+            }
+            Toaster(state = toaster)
             }
         }
     }

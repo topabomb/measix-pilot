@@ -100,6 +100,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.ArrowUp02
 import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.Tick02
 import me.rerere.hugeicons.stroke.Fullscreen
 import me.rerere.hugeicons.stroke.Zap
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
@@ -165,8 +166,12 @@ internal fun ChatInput(
     onCancelClick: () -> Unit,
     onSendClick: () -> Unit,
     onLongSendClick: () -> Unit,
+    onCancelEdit: () -> Unit = { state.clearInput() },
+    readInputPreviews: (suspend (List<me.rerere.ai.ui.UIMessagePart>) -> Map<String, net.weero.measix.pilot.service.ArtifactInputPreview>)? = null,
+    onAnnotateImage: ((ChatInputState.ImageEditTarget) -> Unit)? = null,
 ) {
     val useCompactHeightLayout = LocalAdaptiveLayoutInfo.current.useCompactChatInput
+    val queuedEdit = state.editingTarget is net.weero.measix.pilot.ui.hooks.ChatInputEditTarget.Queued
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -180,17 +185,17 @@ internal fun ChatInput(
     fun sendMessage() {
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
-        if (loading) onCancelClick() else onSendClick()
+        if (loading && state.isEmpty() && !queuedEdit) onCancelClick() else onSendClick()
     }
 
     fun sendMessageWithoutAnswer() {
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
-        if (loading) onCancelClick() else onLongSendClick()
+        if (loading && state.isEmpty() && !queuedEdit) onCancelClick() else onLongSendClick()
     }
 
     val asr = LocalASRState.current
-    androidx.compose.runtime.DisposableEffect(speechPage) {
+    androidx.compose.runtime.DisposableEffect(speechPage, state) {
         onDispose { asr.cancel(speechPage) }
     }
     val asrState by asr.state.collectAsState()
@@ -201,7 +206,7 @@ internal fun ChatInput(
     }
     val asrPermission = rememberPermissionState(PermissionRecordAudio)
     PermissionManager(permissionState = asrPermission)
-    var asrBaseText by remember { mutableStateOf("") }
+    var asrBaseText by remember(state) { mutableStateOf("") }
     val onAsrClick = {
         when (asrState.status) {
             ASRStatus.Listening -> asr.stop()
@@ -275,7 +280,8 @@ internal fun ChatInput(
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     if (state.messageContent.isNotEmpty()) {
-                        MediaFileInputRow(state = state, artifactDraftScope = artifactDraftScope)
+                        MediaFileInputRow(state = state, artifactDraftScope = artifactDraftScope, readPreviews = readInputPreviews,
+                            onAnnotateImage = onAnnotateImage)
                     }
 
                     val actionRow: @Composable (Modifier) -> Unit = { actionModifier ->
@@ -347,10 +353,12 @@ internal fun ChatInput(
                             exit = fadeOut() + scaleOut(),
                         ) {
                             SendButton(
+                                queuedEdit = queuedEdit,
                                 loading = loading,
                                 empty = state.isEmpty(),
                                 onClick = ::sendMessage,
                                 onLongClick = ::sendMessageWithoutAnswer,
+                                onCancel = onCancelClick,
                             )
                         }
                         }
@@ -363,10 +371,12 @@ internal fun ChatInput(
                                 onClick = onAsrClick,
                             )
                             actionVisibility.showTrailingSend -> SendButton(
+                                queuedEdit = queuedEdit,
                                 loading = loading,
                                 empty = state.isEmpty(),
                                 onClick = ::sendMessage,
                                 onLongClick = ::sendMessageWithoutAnswer,
+                                onCancel = onCancelClick,
                             )
                         }
                     }
@@ -386,6 +396,7 @@ internal fun ChatInput(
                                 assistant = assistant,
                                 completionProviders = completionProviders,
                                 onSendMessage = { sendMessage() },
+                                onCancelEdit = onCancelEdit,
                                 modifier = Modifier.weight(1f),
                                 maxHeightInLines = 2,
                                 trailingContent = trailingSendButton,
@@ -402,6 +413,7 @@ internal fun ChatInput(
                             assistant = assistant,
                             completionProviders = completionProviders,
                             onSendMessage = { sendMessage() },
+                            onCancelEdit = onCancelEdit,
                             trailingContent = trailingSendButton,
                         )
                         AnimatedVisibility(
@@ -444,35 +456,45 @@ internal fun chatInputActionVisibility(
 
 @Composable
 private fun SendButton(
+    queuedEdit: Boolean,
     loading: Boolean,
     empty: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onCancel: () -> Unit,
 ) {
+    val stopOnly = loading && empty && !queuedEdit
     val containerColor = when {
-        loading -> MaterialTheme.colorScheme.errorContainer
+        stopOnly -> MaterialTheme.colorScheme.errorContainer
         empty -> MaterialTheme.colorScheme.surfaceContainerHigh
         else -> MaterialTheme.colorScheme.primary
     }
     val contentColor = when {
-        loading -> MaterialTheme.colorScheme.onErrorContainer
+        stopOnly -> MaterialTheme.colorScheme.onErrorContainer
         empty -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
         else -> MaterialTheme.colorScheme.onPrimary
     }
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier.size(30.dp).testTag("chat_send_button").clip(CircleShape)
-            .combinedClickable(
-                enabled = loading || !empty,
-                onClick = onClick,
-                onLongClick = onLongClick,
-            ),
-    ) {
-        Surface(Modifier.fillMaxSize(), shape = CircleShape, color = containerColor, content = {})
-        if (loading) {
-            Icon(HugeIcons.Cancel01, stringResource(R.string.stop), tint = contentColor, modifier = Modifier.size(18.dp))
-        } else {
-            Icon(HugeIcons.ArrowUp02, stringResource(R.string.send), tint = contentColor, modifier = Modifier.size(18.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (loading && (!empty || queuedEdit)) ActionIconButton(onClick = onCancel) {
+            Icon(HugeIcons.Cancel01, stringResource(R.string.stop), modifier = Modifier.size(18.dp))
+        }
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.size(30.dp).testTag("chat_send_button").clip(CircleShape)
+                .combinedClickable(
+                    enabled = (!queuedEdit && loading) || !empty,
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                ),
+        ) {
+            Surface(Modifier.fillMaxSize(), shape = CircleShape, color = containerColor, content = {})
+            if (stopOnly) {
+                Icon(HugeIcons.Cancel01, stringResource(R.string.stop), tint = contentColor, modifier = Modifier.size(18.dp))
+            } else {
+                Icon(if (queuedEdit) HugeIcons.Tick02 else HugeIcons.ArrowUp02,
+                    stringResource(if (queuedEdit) R.string.chat_page_save else R.string.send),
+                    tint = contentColor, modifier = Modifier.size(18.dp))
+            }
         }
     }
 }
@@ -510,6 +532,7 @@ private fun TextInputRow(
     assistant: Assistant,
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
+    onCancelEdit: () -> Unit,
     modifier: Modifier = Modifier,
     maxHeightInLines: Int = 5,
     trailingContent: @Composable () -> Unit = {},
@@ -546,7 +569,7 @@ private fun TextInputRow(
                     Icon(
                         imageVector = HugeIcons.Cancel01,
                         contentDescription = stringResource(R.string.cancel_edit),
-                        modifier = Modifier.clickable { state.clearInput() }
+                        modifier = Modifier.clickable(onClick = onCancelEdit)
                     )
                 }
             }

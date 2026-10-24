@@ -61,6 +61,11 @@ internal class EnterpriseDataResetStore(private val root: File) {
     private val json get() = EnterpriseConfigurationCodec.json
     private val intentFile get() = AtomicFile(File(root, "intent.json"))
 
+    private val _changes = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    /** Wake-up signal only; admission always rereads the durable intent. */
+    val changes: kotlinx.coroutines.flow.StateFlow<Long> = _changes
+
+    @Synchronized
     fun read(): EnterpriseDataResetIntent? {
         if (!intentFile.baseFile.exists() && !File(root, "intent.json.bak").exists()) return null
         val intent = try {
@@ -71,7 +76,7 @@ internal class EnterpriseDataResetStore(private val root: File) {
             }
         } catch (error: Exception) {
             if (error is kotlinx.coroutines.CancellationException) throw error
-            throw EnterpriseStorageException("invalid_enterprise_reset_intent")
+            throw EnterpriseStorageException("invalid_enterprise_reset_intent").apply { initCause(error) }
         }
         val idsValid = try {
             Uuid.parse(intent.operationId)
@@ -90,6 +95,7 @@ internal class EnterpriseDataResetStore(private val root: File) {
         return intent
     }
 
+    @Synchronized
     fun write(intent: EnterpriseDataResetIntent) {
         if (!root.isDirectory && !root.mkdirs()) throw EnterpriseStorageException("enterprise_reset_directory_failed")
         val bytes = json.encodeToString(intent).toByteArray(Charsets.UTF_8)
@@ -101,20 +107,32 @@ internal class EnterpriseDataResetStore(private val root: File) {
             stream.write(bytes)
             stream.fd.sync()
             atomic.finishWrite(stream)
+            stream = null
             if (!atomic.baseFile.inputStream().use { it.readBytes() }.contentEquals(bytes)) {
                 throw EnterpriseStorageException("enterprise_reset_commit_failed")
             }
         } catch (error: Exception) {
-            atomic.failWrite(stream)
+            if (stream != null) atomic.failWrite(stream)
             if (error is kotlinx.coroutines.CancellationException) throw error
-            throw EnterpriseStorageException("enterprise_reset_commit_failed")
+            throw EnterpriseStorageException("enterprise_reset_commit_failed").apply { initCause(error) }
+        } finally {
+            _changes.value++
         }
     }
 
+    @Synchronized
     fun clear() {
-        File(root, "intent.json.bak").delete()
-        File(root, "intent.json.new").delete()
-        intentFile.baseFile.delete()
+        try {
+            for (file in listOf(File(root, "intent.json.new"), File(root, "intent.json.bak"), intentFile.baseFile)) {
+                if (file.exists() && !file.delete()) {
+                    throw java.io.IOException("Cannot remove enterprise reset intent: ${file.absolutePath}")
+                }
+            }
+        } catch (error: Exception) {
+            throw EnterpriseStorageException("enterprise_reset_clear_failed").apply { initCause(error) }
+        } finally {
+            _changes.value++
+        }
     }
 
     private companion object { const val MAX_BYTES = 64 * 1024 }

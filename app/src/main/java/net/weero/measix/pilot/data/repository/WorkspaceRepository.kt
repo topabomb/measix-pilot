@@ -203,6 +203,11 @@ class WorkspaceRepository(
         manager.listFiles(workspace.root, path, area)
     }
 
+    suspend fun guestPath(id: String, area: WorkspaceStorageArea, path: String) = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: throw java.io.FileNotFoundException("workspace_missing: $id")
+        manager.guestPath(workspace.root, area, path)
+    }
+
     suspend fun readText(
         id: String,
         path: String,

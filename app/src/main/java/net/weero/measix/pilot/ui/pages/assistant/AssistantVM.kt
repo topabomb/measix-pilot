@@ -2,6 +2,13 @@ package net.weero.measix.pilot.ui.pages.assistant
 
 import me.rerere.common.configuration.ConfigurationReference
 import androidx.lifecycle.ViewModel
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.service.AssistantDeletionPreview
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,12 +26,24 @@ import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.service.AssistantManagementService
 import net.weero.measix.pilot.service.ArtifactUseCase
 
+internal data class PendingAssistantDeletionConfirmation(val assistant: Assistant, val preview: AssistantDeletionPreview)
+
 class AssistantVM(
     private val settingsStore: SettingsStore,
     private val memoryService: MemoryService,
     private val assistantManagementService: AssistantManagementService,
     private val artifactUseCase: ArtifactUseCase,
 ) : ViewModel() {
+    internal var pendingDeletion by mutableStateOf<PendingAssistantDeletionConfirmation?>(null)
+        private set
+    var deletionBusy by mutableStateOf(false)
+        private set
+    var deletionFailure by mutableStateOf<String?>(null)
+        private set
+    var deletionNeedsReview by mutableStateOf(false)
+        private set
+    var deletionCleanupPending by mutableStateOf(false)
+        private set
     private val _lockedChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
     val lockedChanges = _lockedChanges.asSharedFlow()
     val settings: StateFlow<Settings> = settingsStore.userSettings
@@ -67,7 +86,40 @@ class AssistantVM(
     }
 
     fun removeAssistant(assistant: Assistant) {
-        updateSettings { assistantManagementService.deleteAssistant(assistant.id) }
+        if (deletionBusy) return
+        deletionCommand {
+            pendingDeletion = PendingAssistantDeletionConfirmation(assistant, assistantManagementService.prepareDeletion(assistant.id))
+        }
+    }
+
+    fun dismissDeletion() { if (!deletionBusy) pendingDeletion = null }
+    fun dismissDeletionFailure() { deletionFailure = null; deletionCleanupPending = false }
+
+    internal fun confirmDeletion(expected: PendingAssistantDeletionConfirmation) {
+        if (deletionBusy || pendingDeletion !== expected) return
+        pendingDeletion = null
+        deletionCommand {
+            val result = assistantManagementService.deleteAssistant(expected.assistant.id, preview = expected.preview).getOrThrow()
+            deletionCleanupPending = result.cleanupPending
+        }
+    }
+
+    private fun deletionCommand(operation: suspend () -> Unit) {
+        deletionBusy = true
+        viewModelScope.launch {
+            try {
+                operation()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                logDiagnosticFailure("AssistantVM", "Assistant deletion failed", error)
+                deletionNeedsReview = error is net.weero.measix.pilot.data.datastore.AssistantManagementRejection &&
+                    error.reason in setOf("assistant_pending_inputs_changed", "assistant_pending_inputs_confirmation_required")
+                deletionFailure = error.userVisibleDiagnostic()
+            } finally {
+                deletionBusy = false
+            }
+        }
     }
 
     fun copyAssistant(assistant: Assistant) {

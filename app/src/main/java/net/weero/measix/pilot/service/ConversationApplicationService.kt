@@ -6,6 +6,7 @@ import net.weero.measix.pilot.service.subassistant.SubAssistantLifecycle
 import net.weero.measix.pilot.service.subassistant.forkSubAssistantTree
 import me.rerere.common.configuration.ConfigurationReference
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
@@ -50,6 +51,7 @@ import net.weero.measix.pilot.service.runtime.TogglePinned
 import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.service.runtime.BindDraftOpening
 import net.weero.measix.pilot.service.runtime.currentTurnPresentation
+import net.weero.measix.pilot.service.runtime.InputQueuePauseReason
 import kotlinx.serialization.json.Json
 import kotlin.uuid.Uuid
 
@@ -142,9 +144,19 @@ class ConversationApplicationService internal constructor(
     suspend fun newDraftRequest(
         selection: RealmSelection,
         assistantId: ConfigurationReference? = null,
+        folder: Pair<ConversationFolderAccess, Uuid>? = null,
     ): ConversationOpenRequest.NewDraft {
         recoveryGate.awaitReady()
-        return sessions.withSelectedRealmSelection(selection) { createDraftRequest(selection, assistantId) }
+        return sessions.withSelectedRealmSelection(selection) {
+            val request = createDraftRequest(selection, assistantId)
+            folder?.let { (access, id) ->
+                check(access.selection == selection && access.assistantId == request.assistantId) {
+                    "draft_folder_scope_mismatch"
+                }
+                requireFolder(access, id)
+            }
+            request.copy(folderId = folder?.second)
+        }
     }
 
     internal suspend fun newStarterDraftRequest(target: EnterpriseStarterTarget): StarterDraftRequest {
@@ -283,7 +295,7 @@ class ConversationApplicationService internal constructor(
                         try {
                             val presets = artifactStore.materializeConfigurationMessages(request.access.scope, assistant.presetMessages, owned)
                             val conversation = Conversation.ofId(id = request.id, assistantId = assistant.id, newConversation = true)
-                                .copy(scope = request.access.scope).updateCurrentMessages(presets)
+                                .copy(scope = request.access.scope, folderId = request.folderId).updateCurrentMessages(presets)
                             net.weero.measix.pilot.service.runtime.ConversationDraft(
                                 conversation,
                                 artifactStore, owned.toList(),
@@ -425,6 +437,8 @@ class ConversationApplicationService internal constructor(
         targetTokens: Int,
         keepRecentMessages: Int,
     ): Result<Unit> {
+        require(keepRecentMessages >= 0) { "invalid_history_summary_retention" }
+        require(targetTokens > 0) { "invalid_history_summary_token_target" }
         var owned: Deferred<Result<Unit>>? = null
         var ownerRuntime: ConversationRuntime? = null
         var failure: Throwable? = null
@@ -434,6 +448,7 @@ class ConversationApplicationService internal constructor(
                 ownerRuntime = runtime
                 owned = sideEffects.launchCompression(runtime, target.selection.access, additionalPrompt, targetTokens, keepRecentMessages) { summary ->
                     val current = runtime.durable
+                    runtime.pauseInputQueue(InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true)
                     commandCoordinator.executeOrThrow(current.conversationId,
                         net.weero.measix.pilot.service.runtime.InsertHistorySummaryCheckpoint(
                             current.nodes, current.modelContextEntries, summary.node, summary.origin, summary.insertIndex))
@@ -454,6 +469,24 @@ class ConversationApplicationService internal constructor(
                 if (failure !== error) failure.addSuppressed(error)
             }
         }
+    }
+
+    internal suspend fun updateDraftFolder(
+        target: ConversationAssistantTarget,
+        access: ConversationFolderAccess,
+        folderId: Uuid?,
+    ) = withRootCommand(target.conversation) {
+        check(access.selection == target.conversation.selection && access.assistantId == target.assistantId) {
+            "draft_folder_scope_mismatch"
+        }
+        val snapshot = commandCoordinator.load(target.conversation.conversationId).durable
+        check(snapshot.header.newConversation && snapshot.header.assistantId == target.assistantId) {
+            "conversation_draft_target_changed"
+        }
+        folderId?.let { requireFolder(access, it) }
+        commandCoordinator.executeOrThrow(snapshot.conversationId, UpdateHeader(
+            folderId = folderId?.let(OptionalFolderId::SetTo) ?: OptionalFolderId.Clear,
+        ))
     }
 
     suspend fun moveToFolder(access: ConversationFolderAccess, conversation: ConversationSummary, folderId: Uuid?) =
@@ -534,6 +567,10 @@ class ConversationApplicationService internal constructor(
             commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) { headers ->
                 target.requireOpen()
                 check(headers.single().assistantId == assistantTarget.assistantId) { "conversation_assistant_changed" }
+                if (assistantId != assistantTarget.assistantId) {
+                    runtimeRegistry.findRuntime(target.conversationId)?.pauseInputQueue(
+                        InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true)
+                }
                 commandCoordinator.executeOrThrow(target.conversationId, MoveToAssistant(assistantId))
             }
         }
@@ -541,11 +578,30 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    suspend fun delete(target: ConversationCommandTarget): ConversationDeletionReceipt {
-        stopGeneration(target)
+    suspend fun prepareDeletion(targets: List<ConversationCommandTarget>): ConversationDeletionPreview {
+        val distinct = targets.distinctBy { it.conversationId }
+        if (distinct.isEmpty()) return ConversationDeletionPreview(null, emptyList())
+        return withDeletionTargets(targets) {
+            ConversationDeletionPreview(distinct.first().selection, distinct.map(::deletionTargetSnapshot))
+        }
+    }
+
+    suspend fun delete(
+        target: ConversationCommandTarget,
+        preview: ConversationDeletionPreview? = null,
+    ): ConversationDeletionReceipt {
+        stopForDeletion(listOf(target), preview)
+        return deleteStopped(target, preview)
+    }
+
+    private suspend fun deleteStopped(
+        target: ConversationCommandTarget,
+        preview: ConversationDeletionPreview?,
+    ): ConversationDeletionReceipt {
         val assistantId = withTreeCommand(target) {
             val header = requireNotNull(conversationRepo.getConversationHeader(target.conversationId)) { "conversation_not_found" }
             val childIds = conversationRepo.getChildConversationIds(target.conversationId)
+            requireDeletionQueue(target, preview)
             commandCoordinator.deleteOrThrow(target.conversationId)
             (childIds + target.conversationId).forEach(sideEffects::clearTitleTracking)
             header.assistantId
@@ -582,11 +638,15 @@ class ConversationApplicationService internal constructor(
             }
         }
 
-    suspend fun deleteForUndo(target: ConversationCommandTarget): RestoreToken {
-        stopGeneration(target)
+    suspend fun deleteForUndo(
+        target: ConversationCommandTarget,
+        preview: ConversationDeletionPreview? = null,
+    ): RestoreToken {
+        stopForDeletion(listOf(target), preview)
         var retention: ArtifactRetentionLease? = null
         try {
             return withTreeCommand(target) {
+                requireDeletionQueue(target, preview)
                 val deleted = commandCoordinator.deleteCapturingTree(target.conversationId) { tree ->
                     retention = artifactStore.retainNodesForUndo(tree.root.header.scope, (listOf(tree.root) + tree.children).map { it.nodes })
                 }
@@ -616,46 +676,220 @@ class ConversationApplicationService internal constructor(
     fun discardRestoreToken(token: RestoreToken) = token.close()
 
     /** Deletes the set the user reviewed; conversations created later are not silently included. */
-    suspend fun deleteConversations(targets: List<ConversationCommandTarget>, onDeleted: suspend (ConversationDeletionReceipt) -> Unit = {}) {
-        val first = targets.firstOrNull() ?: return
-        withCommandTarget(first) {
+    suspend fun deleteConversations(
+        targets: List<ConversationCommandTarget>,
+        preview: ConversationDeletionPreview? = null,
+        onDeleted: suspend (ConversationDeletionReceipt) -> Unit = {},
+    ) {
+        if (targets.isEmpty()) return
+        stopForDeletion(targets, preview)
+        targets.distinctBy { it.conversationId }.forEach { onDeleted(deleteStopped(it, preview)) }
+    }
+
+    private suspend fun <T> withDeletionTargets(
+        targets: List<ConversationCommandTarget>,
+        operation: suspend () -> T,
+    ): T {
+        val first = targets.first()
+        return withCommandTarget(first) {
             check(targets.all { it.selection == first.selection }) { "conversation_selection_mismatch" }
-            targets.forEach { it.requireOpen() }
-            commandCoordinator.withRootHeaders(first.selection.access.scope, targets.map { it.conversationId }) {}
+            commandCoordinator.withRootHeaders(first.selection.access.scope, targets.map { it.conversationId }.distinct()) {
+                targets.forEach { it.requireOpen() }
+                operation()
+            }
         }
-        targets.distinctBy { it.conversationId }.forEach { onDeleted(delete(it)) }
+    }
+
+    private fun deletionTargetSnapshot(target: ConversationCommandTarget): ConversationDeletionTargetSnapshot {
+        val runtime = runtimeRegistry.findRuntime(target.conversationId)
+        val committedMessages = runtime?.durable?.nodes?.flatMap { it.messages }?.mapTo(hashSetOf()) { it.id }.orEmpty()
+        val pending = runtime?.inputQueue?.value?.items.orEmpty().filterNot { it.userMessageId in committedMessages }
+            .associate { it.id to PendingDeletionInput(it.version, it.userMessageId) }
+        return ConversationDeletionTargetSnapshot(target, runtime, pending)
+    }
+
+    /** Dequeue/withdrawal may narrow an approval; a new item or edited version cannot widen it. */
+    private fun requireDeletionQueue(target: ConversationCommandTarget, preview: ConversationDeletionPreview?) {
+        val current = deletionTargetSnapshot(target)
+        if (current.pendingInputs.isEmpty()) return
+        check(preview != null) { "conversation_pending_inputs_confirmation_required" }
+        val approved = preview.targets.singleOrNull { it.target === target }
+        check(approved != null && approved.runtime === current.runtime &&
+            current.pendingInputs.all { (id, pending) -> approved.pendingInputs[id] == pending }) {
+            "conversation_pending_inputs_changed"
+        }
+    }
+
+    private suspend fun stopForDeletion(targets: List<ConversationCommandTarget>, preview: ConversationDeletionPreview?) {
+        stopCapturedRequests { owned, workers ->
+            withDeletionTargets(targets) {
+                val distinct = targets.distinctBy { it.conversationId }
+                if (preview != null) {
+                    check(preview.selection == distinct.first().selection && preview.targets.size == distinct.size &&
+                        distinct.all { target -> preview.targets.any { it.target === target } }) {
+                        "conversation_deletion_preview_mismatch"
+                    }
+                }
+                // Validate the entire batch before stopping any of its requests.
+                distinct.forEach { requireDeletionQueue(it, preview) }
+                distinct.forEach { target ->
+                    runtimeRegistry.findRuntime(target.conversationId)?.pauseInputQueue(InputQueuePauseReason.USER_STOP)
+                    turnFinalizer.captureStop(target.conversationId)?.let(owned::add)
+                    runtimeRegistry.findRuntime(target.conversationId)?.let { captureLastRequestWorker(it, workers) }
+                }
+            }
+        }
     }
 
     internal suspend fun cancelGenerationsForAssistant(assistantId: ConfigurationReference, reason: String) {
         val requests = mutableListOf<TurnFinalizer.StopRequest>()
+        val workers = linkedSetOf<Job>()
         runtimeRegistry.activeRuntimes()
             .sortedBy { it.durable.header.parentConversationId == null }.forEach { runtime ->
                 commandCoordinator.withResidentRuntime(runtime.id) { current ->
                     if (current === runtime) {
+                        if (current.durable.header.assistantId == assistantId) {
+                            current.pauseInputQueue(InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true)
+                        }
                         turnFinalizer.captureStop(current.id, reason, assistantId)?.let(requests::add)
+                        if (current.durable.header.assistantId == assistantId) captureLastRequestWorker(current, workers)
                     }
                 }
             }
+        // Assistant deletion has a bounded stop deadline; unfinished owners remain for its tombstone retry.
+        workers.forEach { it.join() }
         requests.forEach { turnFinalizer.awaitStoppedWorkers(it) }
-        stopCapturedRequests { it.addAll(requests) }
+        stopCapturedRequests { owned, _ -> owned.addAll(requests) }
+        runtimeRegistry.activeRuntimes().filter { it.durable.header.assistantId == assistantId }.forEach { runtime ->
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime && current.durable.header.assistantId == assistantId) clearStoppedInputQueue(current.id)
+            }
+        }
     }
 
     internal suspend fun deleteOfAssistantFromPendingCleanup(assistantId: ConfigurationReference) {
         conversationRepo.getConversationsOfAssistant(ConfigurationScope.Personal, assistantId).first().forEach { conversation ->
-            turnFinalizer.stopTurn(conversation.id)
+            stopCapturedRequests { owned, workers ->
+                commandCoordinator.withResidentRuntime(conversation.id) { runtime ->
+                    runtime?.pauseInputQueue(InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true)
+                    turnFinalizer.captureStop(conversation.id)?.let(owned::add)
+                    runtime?.let { captureLastRequestWorker(it, workers) }
+                }
+            }
             val childIds = conversationRepo.getChildConversationIds(conversation.id)
+            commandCoordinator.withResidentRuntime(conversation.id) {
+                clearStoppedInputQueue(conversation.id)
+            }
             commandCoordinator.deleteFromPendingCleanup(conversation.id)
             (childIds + conversation.id).forEach(sideEffects::clearTitleTracking)
         }
     }
 
-    suspend fun stopGeneration(target: ConversationCommandTarget) = stopCapturedRequests { owned ->
-        withRootCommand(target) { turnFinalizer.captureStop(target.conversationId)?.let(owned::add) }
+    suspend fun stopGeneration(target: ConversationCommandTarget) = stopCapturedRequests { owned, workers ->
+        withRootCommand(target) {
+            runtimeRegistry.findRuntime(target.conversationId)?.let { runtime ->
+                runtime.pauseInputQueue(InputQueuePauseReason.USER_STOP)
+            }
+            turnFinalizer.captureStop(target.conversationId)?.let(owned::add)
+            runtimeRegistry.findRuntime(target.conversationId)?.let { captureLastRequestWorker(it, workers) }
+        }
+    }
+
+    /** Caller holds Session admission; shared-definition cleanup affects runtimes in every space. */
+    internal suspend fun captureAssistantDeletionInputs(
+        assistantId: ConfigurationReference,
+    ): Map<ConversationRuntime, Map<Uuid, PendingDeletionInput>> {
+        val captured = mutableMapOf<ConversationRuntime, Map<Uuid, PendingDeletionInput>>()
+        runtimeRegistry.activeRuntimes().filter { it.durable.header.assistantId == assistantId }.forEach { runtime ->
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime && current.durable.header.assistantId == assistantId) {
+                    val items = current.inputQueue.value.items
+                    if (items.isNotEmpty()) {
+                        val committed = current.durable.nodes.flatMap { it.messages }.mapTo(hashSetOf()) { it.id }
+                        val pending = items.filterNot { it.userMessageId in committed }
+                            .associate { it.id to PendingDeletionInput(it.version, it.userMessageId) }
+                        if (pending.isNotEmpty()) captured[current] = pending
+                    }
+                }
+            }
+        }
+        return captured
+    }
+
+    /** Called after Settings validates the mutation; release roots before its Artifact/durable commit. */
+    internal suspend fun requireAssistantDeletionInputs(
+        assistantId: ConfigurationReference,
+        preview: AssistantDeletionPreview?,
+    ) {
+        val current = captureAssistantDeletionInputs(assistantId)
+        if (current.isEmpty()) return
+        if (preview == null) throw net.weero.measix.pilot.data.datastore.AssistantManagementRejection(
+            "assistant_pending_inputs_confirmation_required")
+        if (!current.all { (runtime, inputs) ->
+                val approved = preview.queues[runtime]
+                approved != null && inputs.all { (id, revision) -> approved[id] == revision }
+            }) throw net.weero.measix.pilot.data.datastore.AssistantManagementRejection("assistant_pending_inputs_changed")
+    }
+
+    /** Caller holds the original Session boundary; no Session lock may be acquired here. */
+    internal suspend fun captureEnterpriseExitInputs(
+        access: RealmAccess.Enterprise,
+    ): Map<ConversationRuntime, Map<Uuid, PendingDeletionInput>> {
+        val captured = mutableMapOf<ConversationRuntime, Map<Uuid, PendingDeletionInput>>()
+        runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == access.scope }.forEach { runtime ->
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime && current.durable.header.scope == access.scope) {
+                    val items = current.inputQueue.value.items
+                    if (items.isNotEmpty()) {
+                        val committed = current.durable.nodes.flatMap { it.messages }.mapTo(hashSetOf()) { it.id }
+                        val pending = items.filterNot { it.userMessageId in committed }
+                            .associate { it.id to PendingDeletionInput(it.version, it.userMessageId) }
+                        if (pending.isNotEmpty()) captured[current] = pending
+                    }
+                }
+            }
+        }
+        return captured
+    }
+
+    /** Invoked under the same Session lock that immediately commits CLOSING. */
+    internal suspend fun requireEnterpriseExitInputs(preview: EnterpriseExitPreview) {
+        val current = captureEnterpriseExitInputs(preview.access)
+        if (!current.all { (runtime, inputs) ->
+                val approved = preview.queues[runtime]
+                approved != null && inputs.all { (id, revision) -> approved[id] == revision }
+            }) {
+            throw net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException("enterprise_pending_inputs_changed")
+        }
+    }
+
+    /** Called inside the Session switch boundary; it must not acquire that boundary again. */
+    internal suspend fun pauseInputQueuesForRealmSwitch(access: RealmAccess) {
+        runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == access.scope }.forEach { runtime ->
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime && current.durable.header.scope == access.scope) {
+                    current.pauseInputQueue(InputQueuePauseReason.REALM_CHANGED)
+                }
+            }
+        }
+    }
+
+    private fun captureLastRequestWorker(runtime: ConversationRuntime, workers: MutableSet<Job>) {
+        runtime.lastRequestWorker()?.takeUnless { it.isCompleted }?.let { worker ->
+            worker.cancel()
+            workers += worker
+        }
+    }
+
+    /** The caller owns the conversation boundary and has already awaited its stop receipt. */
+    private fun clearStoppedInputQueue(conversationId: Uuid) {
+        runtimeRegistry.findRuntime(conversationId)?.takeIf { it.inputQueue.value.items.isNotEmpty() }
+            ?.clearInputQueueAfterStop()
     }
 
     /** CLOSING prevents any new Session from owning this scope until every captured worker is finalized. */
     internal suspend fun stopEnterpriseWork(token: net.weero.measix.pilot.data.enterprise.EnterpriseExitToken) {
-        stopCapturedRequests { owned ->
+        stopCapturedRequests { owned, workers ->
             sessions.withClosingSession(token) {
                 val runtimes = runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == token.access.scope }
                     .sortedBy { it.durable.header.parentConversationId == null }
@@ -663,9 +897,18 @@ class ConversationApplicationService internal constructor(
                     commandCoordinator.withResidentRuntime(runtime.id) { current ->
                         if (current != null) {
                             check(current.durable.header.scope == token.access.scope) { "enterprise_exit_runtime_changed" }
+                            current.pauseInputQueue(InputQueuePauseReason.REALM_CHANGED)
                             turnFinalizer.captureStop(current.id)?.let(owned::add)
+                            captureLastRequestWorker(current, workers)
                         }
                     }
+                }
+            }
+        }
+        sessions.withClosingSession(token) {
+            runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == token.access.scope }.forEach { runtime ->
+                commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                    if (current === runtime) clearStoppedInputQueue(current.id)
                 }
             }
         }
@@ -676,9 +919,57 @@ class ConversationApplicationService internal constructor(
     internal suspend fun requireEnterpriseStopped(token: net.weero.measix.pilot.data.enterprise.EnterpriseExitToken) {
         sessions.withClosingSession(token) {
             check(runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == token.access.scope }.none {
-                it.hasAuxiliaryWork || it.currentWorker()?.isCompleted == false || it.snapshot.value.stream != null
+                it.hasAuxiliaryWork || it.lastRequestWorker()?.isCompleted == false || it.snapshot.value.stream != null ||
+                    it.hasExecutionLeases || it.inputQueue.value.items.isNotEmpty()
             }) { "enterprise_workers_pending" }
             check(conversationRepo.countUnfinishedTurns(token.access.scope) == 0) { "enterprise_turns_pending" }
+        }
+    }
+
+    /** Reset admission owns Session serialization and covers all enterprise scopes, including residual ones. */
+    internal suspend fun captureEnterpriseResetInputs(): Map<ConversationRuntime, Map<Uuid, PendingDeletionInput>> {
+        val captured = mutableMapOf<ConversationRuntime, Map<Uuid, PendingDeletionInput>>()
+        runtimeRegistry.activeRuntimes().filter { it.durable.header.scope is ConfigurationScope.Enterprise }.forEach { runtime ->
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime && current.durable.header.scope is ConfigurationScope.Enterprise) {
+                    val items = current.inputQueue.value.items
+                    if (items.isNotEmpty()) {
+                        val committed = current.durable.nodes.flatMap { it.messages }.mapTo(hashSetOf()) { it.id }
+                        val pending = items.filterNot { it.userMessageId in committed }
+                            .associate { it.id to PendingDeletionInput(it.version, it.userMessageId) }
+                        if (pending.isNotEmpty()) captured[current] = pending
+                    }
+                }
+            }
+        }
+        return captured
+    }
+
+    internal suspend fun requireEnterpriseResetInputs(preview: EnterpriseResetPreview) {
+        if (!captureEnterpriseResetInputs().all { (runtime, inputs) ->
+                val approved = preview.queues[runtime]
+                approved != null && inputs.all { (id, revision) -> approved[id] == revision }
+            }) throw net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException("enterprise_pending_inputs_changed")
+    }
+
+    /** The durable reset intent already blocks enterprise admission; this grants no old Session new access. */
+    internal suspend fun clearEnterpriseInputQueuesAfterResetStop() {
+        stopCapturedRequests { owned, workers ->
+            runtimeRegistry.activeRuntimes().filter { it.durable.header.scope is ConfigurationScope.Enterprise }
+                .sortedBy { it.durable.header.parentConversationId == null }.forEach { runtime ->
+                    commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                        if (current === runtime) {
+                            current.pauseInputQueue(InputQueuePauseReason.REALM_CHANGED)
+                            turnFinalizer.captureStop(current.id)?.let(owned::add)
+                            captureLastRequestWorker(current, workers)
+                        }
+                    }
+                }
+        }
+        runtimeRegistry.activeRuntimes().filter { it.durable.header.scope is ConfigurationScope.Enterprise }.forEach { runtime ->
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime) clearStoppedInputQueue(current.id)
+            }
         }
     }
 
@@ -689,12 +980,18 @@ class ConversationApplicationService internal constructor(
     internal suspend fun clearEnterpriseScope(scope: net.weero.measix.pilot.data.configuration.ConfigurationScope.Enterprise) {
         conversationRepo.getRootIds(scope).forEach { id ->
             val childIds = conversationRepo.getChildConversationIds(id)
+            commandCoordinator.withResidentRuntime(id) {
+                clearStoppedInputQueue(id)
+            }
             commandCoordinator.deleteFromPendingCleanup(id)
             (childIds + id).forEach(sideEffects::clearTitleTracking)
         }
         runtimeRegistry.activeRuntimes().filter { it.durable.header.scope == scope }.forEach { runtime ->
             check(runtimeRegistry.isDraft(runtime.id)) { "enterprise_conversation_cleanup_incomplete" }
-            runtimeRegistry.evictRuntime(runtime.id)
+            commandCoordinator.withResidentRuntime(runtime.id) {
+                clearStoppedInputQueue(runtime.id)
+                runtimeRegistry.evictRuntime(runtime.id)
+            }
         }
         folderRepository.getIdsInScope(scope).forEach { folderRepository.deleteEmptyFolder(it) }
     }
@@ -702,26 +999,35 @@ class ConversationApplicationService internal constructor(
     /** OS foreground timeout owns stopping the exact working requests captured at that event. */
     internal suspend fun stopForForegroundTimeout() {
         recoveryGate.awaitReady()
-        stopCapturedRequests { owned ->
+        stopCapturedRequests { owned, workers ->
             val ids = runtimeRegistry.activeRuntimes().map { it.durable.conversationId }
             ids.forEach { id ->
                 commandCoordinator.withResidentRuntime(id) { runtime ->
-                    if (runtime != null && runtime.durable.header.parentConversationId == null && runtime.currentTurnPresentation().isWorking) {
-                        turnFinalizer.captureStop(id)?.let(owned::add)
+                    if (runtime != null && runtime.durable.header.parentConversationId == null) {
+                        runtime.pauseInputQueue(InputQueuePauseReason.USER_STOP)
+                        if (runtime.currentTurnPresentation().isWorking) turnFinalizer.captureStop(id)?.let(owned::add)
+                        captureLastRequestWorker(runtime, workers)
                     }
                 }
             }
         }
     }
 
-    private suspend fun stopCapturedRequests(capture: suspend (MutableList<TurnFinalizer.StopRequest>) -> Unit) {
+    private suspend fun stopCapturedRequests(capture: suspend (MutableList<TurnFinalizer.StopRequest>, MutableSet<Job>) -> Unit) {
         val owned = mutableListOf<TurnFinalizer.StopRequest>()
+        val workers = linkedSetOf<Job>()
         var primary: Throwable? = null
-        try { capture(owned) }
+        try { capture(owned, workers) }
         catch (error: Throwable) { primary = error; throw error }
         finally {
             withContext(NonCancellable) {
                 var failure: Throwable? = primary
+                workers.forEach { worker ->
+                    try { worker.join() }
+                    catch (error: Throwable) {
+                        if (failure == null) failure = error else if (failure !== error) failure.addSuppressed(error)
+                    }
+                }
                 owned.forEach { request ->
                     try { turnFinalizer.finishStop(request) }
                     catch (error: Throwable) {
@@ -757,6 +1063,8 @@ class ConversationApplicationService internal constructor(
                     val isSummary = snapshot.modelContextEntries.any { it.ownerNodeId == node.id && it.ownerMessageId == original.id &&
                         it.payload.source is net.weero.measix.pilot.data.model.ConversationContextSource.HistorySummary }
                     val processedParts = if (isSummary) parts else preprocessUserInputParts(parts, assistant)
+                    runtimeRegistry.findRuntime(target.conversationId)?.pauseInputQueue(
+                        InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true)
                     commandCoordinator.executeOrThrow(target.conversationId, EditMessageVariant(
                         nodeId = node.id, variant = UIMessage(role = original.role, parts = processedParts,
                             modelId = original.modelId, modelInfo = original.modelInfo), sourceMessageId = original.id,
@@ -900,6 +1208,8 @@ class ConversationApplicationService internal constructor(
         val snapshot = liveSnapshot(target.conversationId)
         val node = snapshot.nodes.firstOrNull { it.id == nodeId } ?: throw NoSuchElementException("Message node not found")
         require(selectIndex in node.messages.indices) { "Invalid selectIndex" }
+        if (node.selectIndex != selectIndex) runtimeRegistry.findRuntime(target.conversationId)?.pauseInputQueue(
+            InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true)
         commandCoordinator.executeOrThrow(target.conversationId, SelectNodeVariant(nodeId, selectIndex))
     }
 
@@ -909,6 +1219,8 @@ class ConversationApplicationService internal constructor(
             val snapshot = liveSnapshot(target.conversationId)
             if (snapshot.nodes.none { node -> node.messages.any { it.id == message.id } }) return@withTreeCommand
             subAssistantLifecycle.requireClosedRunsBeforeTreeMutation(snapshot)
+            runtimeRegistry.findRuntime(target.conversationId)?.pauseInputQueue(
+                InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true)
             commandCoordinator.executeOrThrow(target.conversationId, DeleteMessage(message.id))
             subAssistantLifecycle.applyRetentionAfterTreeMutation(target.conversationId)
         }

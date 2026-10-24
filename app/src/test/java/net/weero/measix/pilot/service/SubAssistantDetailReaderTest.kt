@@ -350,7 +350,7 @@ class SubAssistantDetailReaderTest {
     }
 
     private suspend fun TestScope.fixture(): Fixture {
-        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         sessions.enrollFixture(exampleEnterprisePackage())
         return Fixture(sessions, sessions.captureSelectedRealmAccess(), StandardTestDispatcher(testScheduler))
     }
@@ -381,6 +381,7 @@ class SubAssistantDetailReaderTest {
             sessions, ApplicationRecoveryGate().apply { ready() }, mockk(), coordinator, mockk()), dispatcher)
 
         init {
+            coEvery { repository.getToolDurations(any()) } returns emptyMap()
             every { masterRuntime.snapshot } returns masterSnapshots
             every { childRuntime.snapshot } returns childSnapshots
             every { registry.observeRuntimeState(masterId) } returns masterState

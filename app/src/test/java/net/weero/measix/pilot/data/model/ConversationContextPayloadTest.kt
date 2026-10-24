@@ -12,6 +12,20 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class ConversationContextPayloadTest {
+    @Test fun `workspace origin roundtrips while historical system remains unknown`() {
+        val old = ConversationContextPayload(source = ConversationContextSource.System(emptyList()),
+            body = ConversationContextBody.Inline("unchanged system"))
+        val historical = ConversationContextCodec.encode(old).replace(",\"workspace\":null", "")
+        assertEquals(null, (ConversationContextCodec.decode(historical).source as ConversationContextSource.System).workspace)
+        val origin = WorkspaceContextOrigin(Uuid.random().toString(), "original-root", "/workspace/reports")
+        val current = old.copy(source = ConversationContextSource.System(emptyList(), origin))
+        assertEquals(current, ConversationContextCodec.decode(ConversationContextCodec.encode(current)))
+        assertEquals(old.body, current.body)
+        assertThrows(IllegalArgumentException::class.java) { origin.copy(version = 2) }
+        assertThrows(IllegalArgumentException::class.java) { origin.copy(cwd = "/../../private") }
+        assertThrows(IllegalArgumentException::class.java) { origin.copy(root = "../other") }
+    }
+
     private val locator = ContextMessageLocator(Uuid.random(), Uuid.random())
     private val assistant = ConfigurationReference.parse("11111111-1111-1111-1111-111111111111")
 

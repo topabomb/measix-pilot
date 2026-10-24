@@ -1,6 +1,6 @@
-﻿package net.weero.measix.pilot.ui.context
+package net.weero.measix.pilot.ui.context
 
 import androidx.compose.runtime.staticCompositionLocalOf
-import com.dokar.sonner.ToasterState
+import net.weero.measix.pilot.ui.components.toast.ToasterState
 
 val LocalToaster = staticCompositionLocalOf<ToasterState> { error("Not provided") }

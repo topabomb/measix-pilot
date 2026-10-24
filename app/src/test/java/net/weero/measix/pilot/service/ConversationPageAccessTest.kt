@@ -361,8 +361,46 @@ class ConversationPageAccessTest {
         io.mockk.confirmVerified(settings)
     }
 
+    @Test fun `draft folder captures original directory and rejects foreign assistant or selection`() = runTest {
+        val packet = exampleEnterprisePackage()
+        val sessions = sessions()
+        sessions.enrollFixture(packet)
+        val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val configuration = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+            net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope,
+            net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
+        val assistant = requireNotNull(configuration.selections.assistantId)
+        val settings = mockk<SettingsStore>()
+        coEvery { settings.withResolvedConfiguration<ConversationOpenRequest.NewDraft>(any(), any(), any()) } coAnswers {
+            thirdArg<suspend (net.weero.measix.pilot.data.configuration.ResolvedConfiguration) -> ConversationOpenRequest.NewDraft>()
+                .invoke(configuration)
+        }
+        val folders = mockk<net.weero.measix.pilot.data.repository.FolderRepository>()
+        val folder = net.weero.measix.pilot.data.model.Folder(assistantId = assistant, name = "Original", scope = packet.identity.scope)
+        coEvery { folders.getFolder(folder.id) } returns folder
+        val repository = mockk<ConversationRepository>()
+        val coordinator = mockk<ConversationCommandCoordinator>()
+        val service = application(repository, coordinator, sessions, settings, folders)
+        val directory = ConversationFolderAccess(selection, assistant)
+        val request = service.newDraftRequest(selection, assistant, directory to folder.id)
+        assertEquals(folder.id, request.folderId)
+        assertEquals(selection.access, request.access)
+        assertEquals(assistant, request.assistantId)
+        assertNull(service.newDraftRequest(selection, assistant).folderId)
+        assertFails<IllegalStateException> {
+            service.newDraftRequest(selection, assistant,
+                ConversationFolderAccess(selection, ConfigurationReference.random()) to folder.id)
+        }
+        sessions.selectPersonalFixture()
+        sessions.selectEnterpriseFixture()
+        assertFails<EnterpriseConfigurationException> {
+            service.newDraftRequest(selection, assistant, directory to folder.id)
+        }
+        io.mockk.confirmVerified(repository, coordinator)
+    }
+
     private fun gate() = ApplicationRecoveryGate().apply { ready() }
-    private fun sessions() = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+    private fun sessions() = EnterpriseSessionController(net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
     private fun query(sessions: EnterpriseSessionController) = ConversationQueryService(
         mockk(), mockk(), mockk(), mockk(), mockk(), sessions, gate(), mockk(), mockk(), mockk())
     private fun application(
@@ -370,8 +408,9 @@ class ConversationPageAccessTest {
         coordinator: ConversationCommandCoordinator,
         sessions: EnterpriseSessionController,
         settings: SettingsStore = mockk(),
+        folders: net.weero.measix.pilot.data.repository.FolderRepository = mockk(),
     ) = ConversationApplicationService(
-        settings, repository, mockk(), mockk(), coordinator, gate(), mockk(), mockk(), mockk(),
+        settings, repository, folders, mockk(), coordinator, gate(), mockk(), mockk(), mockk(),
         mockk(), mockk(), JsonInstant, mockk(), mockk(), sessions, mockk(),
     )
 

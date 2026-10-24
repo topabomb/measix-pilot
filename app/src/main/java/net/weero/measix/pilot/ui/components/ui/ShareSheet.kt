@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
@@ -96,6 +96,13 @@ fun ProviderSetting.encodeForShare(): String {
     }
 }
 
+// Shared configurations contain credentials, including arbitrary custom header values.
+// Keep decoder type/path/reason diagnostics without embedding private JSON input excerpts.
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+private val providerImportJson = kotlinx.serialization.json.Json(JsonInstant) {
+    exceptionsWithDebugInfo = false
+}
+
 fun decodeProviderSetting(value: String): ProviderSetting {
     require(value.startsWith("ai-provider:v1:")) { "Invalid provider setting string" }
 
@@ -106,7 +113,7 @@ fun decodeProviderSetting(value: String): ProviderSetting {
     val jsonBytes = Base64.decode(base64Str)
     val jsonStr = jsonBytes.decodeToString()
 
-    return JsonInstant.decodeFromString<ProviderSetting>(jsonStr)
+    return providerImportJson.decodeFromString<ProviderSetting>(jsonStr)
 }
 
 class ShareSheetState {

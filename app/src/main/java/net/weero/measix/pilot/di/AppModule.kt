@@ -81,7 +81,7 @@ val appModule = module {
     single { net.weero.measix.pilot.service.ModelExecutionService(get(), get(), get(), get(), get<AppScope>(), get(), get()) }
     single { net.weero.measix.pilot.service.MemoryService(get(), get(), get(), get(), get()) }
     single { ArtifactUseCase(get(), get(), get()) }
-    single { FileManagementApplicationService(get(), get(), get(), get(), remoteMediaFetcher = get()) }
+    single { FileManagementApplicationService(get(), get(), get(), get(), get(), remoteMediaFetcher = get()) }
     single { FileManagementQueryService(get(), get(), get(), get()) }
     single { MediaExportService(get()) }
     single { StatsQueryService(get(), get(), get(), get(), get()) }
@@ -369,7 +369,7 @@ val appModule = module {
     }
     single(createdAtStart = true) { net.weero.measix.pilot.service.EnterpriseApplicationService(
         sessions = get(), synchronization = get(), exit = get(), dataReset = get(), portals = get(), recovery = get(),
-        scope = get<AppScope>(), media = get(), terminals = get(), speech = get(), platform = get(), remoteWorkspace = get(), webDav = get(),
+        scope = get<AppScope>(), media = get(), terminals = get(), speech = get(), platform = get(), remoteWorkspace = get(), webDav = get(), conversations = get(),
     ) }
 
     single {

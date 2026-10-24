@@ -48,6 +48,7 @@ internal data class ProviderHarness(
 internal fun createProviderHarness(
     responseMessage: UIMessage = UIMessage.assistant("done"),
     toolOutputStore: ToolOutputStore = mockk(relaxed = true),
+    nanoTime: () -> Long = System::nanoTime,
 ): ProviderHarness {
     val model = Model(modelId = "test-model", displayName = "Test Model")
     val providerSetting = ProviderSetting.OpenAI(models = listOf(model))
@@ -86,6 +87,7 @@ internal fun createProviderHarness(
             json = Json,
             attachmentResolver = mockk<AttachmentResolver>(relaxed = true),
             toolOutputStore = toolOutputStore,
+            nanoTime = nanoTime,
         ),
         settings = Settings(
             providers = listOf(providerSetting),

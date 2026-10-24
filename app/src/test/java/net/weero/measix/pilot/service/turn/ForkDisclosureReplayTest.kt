@@ -122,7 +122,7 @@ class ForkDisclosureReplayTest {
         val registry = ConversationRuntimeRegistry(appScope, repository, locks)
         val gate = ApplicationRecoveryGate().apply { ready() }
         val coordinator = ConversationCommandCoordinator(registry, repository, gate, locks)
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()))
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         sessions.recover()
         registry.registerSnapshot(snapshot)
         val created = slot<ConversationAggregateSnapshot>()

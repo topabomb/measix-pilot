@@ -175,6 +175,20 @@ class ToolCallRuntimeTest {
     }
 
     @Test
+    fun `retired chart rejects old pending calls without preparing an execution`() {
+        val call = tool("old-chart", "chart_display", "{}", interactionState = ToolInteractionState.AwaitingApproval)
+        val preparation = prepare(listOf(call), emptyList())
+        val result = listOf(call).after(preparation).single()
+        assertFalse(result.isPending)
+        assertTrue(preparation.pending.isEmpty())
+        val envelope = Json.parseToJsonElement((result.output.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("tool_removed", envelope.getValue("reason").jsonPrimitive.content)
+        assertTrue(envelope.getValue("detail").jsonPrimitive.content.contains("HTML or SVG"))
+        assertEquals(ToolLivePhase.FAILED, resolveToolLivePhase(result, null))
+        assertTrue(preparation.resolvedCalls.none { it is ResolvedToolCall.Executable })
+    }
+
+    @Test
     fun `invalid old pending does not survive beside a valid pending question`() {
         val valid = tool("ask", "ask_user", """{"questions":[{"id":"q","question":"Continue?"}]}""")
         val bad = tool("bad", validatedTool.name, "{}", interactionState = ToolInteractionState.AwaitingApproval)

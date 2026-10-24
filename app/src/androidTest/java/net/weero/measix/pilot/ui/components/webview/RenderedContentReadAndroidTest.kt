@@ -16,6 +16,10 @@ import io.mockk.mockk
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -124,7 +128,58 @@ class RenderedContentReadAndroidTest {
         }
         compose.onNodeWithText("Ready").assertIsDisplayed()
         compose.onNodeWithText(failure.userVisibleDiagnostic()).assertDoesNotExist()
-        coVerify(exactly = 2) { files.readRenderedImage(source, any()) }
+        coVerify(exactly = 1) { files.readRenderedImage(source, any()) }
+    }
+
+    @Test fun closingPreviewCancelsBlockedReadAndRejectsLateRequestsWithoutClosingBorrowedView() {
+        verifyBlockedReadCancellation(revoke = false)
+    }
+
+    @Test fun revokingPreviewCancelsBlockedReadAndRejectsLateRequests() {
+        verifyBlockedReadCancellation(revoke = true)
+    }
+
+    private fun verifyBlockedReadCancellation(revoke: Boolean) {
+        val view = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}
+        val source = RenderedContentSource.Conversation(view)
+        val files = mockk<FileManagementApplicationService>()
+        val queries = mockk<ConversationQueryService>()
+        val started = CountDownLatch(1)
+        val exited = CountDownLatch(1)
+        coEvery { files.requireContentAccess(source) } coAnswers { view.requireOpen() }
+        val allowed = MutableStateFlow(true)
+        every { queries.observeViewAccess(view) } returns allowed
+        coEvery { files.readRenderedImage(source, any()) } coAnswers {
+            started.countDown()
+            try { awaitCancellation() } finally { exited.countDown() }
+        }
+        var visible by mutableStateOf(true)
+        var webView: WebViewState? = null
+        compose.setContent {
+            MaterialTheme {
+                if (visible) {
+                    val state = rememberRenderedContentState(RenderedContent(source, "<p>Preview</p>"), files, queries)
+                    SideEffect { if (state is RenderedContentReadState.Ready) webView = state.webView }
+                    ReadStatus(state)
+                } else Text("Closed")
+            }
+        }
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            awaitText("Ready")
+            val old = requireNotNull(webView)
+            val result = executor.submit<Int> {
+                requireNotNull(old.interceptRequest?.invoke(Uri.parse("file:///blocked.png"))).statusCode
+            }
+            assertTrue(started.await(5, TimeUnit.SECONDS))
+            compose.runOnIdle { if (revoke) allowed.value = false else visible = false }
+            awaitText(if (revoke) "Unavailable" else "Closed")
+            assertTrue(exited.await(5, TimeUnit.SECONDS))
+            assertEquals(403, result.get(5, TimeUnit.SECONDS))
+            assertEquals(403, old.interceptRequest?.invoke(Uri.parse("file:///late.png"))?.statusCode)
+            coVerify(exactly = 1) { files.readRenderedImage(source, any()) }
+            assertFalse(view.closed.value)
+        } finally { executor.shutdownNow(); view.close() }
     }
 
     @Test fun accessObserverFailureStaysDiagnosticAndRetriesWithoutReplacingTheLease() {

@@ -6,6 +6,7 @@ import io.mockk.every
 import io.mockk.mockk
 import java.io.File
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
@@ -269,6 +270,115 @@ class SkillManagerTest {
             SkillContentReadResult.InvalidEncoding,
             manager.readSkillContent("bounded", "binary.dat"),
         )
+    }
+
+    @Test
+    fun `invalid directory query retains parser diagnosis and legacy names remain valid`() = runTest {
+        val manager = manager()
+        val root = skillsRoot()
+        root.resolve("empty").mkdir()
+        root.resolve("broken").apply { mkdir() }.resolve("SKILL.md").writeText("---\nname: [\n---\n")
+        root.resolve("legacy-folder").apply { mkdir() }.resolve("SKILL.md").writeText(document("logical-name", "ok"))
+        val invalid = manager.listInvalidSkillDirectories()
+        assertEquals(listOf("broken", "empty"), invalid.map { it.directoryName })
+        assertTrue(invalid.first().diagnostic.message!!.contains("skill_invalid_frontmatter"))
+        assertNotNull(invalid.first().diagnostic.cause)
+        assertTrue(invalid.last().diagnostic.message!!.contains("skill_document_missing"))
+        assertEquals(listOf("logical-name"), manager.listSkills().map { it.name })
+    }
+
+    @Test
+    fun `invalid cleanup preserves valid and other invalid trees without altering settings`() = runTest {
+        val settings = mockk<SettingsStore>(relaxed = true)
+        val manager = manager(settings)
+        val root = skillsRoot()
+        root.resolve("empty").mkdir()
+        root.resolve("other-invalid").apply { mkdir() }.resolve("support").writeText("keep broken contents")
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("valid", document("valid", "keep")))
+        val target = manager.listInvalidSkillDirectories().first { it.directoryName == "empty" }
+        assertEquals(InvalidSkillDeleteResult.SUCCESS, manager.deleteInvalidSkillDirectory(target))
+        assertFalse(root.resolve("empty").exists())
+        assertEquals("keep broken contents", root.resolve("other-invalid/support").readText())
+        assertEquals(document("valid", "keep"), root.resolve("valid/SKILL.md").readText())
+        assertTrue(temporaryFolder.root.listFiles().orEmpty().none { ".bundle." in it.name })
+        io.mockk.coVerify(exactly = 0) { settings.updateLocal(any()) }
+    }
+
+    @Test
+    fun `repair or replacement invalidates an old cleanup confirmation`() = runTest {
+        val manager = manager()
+        val root = skillsRoot()
+        val targetDir = root.resolve("repair").apply { mkdir() }
+        val target = manager.listInvalidSkillDirectories().single()
+        assertEquals(SkillFileSaveResult.SUCCESS, manager.saveSkill("repair", document("repair", "fixed")))
+        assertEquals(InvalidSkillDeleteResult.CHANGED, manager.deleteInvalidSkillDirectory(target))
+        assertTrue(targetDir.resolve("SKILL.md").isFile)
+
+        val invalid = root.resolve("replace").apply { mkdir() }
+        val previous = manager.listInvalidSkillDirectories().single()
+        assertTrue(invalid.renameTo(temporaryFolder.root.resolve("original-invalid")))
+        invalid.mkdir()
+        assertEquals(InvalidSkillDeleteResult.CHANGED, manager.deleteInvalidSkillDirectory(previous))
+        assertTrue(invalid.isDirectory)
+    }
+
+    @Test
+    fun `cleanup rejects foreign owner and escaped path without modifying files`() = runTest {
+        val manager = manager()
+        skillsRoot().resolve("empty").mkdir()
+        val target = manager.listInvalidSkillDirectories().single()
+        val foreignError = runCatching { manager().deleteInvalidSkillDirectory(target) }.exceptionOrNull()
+        assertTrue(foreignError is IllegalArgumentException)
+        val escaped = InvalidSkillDirectory("../outside", target.diagnostic, target.owner, target.identity)
+        assertEquals(InvalidSkillDeleteResult.CHANGED, manager.deleteInvalidSkillDirectory(escaped))
+        assertTrue(skillsRoot().resolve("empty").isDirectory)
+    }
+
+    @Test
+    fun `cancelled cleanup while waiting leaves original tree and creates no staging`() = runTest {
+        val manager = manager()
+        skillsRoot().resolve("empty").mkdir()
+        val target = manager.listInvalidSkillDirectories().single()
+        BackupSnapshotBarrier.withLock {
+            val task = launch(kotlinx.coroutines.Dispatchers.IO) {
+                manager.deleteInvalidSkillDirectory(target)
+            }
+            task.cancel()
+            task.join()
+        }
+        assertTrue(skillsRoot().resolve("empty").isDirectory)
+        assertTrue(temporaryFolder.root.listFiles().orEmpty().none { ".bundle." in it.name })
+    }
+
+    @Test
+    fun `cleanup publication failure preserves directory and original diagnostic for retry`() = runTest {
+        val manager = manager()
+        val directory = skillsRoot().resolve("empty").apply { mkdir() }
+        val target = manager.listInvalidSkillDirectories().single()
+        val collision = temporaryFolder.root.resolve(".${FileFolders.SKILLS}.bundle.backup.0.tmp")
+        collision.writeText("unrelated occupied path")
+        val error = runCatching { manager.deleteInvalidSkillDirectory(target) }.exceptionOrNull()
+        assertTrue(error is java.io.IOException)
+        assertTrue(error!!.message!!.contains("Unable to stage Skill backup"))
+        assertTrue(directory.isDirectory)
+        assertEquals("unrelated occupied path", collision.readText())
+        assertTrue(temporaryFolder.root.listFiles().orEmpty().none { ".bundle.staging." in it.name })
+        assertTrue(collision.delete())
+        assertEquals(InvalidSkillDeleteResult.SUCCESS, manager.deleteInvalidSkillDirectory(target))
+    }
+
+    @Test
+    fun `interrupted invalid cleanup restores original root through existing bundle recovery`() = runTest {
+        val manager = manager()
+        val root = skillsRoot()
+        root.resolve("empty").mkdir()
+        root.resolve("broken").apply { mkdir() }.resolve("support").writeText("keep")
+        val backup = temporaryFolder.root.resolve(".${FileFolders.SKILLS}.bundle.backup.0.tmp")
+        assertTrue(root.renameTo(backup))
+        temporaryFolder.root.resolve(".${FileFolders.SKILLS}.bundle.staging.0.tmp").mkdir()
+        assertEquals(listOf("broken", "empty"), manager.listInvalidSkillDirectories().map { it.directoryName })
+        assertEquals("keep", root.resolve("broken/support").readText())
+        assertTrue(temporaryFolder.root.listFiles().orEmpty().none { ".bundle." in it.name })
     }
 
     private fun manager(settingsStore: SettingsStore = mockk(relaxed = true)): SkillManager {

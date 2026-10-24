@@ -45,6 +45,25 @@ class ProviderSettingsApplicationService(
         settings.providers.firstOrNull { it.id == id }
     }
 
+    suspend fun createProvider(draft: ProviderSetting): ConfigurationReference.User {
+        val reference = requireNotNull(draft.id as? ConfigurationReference.User) { "provider_creation_requires_user_identity" }
+        require(draft.name.isNotBlank()) { "provider_name_required" }
+        require(draft.models.all { it.id is ConfigurationReference.User }) { "provider_models_require_user_identity" }
+        require(draft.models.map { it.id }.distinct().size == draft.models.size) { "duplicate_provider_model_identity" }
+        settingsStore.updateLocal { current ->
+            check(current.providers.none { it.id == reference }) { "provider_already_exists" }
+            val existingModels = current.providers.flatMap { it.models }.map { it.id }.toSet()
+            check(draft.models.none { it.id in existingModels }) { "provider_model_identity_already_exists" }
+            current.copy(providers = listOf(draft.copyProvider(name = draft.name.trim(), builtIn = false)) + current.providers)
+        }
+        return reference
+    }
+
+    suspend fun importProvider(imported: ProviderSetting): ConfigurationReference.User = createProvider(
+        imported.copyProvider(id = ConfigurationReference.random(), builtIn = false,
+            models = imported.models.map { it.copy(id = ConfigurationReference.random()) }),
+    )
+
     suspend fun saveConfiguration(id: ConfigurationReference, edited: ProviderSetting) = updateProvider(id) { latest ->
         if (edited.id != id) return@updateProvider latest
         edited.copyProvider(

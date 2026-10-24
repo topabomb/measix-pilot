@@ -89,7 +89,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFilter
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.BuiltInTools
@@ -260,7 +260,7 @@ fun SettingProviderDetailPage(
 }
 
 @Composable
-private fun SettingProviderConfigPage(
+internal fun SettingProviderConfigPage(
     provider: ProviderSetting,
     providerSettingsState: ProviderSettingsUiState,
     onOpenConnectionTest: (ProviderSetting) -> Unit,
@@ -268,7 +268,9 @@ private fun SettingProviderConfigPage(
     onSelectConnectionModel: (ConfigurationReference?) -> Unit,
     onRunConnectionTest: () -> Unit,
     onEdit: (ProviderSetting) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    isDraft: Boolean = false,
+    operationError: String? = null,
 ) {
     var internalProvider by remember(provider.id) { mutableStateOf(provider) }
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -288,6 +290,11 @@ private fun SettingProviderConfigPage(
             }
         )
 
+        operationError?.let { detail ->
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(detail, color = MaterialTheme.colorScheme.error)
+            }
+        }
         if (internalProvider is ProviderSetting.OpenAI) {
             SettingProviderBalanceOption(
                 provider = internalProvider,
@@ -302,7 +309,7 @@ private fun SettingProviderConfigPage(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ProviderConnectionTester(
+            if (!isDraft) ProviderConnectionTester(
                 internalProvider = internalProvider,
                 state = providerSettingsState,
                 onOpen = { onOpenConnectionTest(internalProvider) },
@@ -313,7 +320,7 @@ private fun SettingProviderConfigPage(
 
             Spacer(Modifier.weight(1f))
 
-            if (!internalProvider.builtIn) {
+            if (!isDraft && !internalProvider.builtIn) {
                 IconButton(
                     onClick = {
                         showDeleteDialog = true
@@ -522,12 +529,14 @@ private fun ModelList(
 private fun ModelSettingsForm(
     model: Model,
     onModelChange: (Model) -> Unit,
+    onValidityChange: (Boolean) -> Unit,
     isEdit: Boolean,
     parentProvider: ProviderSetting? = null,
     applyRegistryCapabilities: (Model) -> Model,
 ) {
     val pagerState = rememberPagerState { 3 }
     val scope = rememberCoroutineScope()
+    var capacityInput by remember(model.id) { mutableStateOf(model.contextLength?.toString().orEmpty()) }
 
     fun setModelId(id: String) {
         onModelChange(applyRegistryCapabilities(model.copy(modelId = id, displayName = id)))
@@ -617,8 +626,20 @@ private fun ModelSettingsForm(
                         ModelTypeSelector(
                             selectedType = model.type,
                             onTypeSelected = {
+                                onValidityChange(it != ModelType.CHAT || net.weero.measix.pilot.ui.components.ai.validModelContextLengthInput(capacityInput))
                                 onModelChange(model.copy(type = it))
                             }
+                        )
+
+                        if (model.type == ModelType.CHAT) net.weero.measix.pilot.ui.components.ai.ModelContextLengthField(
+                            value = capacityInput,
+                            onValueChange = {
+                                capacityInput = it
+                                val valid = net.weero.measix.pilot.ui.components.ai.validModelContextLengthInput(it)
+                                onValidityChange(valid)
+                                if (valid) onModelChange(model.copy(contextLength = it.toIntOrNull()))
+                            },
+                            description = stringResource(R.string.model_context_capacity_shared),
                         )
 
                         ModelModalitySelector(
@@ -756,6 +777,7 @@ private fun AddModelButton(
 
     if (dialogState.isEditing) {
         dialogState.currentState?.let { modelState ->
+            var capacityInputValid by remember(modelState.id) { mutableStateOf(true) }
             val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
             AdaptiveModal(
                 onDismissRequest = {
@@ -797,6 +819,7 @@ private fun AddModelButton(
                         ModelSettingsForm(
                             model = modelState,
                             onModelChange = { dialogState.currentState = it },
+                            onValidityChange = { capacityInputValid = it },
                             isEdit = false,
                             parentProvider = parentProvider,
                             applyRegistryCapabilities = applyRegistryCapabilities,
@@ -815,8 +838,9 @@ private fun AddModelButton(
                             Text(stringResource(R.string.cancel))
                         }
                         TextButton(
+                            enabled = capacityInputValid,
                             onClick = {
-                                if (modelState.modelId.isNotBlank() && modelState.displayName.isNotBlank()) {
+                                if (capacityInputValid && modelState.modelId.isNotBlank() && modelState.displayName.isNotBlank()) {
                                     dialogState.confirm()
                                 }
                             },
@@ -1162,6 +1186,7 @@ private fun ModelCard(
 
     if (dialogState.isEditing) {
         dialogState.currentState?.let { editingModel ->
+            var capacityInputValid by remember(editingModel.id) { mutableStateOf(true) }
             val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
             AdaptiveModal(
                 onDismissRequest = {
@@ -1208,6 +1233,7 @@ private fun ModelCard(
                         ModelSettingsForm(
                             model = editingModel,
                             onModelChange = { dialogState.currentState = it },
+                            onValidityChange = { capacityInputValid = it },
                             isEdit = true,
                             parentProvider = parentProvider,
                             applyRegistryCapabilities = applyRegistryCapabilities,
@@ -1226,8 +1252,9 @@ private fun ModelCard(
                             Text(stringResource(R.string.cancel))
                         }
                         TextButton(
+                            enabled = capacityInputValid,
                             onClick = {
-                                if (editingModel.displayName.isNotBlank()) {
+                                if (capacityInputValid && editingModel.displayName.isNotBlank()) {
                                     dialogState.confirm()
                                 }
                             },

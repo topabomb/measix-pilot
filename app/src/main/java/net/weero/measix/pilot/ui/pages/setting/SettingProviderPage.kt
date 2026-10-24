@@ -2,14 +2,15 @@ package net.weero.measix.pilot.ui.pages.setting
 
 import net.weero.measix.pilot.ui.components.ui.longPressReorder
 import me.rerere.common.configuration.ConfigurationReference
-import android.net.Uri
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Camera01
 import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.FileImport
+import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Cancel01
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +22,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -45,12 +48,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,9 +65,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
-import io.github.g00fy2.quickie.QRResult
-import io.github.g00fy2.quickie.ScanQRCode
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
@@ -73,15 +76,15 @@ import net.weero.measix.pilot.ui.components.ui.TagType
 import net.weero.measix.pilot.ui.components.ui.decodeProviderSetting
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
-import net.weero.measix.pilot.ui.hooks.useEditState
-import net.weero.measix.pilot.ui.pages.setting.components.ProviderConfigure
 import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.ImageUtils
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.ui.pages.setting.components.providerTypeNameRes
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import java.util.Locale
 import kotlinx.coroutines.launch
 
 @Composable
@@ -92,6 +95,10 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     var searchQuery by remember { mutableStateOf("") }
     val lazyListState = rememberLazyListState()
+    var draftProvider by remember { mutableStateOf<ProviderSetting?>(null) }
+    var draftSaving by remember { mutableStateOf(false) }
+    var draftError by remember { mutableStateOf<String?>(null) }
+    var pendingScrollId by remember { mutableStateOf<ConfigurationReference?>(null) }
     val reorderableState = rememberReorderableLazyListState(lazyListState) { from, to ->
         if (searchQuery.isNotBlank()) return@rememberReorderableLazyListState
         val visibleProviders = settings.providers
@@ -122,6 +129,39 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
         }
     }
 
+    LaunchedEffect(pendingScrollId, filteredProviders.map { it.id }) {
+        val target = pendingScrollId ?: return@LaunchedEffect
+        val index = filteredProviders.indexOfFirst { it.id == target }
+        if (index >= 0) {
+            lazyListState.animateScrollToItem(index)
+            pendingScrollId = null
+        }
+    }
+    draftProvider?.let { draft ->
+        ProviderCreationPage(draft, draftSaving, draftError,
+            onCancel = { if (!draftSaving) { draftProvider = null; draftError = null } },
+            onSave = { edited ->
+                draftProvider = edited
+                draftSaving = true
+                draftError = null
+                scope.launch {
+                    try {
+                        pendingScrollId = vm.createProvider(edited)
+                        searchQuery = ""
+                        draftProvider = null
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        logDiagnosticFailure("ProviderSettings", "Provider creation failed", failure)
+                        draftError = failure.userVisibleDiagnostic()
+                    } finally {
+                        draftSaving = false
+                    }
+                }
+            })
+        return
+    }
+
     Scaffold(
         topBar = {
             LargeFlexibleTopAppBar(
@@ -133,17 +173,10 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                 },
                 actions = {
                     ImportProviderButton {
-                        val imported = it.copyProvider(ConfigurationReference.random())
-                        vm.updateSettings { current ->
-                            current.copy(providers = listOf(imported) + current.providers)
-                        }
+                        pendingScrollId = vm.importProvider(it)
+                        searchQuery = ""
                     }
-                    AddButton {
-                        val added = it
-                        vm.updateSettings { current ->
-                            current.copy(providers = listOf(added) + current.providers)
-                        }
-                    }
+                    AddButton { draftProvider = it; draftError = null }
                 },
                 scrollBehavior = scrollBehavior,
                 colors = CustomColors.topBarColors
@@ -213,26 +246,65 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
 
 @Composable
 private fun ImportProviderButton(
-    onAdd: (ProviderSetting) -> Unit
+    onAdd: suspend (ProviderSetting) -> Unit
 ) {
     val toaster = LocalToaster.current
     val context = LocalContext.current
+    val importSuccess by rememberUpdatedState(stringResource(R.string.setting_provider_page_import_success))
+    val noQrFound by rememberUpdatedState(stringResource(R.string.setting_provider_page_no_qr_found))
     var showImportDialog by remember { mutableStateOf(false) }
     var showPasteDialog by remember { mutableStateOf(false) }
 
-    val scanQrCodeLauncher = rememberLauncherForActivityResult(ScanQRCode()) { result ->
-        handleQRResult(result, onAdd, toaster, context)
+    val queries = org.koin.compose.koinInject<net.weero.measix.pilot.service.ConfigurationQueryService>()
+    val selection by remember(queries) { queries.observeSelectedRealmSelection() }.collectAsStateWithLifecycle(initialValue = null)
+    var scannerSelection by remember { mutableStateOf<net.weero.measix.pilot.data.enterprise.RealmSelection?>(null) }
+    val scope = rememberCoroutineScope()
+    var importing by remember { mutableStateOf(false) }
+    var importError by remember { mutableStateOf<String?>(null) }
+    fun performImport(load: suspend () -> ProviderSetting?) {
+        if (importing) return
+        importing = true
+        importError = null
+        scope.launch {
+            try {
+                val provider = load() ?: return@launch
+                onAdd(provider)
+                showPasteDialog = false
+                toaster.show(importSuccess, type = ToastType.Success)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                logDiagnosticFailure("ProviderSettings", "Provider import failed", failure)
+                importError = failure.userVisibleDiagnostic()
+            } finally {
+                importing = false
+            }
+        }
     }
-
-    val pickImageLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        uri?.let {
-            handleImageQRCode(it, onAdd, toaster, context)
+    scannerSelection?.let { original ->
+        net.weero.measix.pilot.ui.components.ui.QRCodeScannerDialog(
+            selection = original, queries = queries,
+            onDismissRequest = { scannerSelection = null },
+            onResult = { content ->
+                scannerSelection = null
+                if (selection == original) performImport { decodeProviderSetting(content) }
+            },
+        )
+    }
+    val pickImageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) performImport {
+            val content = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                ImageUtils.decodeQRCodeFromUri(context, uri)
+            }
+            if (content.isNullOrEmpty()) {
+                toaster.show(noQrFound, type = ToastType.Error)
+                null
+            } else decodeProviderSetting(content)
         }
     }
 
     IconButton(
+        enabled = !importing,
         onClick = {
             showImportDialog = true
         }
@@ -267,8 +339,9 @@ private fun ImportProviderButton(
                         Button(
                             onClick = {
                                 showImportDialog = false
-                                scanQrCodeLauncher.launch(null)
+                                scannerSelection = selection
                             },
+                            enabled = selection != null,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(56.dp),
@@ -372,154 +445,82 @@ private fun ImportProviderButton(
     }
 
     if (showPasteDialog) {
-        val importSuccessText = stringResource(R.string.setting_provider_page_import_success)
-        val qrDecodeFailedText = stringResource(R.string.setting_provider_page_qr_decode_failed)
         ProviderPasteImportDialog(
-            onDismiss = { showPasteDialog = false },
-            onImport = { text ->
-                runCatching {
-                    val setting = decodeProviderSetting(text.trim())
-                    onAdd(setting)
-                    toaster.show(
-                        importSuccessText,
-                        type = ToastType.Success
-                    )
-                    showPasteDialog = false
-                }.onFailure { error ->
-                    toaster.show(
-                        qrDecodeFailedText,
-                        type = ToastType.Error
-                    )
+            busy = importing,
+            onDismiss = { if (!importing) showPasteDialog = false },
+            onImport = { text -> performImport { decodeProviderSetting(text.trim()) } },
+        )
+    }
+    importError?.let { diagnostic ->
+        AlertDialog(
+            onDismissRequest = { importError = null },
+            title = { Text(stringResource(R.string.setting_provider_page_import_dialog_title)) },
+            text = {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(diagnostic, modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(androidx.compose.foundation.rememberScrollState()))
                 }
-            }
+            },
+            confirmButton = { TextButton(onClick = { importError = null }) { Text(stringResource(R.string.confirm)) } },
         )
     }
 }
-
-private fun handleQRResult(
-    result: QRResult,
-    onAdd: (ProviderSetting) -> Unit,
-    toaster: com.dokar.sonner.ToasterState,
-    context: android.content.Context
-) {
-    runCatching {
-        when (result) {
-            is QRResult.QRError -> {
-                toaster.show(
-                    context.getString(
-                        R.string.setting_provider_page_scan_error,
-                        result
-                    ), type = ToastType.Error
-                )
-            }
-
-            QRResult.QRMissingPermission -> {
-                toaster.show(
-                    context.getString(R.string.setting_provider_page_no_permission),
-                    type = ToastType.Error
-                )
-            }
-
-            is QRResult.QRSuccess -> {
-                val setting = decodeProviderSetting(result.content.rawValue ?: "")
-                onAdd(setting)
-                toaster.show(
-                    context.getString(R.string.setting_provider_page_import_success),
-                    type = ToastType.Success
-                )
-            }
-
-            QRResult.QRUserCanceled -> {}
-        }
-    }.onFailure { error ->
-        toaster.show(
-            context.getString(R.string.setting_provider_page_qr_decode_failed, error.message ?: ""),
-            type = ToastType.Error
-        )
-    }
-}
-
-private fun handleImageQRCode(
-    uri: Uri,
-    onAdd: (ProviderSetting) -> Unit,
-    toaster: com.dokar.sonner.ToasterState,
-    context: android.content.Context
-) {
-    runCatching {
-        // 使用ImageUtils解析二维码
-        val qrContent = ImageUtils.decodeQRCodeFromUri(context, uri)
-
-        if (qrContent.isNullOrEmpty()) {
-            toaster.show(
-                context.getString(R.string.setting_provider_page_no_qr_found),
-                type = ToastType.Error
-            )
-            return
-        }
-
-        val setting = decodeProviderSetting(qrContent)
-        onAdd(setting)
-        toaster.show(
-            context.getString(R.string.setting_provider_page_import_success),
-            type = ToastType.Success
-        )
-    }.onFailure { error ->
-        toaster.show(
-            context.getString(R.string.setting_provider_page_image_qr_decode_failed, error.message ?: ""),
-            type = ToastType.Error
-        )
-    }
-}
-
 
 @Composable
 private fun AddButton(onAdd: (ProviderSetting) -> Unit) {
-    val dialogState = useEditState<ProviderSetting> {
-        onAdd(it.copyProvider(name = it.name.trim()))
+    var choosingType by remember { mutableStateOf(false) }
+    IconButton(onClick = { choosingType = true }) {
+        Icon(HugeIcons.Add01, stringResource(R.string.setting_provider_page_add_provider))
     }
+    if (choosingType) AlertDialog(
+        onDismissRequest = { choosingType = false },
+        title = { Text(stringResource(R.string.setting_provider_page_add_provider)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProviderSetting.Types.forEach { type ->
+                    OutlinedButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                        val draft = when (type) {
+                            ProviderSetting.OpenAI::class -> ProviderSetting.OpenAI()
+                            ProviderSetting.Google::class -> ProviderSetting.Google()
+                            ProviderSetting.Claude::class -> ProviderSetting.Claude()
+                            else -> error("unsupported_provider_type")
+                        }
+                        choosingType = false
+                        onAdd(draft)
+                    }) { Text(stringResource(providerTypeNameRes(type))) }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { choosingType = false }) { Text(stringResource(R.string.cancel)) } },
+    )
+}
 
-    IconButton(
-        onClick = {
-            dialogState.open(ProviderSetting.OpenAI())
+@Composable
+internal fun ProviderCreationPage(draft: ProviderSetting, saving: Boolean, error: String?,
+    onCancel: () -> Unit, onSave: (ProviderSetting) -> Unit) {
+    BackHandler { if (!saving) onCancel() }
+    Scaffold(
+        containerColor = CustomColors.topBarColors.containerColor,
+        topBar = {
+            LargeFlexibleTopAppBar(title = { Text(stringResource(R.string.setting_provider_page_add_provider)) },
+                navigationIcon = {
+                    androidx.compose.material3.FilledTonalIconButton(enabled = !saving, onClick = onCancel) {
+                        Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back))
+                    }
+                }, colors = CustomColors.topBarColors)
+        },
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            if (saving) androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator()
+            } else SettingProviderConfigPage(
+                provider = draft, providerSettingsState = ProviderSettingsUiState(provider = draft),
+                onOpenConnectionTest = {}, onDismissConnectionTest = {}, onSelectConnectionModel = {},
+                onRunConnectionTest = {}, onEdit = onSave, onDelete = {}, isDraft = true, operationError = error,
+            )
         }
-    ) {
-        Icon(HugeIcons.Add01, "Add")
-    }
-
-    if (dialogState.isEditing) {
-        AlertDialog(
-            onDismissRequest = {
-                dialogState.dismiss()
-            },
-            title = {
-                Text(stringResource(R.string.setting_provider_page_add_provider))
-            },
-            text = {
-                dialogState.currentState?.let {
-                    ProviderConfigure(it) { newState ->
-                        dialogState.currentState = newState
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        dialogState.confirm()
-                    }
-                ) {
-                    Text(stringResource(R.string.setting_provider_page_add))
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        dialogState.dismiss()
-                    }
-                ) {
-                    Text(stringResource(R.string.cancel))
-                }
-            },
-        )
     }
 }
 
@@ -587,6 +588,7 @@ private fun ProviderItem(
 
 @Composable
 private fun ProviderPasteImportDialog(
+    busy: Boolean,
     onDismiss: () -> Unit,
     onImport: (String) -> Unit,
 ) {
@@ -598,6 +600,7 @@ private fun ProviderPasteImportDialog(
             OutlinedTextField(
                 value = text,
                 onValueChange = { text = it },
+                enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("ai-provider:v1:...") },
                 singleLine = false,
@@ -608,7 +611,7 @@ private fun ProviderPasteImportDialog(
         confirmButton = {
             TextButton(
                 onClick = { onImport(text) },
-                enabled = text.isNotBlank()
+                enabled = !busy && text.isNotBlank()
             ) {
                 Text(stringResource(R.string.setting_provider_page_import_dialog_title))
             }

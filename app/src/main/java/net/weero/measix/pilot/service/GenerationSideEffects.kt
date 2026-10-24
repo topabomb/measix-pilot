@@ -420,15 +420,12 @@ class GenerationSideEffects internal constructor(
                 "locale" to Locale.getDefault().displayName
             )
 
-            val result = runBackgroundGeneration(
-                captured = captured,
-                role = ModelSelectionRole.COMPRESS,
-                conversationId = snapshot.conversationId,
-                prompt = prompt,
-            )?.trim()
-                ?: throw IllegalStateException("No model available for compression")
-            check(result.isNotEmpty()) { "empty_history_summary_chunk" }
-            return result
+            val result = captured.model.requests.execute { target ->
+                target.generateText(providerManager, listOf(ModelRequestMessage.user(prompt)),
+                    backgroundTextGenerationParams(captured.model.model, conversationId = snapshot.conversationId),
+                    ModelSelectionRole.COMPRESS)
+            }
+            return historySummaryText(result)
         }
 
         val compressedSummaries = coroutineScope {
@@ -528,3 +525,22 @@ internal fun backgroundTextGenerationParams(
     customBody = model.customBodies,
     openCodeSessionId = conversationId.toString(),
 )
+
+
+/** Validate the complete auxiliary response before any history can be replaced. */
+internal fun historySummaryText(result: me.rerere.ai.ui.MessageChunk): String {
+    val choice = checkNotNull(result.choices.firstOrNull()) { "history_summary_missing_choice" }
+    val message = checkNotNull(choice.message) { "history_summary_missing_message" }
+    check(message.getTools().isEmpty() && message.parts.none { it is UIMessagePart.ServerTool }) {
+        "history_summary_tool_call_response"
+    }
+    check(choice.continuation == null && message.terminalStatus == null &&
+        choice.finishReason in setOf(null, "stop", "STOP", "end_turn", "stop_sequence", "done", "completed")) {
+        "history_summary_incomplete_response: ${choice.finishReason}; ${message.terminalReason}"
+    }
+    // A leading reasoning section may span multiple provider text blocks.
+    val body = message.parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
+    val text = net.weero.measix.pilot.data.ai.transformers.stripLeadingThinkTag(body).trim()
+    check(text.isNotEmpty()) { "empty_history_summary_chunk" }
+    return text
+}

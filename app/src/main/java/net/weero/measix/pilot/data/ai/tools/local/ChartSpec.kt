@@ -26,7 +26,7 @@ data class ChartSeries(
     val points: List<ChartPoint>,
 )
 
-/** The tool and all renderers use this parser; malformed points are never silently dropped. */
+/** Historical chart renderers share this parser; malformed points are never silently dropped. */
 data class ChartSpec private constructor(
     val style: ChartStyle,
     val title: String?,

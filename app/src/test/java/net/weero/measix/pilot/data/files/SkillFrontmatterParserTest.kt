@@ -1,5 +1,9 @@
 package net.weero.measix.pilot.data.files
 
+import io.mockk.every
+import io.mockk.mockkConstructor
+import io.mockk.unmockkConstructor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -8,8 +12,25 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.yaml.snakeyaml.Yaml
 
 class SkillFrontmatterParserTest {
+
+    @Test
+    fun `unexpected YAML engine exceptions and cancellation propagate unchanged`() {
+        mockkConstructor(Yaml::class)
+        try {
+            for (error in listOf(IllegalArgumentException("engine initialization failed"), CancellationException("cancelled"))) {
+                every { anyConstructed<Yaml>().load<Any?>(any<String>()) } throws error
+                val actual = runCatching {
+                    SkillFrontmatterParser.parseDocument("---\nname: test\ndescription: test\n---\nbody")
+                }.exceptionOrNull()
+                org.junit.Assert.assertSame(error, actual)
+            }
+        } finally {
+            unmockkConstructor(Yaml::class)
+        }
+    }
 
     @Test
     fun `parse simple frontmatter`() {

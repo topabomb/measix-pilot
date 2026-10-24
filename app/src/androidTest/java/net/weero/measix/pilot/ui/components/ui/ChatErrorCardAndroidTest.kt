@@ -127,7 +127,7 @@ class ChatErrorCardAndroidTest {
         compose.setContent {
             MaterialTheme {
                 CompositionLocalProvider(
-                    net.weero.measix.pilot.ui.context.LocalToaster provides com.dokar.sonner.rememberToasterState(),
+                    net.weero.measix.pilot.ui.context.LocalToaster provides net.weero.measix.pilot.ui.components.toast.rememberToasterState(),
                     net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo(),
                 ) {
                     Row(Modifier.width(320.dp)) {

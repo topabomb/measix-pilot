@@ -35,7 +35,7 @@ import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.utils.plus
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 
 @Composable
 fun AssistantDetailPage(id: String) {

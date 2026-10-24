@@ -1050,6 +1050,7 @@ class SubAssistantRunCoordinator internal constructor(
             mediaCapabilities = mediaCapabilities,
             conversationSystemPrompt = null,
             conversationModeInjectionIds = target.modeInjectionIds,
+            workspaceCwd = snapshot.header.workspaceCwd,
             tools = tools,
             opening = snapshot.opening,
             disclosure = TurnDisclosureSource.capture(

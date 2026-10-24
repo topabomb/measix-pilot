@@ -11,6 +11,20 @@ Durable Conversation、Conversation Presentation 和 Model Request Plan 是三�
 
 ## 上下文策略
 
+手动摘要的 `CompressContextDialog` 用步进器设置保留数量，默认 32、允许 0，增加操作在 Int 最大值禁用。
+应用命令在启动摘要任务前拒绝负保留数和非正目标 token 数；这不会改变下文的完整用户轮次边界或摘要检查点协议。
+
+摘要继续使用原域的 `COMPRESS` 模型及用户 `compressPrompt`，不切换为聊天模型或继承聊天工具。
+默认模板在待总结材料之后要求结构化保留目标、事实、决定、成果、错误和待办；设置迁移与备份兼容只替换
+旧内置模板的精确值，自定义文本保持。`historySummaryText` 在提交前检查完整返回消息，
+拒绝工具调用、续传、非成功终态和空正文，沿既有开头 think 标签规则剥离思考，正文中的标签示例保留。
+原兼容协议的完整非流式响应可缺 finishReason；有明确截断／拒绝状态时不能按普通正文提交。
+摘要不继承聊天 maxTokens，目标 token 仅为模板指引，不承诺缓存命中。
+
+时间提醒间隔由共享助手定义或原域 `AssistantUsagePreferences` 保存，缺字段仍为 60 分钟。
+`TurnContextFactory` 将它捕获到 `TurnPromptSnapshot`，同 Turn 重试不读最新配置；分钟先转 Long 再计算秒，
+拒绝非正值和超出 Int 的输入。已接纳提醒优先复用原正文与时区，调整间隔不会改写它；企业覆盖不进入个人备份。
+
 | 层 | 目的 | 改 durable 会话 | 默认 |
 | --- | --- | --- | --- |
 | 条数阶梯窗口 `contextMessageLimit` | 控制发送历史长度，减少相邻请求的前缀漂移 | 否 | 关（`0`） |
@@ -30,6 +44,8 @@ Durable Conversation、Conversation Presentation 和 Model Request Plan 是三�
 `1..512`，UI 重新打开开关写入默认 `80`。旧设置与备份中的 1–39 经显式格式迁移保留为原生效值 40；
 新格式保留用户设置的小窗口，迁移规则由[配置架构](android-configuration-architecture.md)维护。
 完整轮次不能拆开，因此实际保留数量可能超过设定值；消息数量与模型 token 容量、工具输出压缩保护窗口分别配置。
+模型 `contextLength` 在 START 随执行模型捕获，仅用于占用展示，不调整此处的裁剪或 `ContextBudget`；
+配置来源见[配置架构](android-configuration-architecture.md)，历史分母配对见[Token 用量](token-usage-accounting.md)。
 
 超限时 `RequestContextPlanner` 内部 `limitContext` 按 50% 保留比例一次前移较大步幅，再
 `findUserTurnStart()` 回退到完整 USER 轮次。工具调用与结果在同一个 `UIMessagePart.Tool` 里，因此

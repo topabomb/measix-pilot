@@ -208,7 +208,7 @@ internal class TurnRequestAdmission(
         fun use(entry: ConversationModelContextEntry, role: MessageRole, placement: ContextPlacement) {
             uses += ConversationContextUse(entry.id, role, placement)
         }
-        val system = inline(ConversationContextSource.System(context.system.contributions), context.system.text)
+        val system = inline(ConversationContextSource.System(context.system.contributions, context.system.workspace), context.system.text)
         use(system, MessageRole.SYSTEM, ContextPlacement.System)
         val selectedIds = plan.messages.mapTo(hashSetOf()) { it.id }
         val sealedOriginIds = if (existing == null) null else resolveUsesAt(snapshot.contextAdmissions, owner, stepId, steps).uses

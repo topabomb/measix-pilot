@@ -15,7 +15,7 @@ import androidx.test.espresso.matcher.ViewMatchers.isAssignableFrom
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import io.mockk.*
 import me.rerere.workspace.WorkspaceStorageArea
 import net.weero.measix.pilot.R
@@ -97,6 +97,7 @@ class WorkspaceFileEditorAndroidTest {
         coEvery { query.readTextForPreview("workspace", WorkspaceStorageArea.FILES, "note.md") } returns
             WorkspaceTextPreviewResult.Success("# Original heading")
         coEvery { application.writeText("workspace", "note.md", "# Updated heading") } returns mockk<me.rerere.workspace.WorkspaceFileEntry>()
+        coEvery { application.renderedSource("workspace", WorkspaceStorageArea.FILES, "note.md") } returns fileSource("note.md")
         showPage("note.md", application, query)
         compose.onNodeWithText(compose.activity.getString(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText("# Updated heading"), closeSoftKeyboard())
@@ -114,24 +115,19 @@ class WorkspaceFileEditorAndroidTest {
         val application = mockk<WorkspaceApplicationService>()
         val original = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\" fill=\"red\"/></svg>"
         val updated = original.replace("red", "blue")
-        fun source(name: String, text: String) = net.weero.measix.pilot.service.ImageSource(
-            name, net.weero.measix.pilot.service.ImageOrigin.LOCAL, displayName = name,
-            verifyAccess = {}, readPayload = { text.toByteArray() }, mimeHint = "image/svg+xml")
         coEvery { query.readTextForPreview("workspace", WorkspaceStorageArea.FILES, "drawing.svg") } returns
             WorkspaceTextPreviewResult.Success(original)
         var reads = 0
-        coEvery { application.previewImageSource("workspace", WorkspaceStorageArea.FILES, "drawing.svg") } coAnswers {
+        coEvery { application.renderedSource("workspace", WorkspaceStorageArea.FILES, "drawing.svg") } coAnswers {
             when (++reads) {
-                1 -> source("original.svg", original)
+                1 -> fileSource("drawing.svg")
                 2 -> throw java.io.IOException("preview_refresh_failed")
-                else -> source("updated.svg", updated)
+                else -> fileSource("drawing.svg")
             }
         }
         coEvery { application.writeText("workspace", "drawing.svg", updated) } returns mockk<me.rerere.workspace.WorkspaceFileEntry>()
         showPage("drawing.svg", application, query)
-        val imageClose = compose.activity.getString(R.string.image_viewer_close_content_description)
-        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription(imageClose).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription(imageClose).performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.file_preview_source)).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText(updated), closeSoftKeyboard())
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).performClick()
@@ -144,10 +140,13 @@ class WorkspaceFileEditorAndroidTest {
             assertNotNull(view.keyListener)
         }
         compose.onNodeWithText(compose.activity.getString(R.string.file_preview_rendered)).performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("updated.svg").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("updated.svg").assertIsDisplayed()
-        coVerify(exactly = 3) { application.previewImageSource("workspace", WorkspaceStorageArea.FILES, "drawing.svg") }
+        compose.onNodeWithText(compose.activity.getString(R.string.file_preview_source)).assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.edit)).assertIsDisplayed()
+        coVerify(exactly = 3) { application.renderedSource("workspace", WorkspaceStorageArea.FILES, "drawing.svg") }
     }
+
+    private fun fileSource(path: String) = net.weero.measix.pilot.service.RenderedFileSource(
+        path, kotlinx.coroutines.flow.MutableStateFlow(Unit), {}, { it }, { _, _ -> byteArrayOf() })
 
     private fun showPage(path: String, application: WorkspaceApplicationService, query: WorkspaceQueryService) {
         compose.setContent {
@@ -172,6 +171,7 @@ class WorkspaceFileEditorAndroidTest {
         val application = mockk<WorkspaceApplicationService>()
         coEvery { query.readTextForPreview("workspace", WorkspaceStorageArea.FILES, path) } returns WorkspaceTextPreviewResult.Success(body)
         coEvery { application.writeText("workspace", path, body + "\nchanged") } throws java.io.IOException("source_save_failed")
+        coEvery { application.renderedSource("workspace", WorkspaceStorageArea.FILES, path) } returns fileSource(path)
         compose.setContent {
             MaterialTheme {
                 CompositionLocalProvider(LocalSettings provides net.weero.measix.pilot.data.datastore.Settings.dummy(), LocalDarkMode provides false, LocalNavController provides Navigator(mutableListOf(Screen.Enterprise)),
@@ -181,6 +181,7 @@ class WorkspaceFileEditorAndroidTest {
                 }
             }
         }
+        compose.onNodeWithText(compose.activity.getString(R.string.file_preview_source)).performClick()
         var editor: EditText? = null
         compose.waitUntil(5_000) { compose.onNodeWithText(compose.activity.getString(R.string.edit)).isDisplayed() }
         onView(isAssignableFrom(EditText::class.java)).check { view, failure ->

@@ -83,7 +83,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import org.koin.compose.koinInject
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.components.ai.configurationUnavailableText
 import net.weero.measix.pilot.service.ConfigurationApplicationService

@@ -1,11 +1,49 @@
 package net.weero.measix.pilot.utils
 
+import kotlinx.serialization.decodeFromString
 import java.io.IOException
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UserVisibleDiagnosticTest {
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @Test
+    fun `settings JSON depth limit rejects excess nesting without exposing input`() {
+        val limit = JsonInstant.configuration.maxNestingDepth
+        assertTrue("Application JSON must have a finite practical nesting bound", limit in 1..10_000)
+        val body = "[".repeat(limit + 1) + "\"PRIVATE_DEEP_BODY\"" + "]".repeat(limit + 1)
+        val error = requireNotNull(runCatching { JsonInstant.parseToJsonElement(body) }.exceptionOrNull())
+        assertTrue(error is kotlinx.serialization.SerializationException)
+        val detail = error.userVisibleDiagnostic()
+        assertFalse(detail.contains("PRIVATE_DEEP_BODY"))
+        assertTrue(detail.contains("depth", ignoreCase = true) || detail.contains("nesting", ignoreCase = true))
+    }
+
+    @Test fun `JSON payload is redacted consistently from UI and complete log stack`() {
+        val failure = requireNotNull(runCatching {
+            JsonInstant.decodeFromString<Boolean>("\"PRIVATE_BODY_SENTINEL\"")
+        }.exceptionOrNull())
+        val wrapper = IllegalStateException("Import failed: $failure", failure)
+        val detail = wrapper.userVisibleDiagnostic()
+        assertFalse(detail.contains("PRIVATE_BODY_SENTINEL"))
+        assertTrue(detail.contains("boolean"))
+        assertTrue(detail.contains("JsonDecodingException"))
+        io.mockk.mockkStatic(android.util.Log::class)
+        try {
+            val entries = mutableListOf<String>()
+            io.mockk.every { android.util.Log.e("JsonDiagnosticTest", capture(entries)) } returns 0
+            logDiagnosticFailure("JsonDiagnosticTest", "Import failed", wrapper)
+            val log = entries.joinToString("")
+            assertFalse(log.contains("PRIVATE_BODY_SENTINEL"))
+            assertTrue(log.contains("Caused by:"))
+            assertTrue(log.contains("boolean"))
+            failure.stackTrace.forEach { assertTrue(log.contains(it.toString())) }
+        } finally {
+            io.mockk.unmockkStatic(android.util.Log::class)
+        }
+    }
+
     @Test
     fun `native logs preserve full unicode stack and redact before chunk boundaries`() {
         io.mockk.mockkStatic(android.util.Log::class)

@@ -1,10 +1,13 @@
 # Keep source locations so obfuscated release stack traces can be retraced.
 -keepattributes SourceFile,LineNumberTable
 
+# Diagnostics retain exception types; frames remain retraceable with the release mapping.
+-keepnames class * extends java.lang.Throwable
+
 # An independently built native consumer probe reads the installed APK identity by reflection.
 -keep class net.weero.measix.pilot.BuildConfig { public static <fields>; }
 
-# Kotlin reflection is used to instantiate serializable settings classes at runtime.
+# Preserve the existing serialized settings contract through release optimization.
 -keep @kotlinx.serialization.Serializable class * { *; }
 
 # Ktor references JVM-only management APIs from its debug detector.
@@ -15,6 +18,18 @@
 -dontwarn java.beans.ConstructorProperties
 -dontwarn java.beans.Transient
 
+# SafeConstructor initializes TypeDescription, whose logger reads its class package name.
+# Android returns null for a class repackaged into the default package.
+-keepnames class org.yaml.snakeyaml.TypeDescription
+
+# SnakeYAML's optional JavaBean introspection is not used by SafeConstructor frontmatter loading.
+# These names suppress optional references; they do not supply JavaBean support on Android.
+-dontwarn java.beans.BeanInfo
+-dontwarn java.beans.FeatureDescriptor
+-dontwarn java.beans.IntrospectionException
+-dontwarn java.beans.Introspector
+-dontwarn java.beans.PropertyDescriptor
+
 # re2j has optional references that are unavailable on Android.
 -dontwarn com.google.re2j.**
 
@@ -22,5 +37,10 @@
 -keepattributes Signature,InnerClasses,EnclosingMethod
 -keep,allowobfuscation class * extends com.fasterxml.jackson.core.type.TypeReference
 
-# JLaTeXMath loads optional alphabets and formula resources by binary name.
--keep class org.scilab.forge.jlatexmath.** { *; }
+# JLaTeXMath looks up macros and optional alphabet registrations by binary name.
+-keep class org.scilab.forge.jlatexmath.NewCommandMacro {
+    <init>();
+    java.lang.String executeMacro(org.scilab.forge.jlatexmath.TeXParser, java.lang.String[]);
+}
+-keep class org.scilab.forge.jlatexmath.greek.GreekRegistration { <init>(); }
+-keep class org.scilab.forge.jlatexmath.cyrillic.CyrillicRegistration { <init>(); }

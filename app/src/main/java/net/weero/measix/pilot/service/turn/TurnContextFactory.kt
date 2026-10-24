@@ -45,11 +45,12 @@ class TurnContextFactory(
         tools: List<me.rerere.ai.core.Tool>,
         opening: ConversationOpening? = null,
         disclosure: TurnDisclosureSource,
+        workspaceCwd: String? = null,
     ): TurnLaunchPlan {
-        val workspaceReminder = assistant.workspaceId
+        val workspace = assistant.workspaceId
             ?.let { workspaceRepository.getById(it.toString()) }
             ?.takeIf { it.resolvedShellStatus() == me.rerere.workspace.WorkspaceShellStatus.READY }
-            ?.let { buildWorkspacePrompt(it, workspaceRepository.rootfsEnvironment(it.root)) }
+        val workspaceReminder = workspace?.let { buildWorkspacePrompt(it, workspaceRepository.rootfsEnvironment(it.root)) }
         val promptInputs = freezeTurnPromptSnapshot(
             settings = settings,
             assistant = assistant,
@@ -70,6 +71,10 @@ class TurnContextFactory(
             tools = tools,
             opening = opening?.takeIf { it.assistant == assistant.id },
             disclosure = disclosure,
+            workspace = workspace?.let {
+                net.weero.measix.pilot.data.model.WorkspaceContextOrigin(it.id, it.root,
+                    me.rerere.workspace.RootfsPath.parse(workspaceCwd ?: "/workspace").value)
+            },
         )
     }
 
@@ -82,6 +87,7 @@ class TurnContextFactory(
         val frozenTools = freezeToolSet(plan.tools)
         val assistant = resolveTurnAssistantSnapshot(plan.assistant)
         val system = freezeTurnSystem(assistant, plan.promptInputs, frozenTools.definitions, plan.opening)
+            .copy(workspace = plan.workspace)
         return TurnContext(
             realmAccess = plan.realmAccess,
             assistant = assistant,
@@ -112,6 +118,7 @@ internal class TurnLaunchPlan(
     val tools: List<me.rerere.ai.core.Tool>,
     val opening: ConversationOpening? = null,
     val disclosure: TurnDisclosureSource,
+    val workspace: net.weero.measix.pilot.data.model.WorkspaceContextOrigin? = null,
 )
 
 internal fun InjectionPosition.isSystemPosition(): Boolean =
@@ -161,6 +168,7 @@ fun freezeTurnPromptSnapshot(
             ?.takeIf { assistant.allowConversationSystemPrompt && it.isNotBlank() },
         modeInjectionIds = effectiveInjectionIds.toSet(),
         enableTimeReminder = assistant.enableTimeReminder,
+        timeReminderIntervalMinutes = assistant.timeReminderIntervalMinutes,
         placeholderValues = variables,
     )
 }

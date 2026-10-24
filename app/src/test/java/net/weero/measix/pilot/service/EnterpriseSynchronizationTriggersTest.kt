@@ -32,9 +32,9 @@ class EnterpriseSynchronizationTriggersTest {
 
     @Test fun `unreadable applied configuration shows a sync diagnostic without disabling the identity or auto syncing`() = runTest {
         val root = temporary.newFolder()
-        val original = EnterpriseSessionController(enterpriseTestStore(root)).enrollFixture(exampleEnterprisePackage())
+        val original = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).enrollFixture(exampleEnterprisePackage())
         java.io.File(root, "revisions/${original.manifest.applied!!.revision}/configuration.json").writeText("broken")
-        val sessions = EnterpriseSessionController(enterpriseTestStore(root))
+        val sessions = EnterpriseSessionController(enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         sessions.recover()
         val fixture = Fixture(this, sessions)
         val service = fixture.create()
@@ -51,7 +51,7 @@ class EnterpriseSynchronizationTriggersTest {
     }
 
     @Test fun `restored applied session and realm switching never synchronize configuration`() = runTest {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { 1000L }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
         val available = sessions.enrollFixture(exampleEnterprisePackage())
         val access = requireNotNull(sessions.readPresentation().selection).access as RealmAccess.Enterprise
         val f = Fixture(this, sessions)
@@ -72,7 +72,7 @@ class EnterpriseSynchronizationTriggersTest {
     }
 
     @Test fun `startup completion of a saved enrollment initializes once but an existing pending configuration does not retry`() = runTest {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { 1000L }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
         val connection = platformCandidate(exampleEnterprisePackage()).execution.let { (it as EnterpriseExecution.Platform).connection }
         val sessionId = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection,
             PlatformWireCodec.decode(case("enrollment-response")))
@@ -103,7 +103,7 @@ class EnterpriseSynchronizationTriggersTest {
     }
 
     @Test fun `confirmed enrollment synchronizes once and its following realm switch does not synchronize again`() = runTest {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { 1000L }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
         sessions.enrollFixture(exampleEnterprisePackage())
         val access = requireNotNull(sessions.readPresentation().selection).access as RealmAccess.Enterprise
         sessions.switchRealm(RealmSwitchRequest(requireNotNull(sessions.readPresentation().selection), RealmAccess.Personal)) {}
@@ -121,7 +121,7 @@ class EnterpriseSynchronizationTriggersTest {
     }
 
     @Test fun `late initialization admission failure cannot publish an enrollment failure into a replacement session`() = runTest {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { 1000L }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
         val sessionId = createPending(sessions)
         val f = Fixture(this, sessions)
         coEvery { f.platform.recoverPlatformAccess() } coAnswers {
@@ -153,7 +153,7 @@ class EnterpriseSynchronizationTriggersTest {
     }
 
     @Test fun `late Bootstrap failure belongs to the saved enrollment and is hidden after its session is replaced`() = runTest {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { 1000L }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
         val sessionId = createPending(sessions)
         val f = Fixture(this, sessions)
         val bootstrapStarted = CompletableDeferred<Unit>()
@@ -178,7 +178,7 @@ class EnterpriseSynchronizationTriggersTest {
     }
 
     @Test fun `failed Bootstrap retains its original pending enrollment diagnostic until explicit recovery`() = runTest {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder())) { 1000L }
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { 1000L }
         createPending(sessions)
         val f = Fixture(this, sessions)
         coEvery { f.platform.recoverPlatformAccess() } throws IOException("pending_bootstrap_diagnostic", IOException("source_detail"))
@@ -230,6 +230,7 @@ class EnterpriseSynchronizationTriggersTest {
             terminals = mockk(relaxed = true),
             speech = mockk(relaxed = true),
             platform = platform,
+            conversations = mockk(relaxed = true),
             webDav = mockk(relaxed = true) { io.mockk.coEvery { changeConnection<Unit>(any(), any()) } coAnswers { secondArg<suspend () -> Unit>().invoke() } },
             remoteWorkspace = mockk(relaxed = true),
         )

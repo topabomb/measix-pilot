@@ -187,6 +187,7 @@ class ConversationRuntimeRegistry(
         handle: TurnHandle? = null,
         phase: TurnLivePhase = TurnLivePhase.PREPARING,
         supersedeReason: String? = null,
+        requireQueueOutcome: Boolean = false,
     ): InstalledTurnWorker = operationLocks.withLock(conversationId) {
         val runtime = findRuntime(conversationId)
             ?: error("conversation runtime is not resident: $conversationId")
@@ -196,9 +197,24 @@ class ConversationRuntimeRegistry(
             handle = handle,
             phase = phase,
             supersedeReason = supersedeReason,
+            requireQueueOutcome = requireQueueOutcome,
         )
         worker.start()
         installed
+    }
+
+    internal suspend fun installAndStartQueuedInputWorker(
+        conversationId: Uuid,
+        dispatch: QueuedInputDispatch,
+        selection: net.weero.measix.pilot.data.enterprise.RealmSelection,
+        turnId: Uuid,
+        worker: Job,
+    ): QueuedConversationInput? = operationLocks.withLock(conversationId) {
+        val runtime = findRuntime(conversationId) ?: return@withLock null
+        val accepted = runtime.installQueuedInputWorker(dispatch, selection, turnId, worker, requireQueueOutcome = true)
+            ?: return@withLock null
+        worker.start()
+        accepted
     }
 
     /**
@@ -209,13 +225,14 @@ class ConversationRuntimeRegistry(
         conversationId: Uuid,
         handle: TurnHandle,
         worker: Job,
+        requireQueueOutcome: Boolean = false,
     ): InstalledTurnWorker = operationLocks.withLock(conversationId) {
         check(handle.conversationId == conversationId) {
             "user-interaction continuation ${handle.turnId} belongs to ${handle.conversationId}"
         }
         val runtime = findRuntime(conversationId)
             ?: error("conversation runtime is not resident: $conversationId")
-        val installed = runtime.continueAwaitingUser(handle, worker)
+        val installed = runtime.continueAwaitingUser(handle, worker, requireQueueOutcome)
         worker.start()
         installed
     }

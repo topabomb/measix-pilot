@@ -50,6 +50,7 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.utils.plus
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchResult
@@ -69,13 +70,19 @@ fun SettingSearchDetailPage(
 
     val service = settings.searchServices.find { it.id == serviceId } ?: return
     var options by remember(service) { mutableStateOf(service) }
+    val editScope = rememberCoroutineScope()
+    var savingAnswer by remember(serviceId) { mutableStateOf(false) }
+    var answerError by remember(serviceId) { mutableStateOf<String?>(null) }
 
     fun save(updated: SearchServiceOptions) {
         options = updated
         vm.updateSettings { current ->
             current.copy(
                 searchServices = current.searchServices.map {
-                    if (it.id == updated.id) updated else it
+                    if (it.id != updated.id) it
+                    else if (it is SearchServiceOptions.TavilyOptions && updated is SearchServiceOptions.TavilyOptions)
+                        updated.copy(includeAnswer = it.includeAnswer)
+                    else updated
                 }
             )
         }
@@ -143,8 +150,31 @@ fun SettingSearchDetailPage(
 
                         SearchServiceOptionsEditor(
                             options = options,
-                            onUpdateOptions = { save(it) }
+                            onUpdateOptions = { save(it) },
+                            savingAnswer = savingAnswer,
+                            onIncludeAnswerChange = { enabled ->
+                                val current = options as SearchServiceOptions.TavilyOptions
+                                savingAnswer = true
+                                answerError = null
+                                editScope.launch {
+                                    try {
+                                        vm.setTavilyIncludeAnswer(current.id as ConfigurationReference.User, current.includeAnswer, enabled)
+                                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                                        throw cancelled
+                                    } catch (failure: Exception) {
+                                        android.util.Log.e("SearchSettings", "Saving Tavily answer option failed", failure)
+                                        answerError = failure.userVisibleDiagnostic()
+                                    } finally {
+                                        savingAnswer = false
+                                    }
+                                }
+                            },
                         )
+                        answerError?.let { detail ->
+                            androidx.compose.foundation.text.selection.SelectionContainer {
+                                Text(detail, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
 
                         ProvideTextStyle(MaterialTheme.typography.labelMedium) {
                             SearchProviderDescription(options)
@@ -167,11 +197,13 @@ fun SettingSearchDetailPage(
 @Composable
 private fun SearchServiceOptionsEditor(
     options: SearchServiceOptions,
-    onUpdateOptions: (SearchServiceOptions) -> Unit
+    onUpdateOptions: (SearchServiceOptions) -> Unit,
+    savingAnswer: Boolean,
+    onIncludeAnswerChange: (Boolean) -> Unit,
 ) {
     when (options) {
         is SearchServiceOptions.TavilyOptions -> {
-            TavilyOptions(options) { onUpdateOptions(it) }
+            TavilyOptions(options, { onUpdateOptions(it) }, savingAnswer, onIncludeAnswerChange)
         }
         is SearchServiceOptions.SearXNGOptions -> {
             SearXNGOptions(options) { onUpdateOptions(it) }
@@ -327,7 +359,9 @@ private fun SearchTestSection(
 @Composable
 internal fun TavilyOptions(
     options: SearchServiceOptions.TavilyOptions,
-    onUpdateOptions: (SearchServiceOptions.TavilyOptions) -> Unit
+    onUpdateOptions: (SearchServiceOptions.TavilyOptions) -> Unit,
+    savingAnswer: Boolean,
+    onIncludeAnswerChange: (Boolean) -> Unit,
 ) {
     FormItem(
         label = {
@@ -341,6 +375,14 @@ internal fun TavilyOptions(
             },
             modifier = Modifier.fillMaxWidth()
         )
+    }
+
+    FormItem(label = { Text(stringResource(R.string.search_tavily_include_answer)) }) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.search_tavily_include_answer_desc), modifier = Modifier.weight(1f))
+            androidx.compose.material3.Switch(checked = options.includeAnswer, enabled = !savingAnswer,
+                onCheckedChange = onIncludeAnswerChange)
+        }
     }
 
     FormItem(

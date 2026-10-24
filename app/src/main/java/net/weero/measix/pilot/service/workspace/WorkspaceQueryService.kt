@@ -69,6 +69,11 @@ class WorkspaceQueryService internal constructor(
     suspend fun listFiles(workspaceId: String, area: WorkspaceStorageArea, path: String) =
         repository.listFiles(workspaceId, area, path)
 
+    suspend fun guestPath(workspaceId: String, area: WorkspaceStorageArea, path: String): me.rerere.workspace.WorkspaceGuestPath {
+        recovery.awaitReady()
+        return repository.guestPath(workspaceId, area, path)
+    }
+
     suspend fun readTextForPreview(
         workspaceId: String,
         area: WorkspaceStorageArea,

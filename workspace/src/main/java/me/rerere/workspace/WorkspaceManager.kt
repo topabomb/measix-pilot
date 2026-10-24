@@ -203,12 +203,39 @@ class WorkspaceManager(
         }
     }
 
-    /**
-     * Maps an absolute path inside the rootfs to the corresponding host file.
-     *
-     * Bind mount sources are ordinary Android directories and can be read directly. Resolving
-     * them under [WorkspaceStorageArea.LINUX] would instead point at the empty mount point.
-     */
+    /** Projects a browser entry into the guest namespace without exposing a host path. */
+    fun guestPath(root: String, area: WorkspaceStorageArea, path: String): WorkspaceGuestPath {
+        // The trailing separator prevents RootfsPath's command-input trim from changing a file name.
+        val relative = RootfsPath.parse("/$path/").value.trimStart('/')
+        val directory = areaDir(root, area)
+        val selected = File(directory, relative)
+        if (!Files.exists(selected.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw java.io.FileNotFoundException("workspace_entry_missing: $path")
+        }
+        // A symlinked parent may have different host and guest resolution rules.
+        var parent = selected.parentFile
+        while (parent != null && parent != directory && parent.toPath().startsWith(directory.toPath())) {
+            if (Files.isSymbolicLink(parent.toPath())) {
+                return WorkspaceGuestPath.Unavailable(WorkspaceGuestPath.Reason.SYMBOLIC_PARENT)
+            }
+            parent = parent.parentFile
+        }
+        val candidate = when (area) {
+            WorkspaceStorageArea.FILES -> ROOTFS_WORKSPACE_DIR + relative.takeIf { it.isNotEmpty() }?.let { "/$it" }.orEmpty()
+            WorkspaceStorageArea.LINUX -> "/$relative"
+        }
+        val parsed = RootfsPath.parse("$candidate/")
+        if (parsed.isUpload || KERNEL_FS_MOUNTS.any { candidate == it || candidate.startsWith("$it/") }) {
+            return WorkspaceGuestPath.Unavailable(WorkspaceGuestPath.Reason.MOUNT_SHADOWED)
+        }
+        val location = resolveRootfsPath(root, "$candidate/")
+        if (File(location.rootDir, location.relativePath).toPath().normalize() != selected.toPath().normalize()) {
+            return WorkspaceGuestPath.Unavailable(WorkspaceGuestPath.Reason.MOUNT_SHADOWED)
+        }
+        return WorkspaceGuestPath.Available(candidate)
+    }
+
+    /** Maps guest paths through bind sources, rather than the shadowed Linux mount points. */
     fun resolveRootfsPath(root: String, path: String): RootfsLocation {
         val parsed = RootfsPath.parse(path)
         require(!parsed.isUpload) { "/upload requires the calling artifact owner" }

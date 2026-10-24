@@ -81,14 +81,20 @@ internal class EnterpriseExitService(
         }
     }
 
-    suspend fun captureRequest(): EnterpriseExitRequest? {
+    suspend fun captureRequest(): EnterpriseExitPreview? {
         recoveryGate.awaitReady()
-        return sessions.captureExitRequest()
+        var preview: EnterpriseExitPreview? = null
+        sessions.captureExitRequest { request ->
+            preview = EnterpriseExitPreview(request, conversations.captureEnterpriseExitInputs(request.access))
+        }
+        return preview
     }
 
-    suspend fun exit(request: EnterpriseExitRequest): EnterpriseExitResult {
+    suspend fun exit(request: EnterpriseExitPreview): EnterpriseExitResult {
         recoveryGate.awaitReady()
-        return enqueue(request.access, EnterpriseExitReason.USER_REQUEST) { sessions.beginExit(request) }.result.await()
+        return enqueue(request.access, EnterpriseExitReason.USER_REQUEST) {
+            sessions.beginExit(request.request) { conversations.requireEnterpriseExitInputs(request) }
+        }.result.await()
     }
 
     suspend fun invalidate(access: RealmAccess.Enterprise, reason: EnterpriseExitReason): EnterpriseExitResult {

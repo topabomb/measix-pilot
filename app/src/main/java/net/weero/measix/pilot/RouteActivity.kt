@@ -15,6 +15,11 @@ import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -66,8 +71,8 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
-import com.dokar.sonner.Toaster
-import com.dokar.sonner.rememberToasterState
+import net.weero.measix.pilot.ui.components.toast.Toaster
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import kotlinx.serialization.Serializable
 import me.rerere.workspace.WorkspaceStorageArea
 import net.weero.measix.pilot.data.datastore.SettingsStore
@@ -261,7 +266,6 @@ class RouteActivity : ComponentActivity() {
     @Suppress("OPT_IN_IS_NOT_ENABLED")
     @Composable
     fun AppRoutes() {
-        val toastState = rememberToasterState()
         val settings by settingsStore.userSettings.collectAsStateWithLifecycle()
         val speech = koinInject<net.weero.measix.pilot.service.SpeechApplicationService>()
         val tts = speech.playback
@@ -271,7 +275,7 @@ class RouteActivity : ComponentActivity() {
         val recoveryCoordinator = koinInject<ApplicationRecoveryCoordinator>()
         val recoveryState by recoveryCoordinator.state.collectAsStateWithLifecycle()
         var speechError by remember { mutableStateOf<net.weero.measix.pilot.service.ChatError?>(null) }
-        LaunchedEffect(tts, toastState) {
+        LaunchedEffect(tts) {
             tts.error.collect { message ->
                 if (message != null) speechError = message
             }
@@ -289,6 +293,7 @@ class RouteActivity : ComponentActivity() {
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
 
         val backStack = rememberNavBackStack(Screen.Startup(intent.getStringExtra("conversationId")))
+        val toastState = androidx.compose.runtime.key(backStack.lastOrNull()) { rememberToasterState() }
         WindowSystemBars(
             darkTheme = LocalDarkMode.current ||
                 (recoveryState is ApplicationRecoveryState.Ready && backStack.lastOrNull() is Screen.WorkspaceTerminal),
@@ -303,10 +308,11 @@ class RouteActivity : ComponentActivity() {
         }
 
         ShareHandler(backStack)
+        val navigator = remember(backStack) { Navigator(backStack) }
 
         SharedTransitionLayout {
             CompositionLocalProvider(
-                LocalNavController provides Navigator(backStack),
+                LocalNavController provides navigator,
                 LocalSharedTransitionScope provides this,
                 LocalSettings provides settings,
                 LocalToaster provides toastState,
@@ -320,13 +326,6 @@ class RouteActivity : ComponentActivity() {
                         onDismiss = { speech.dismissError(error.id); if (speechError?.id == error.id) speechError = null },
                     )
                 }
-                Toaster(
-                    state = toastState,
-                    darkTheme = LocalDarkMode.current,
-                    richColors = true,
-                    alignment = Alignment.TopCenter,
-                    showCloseButton = true,
-                )
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -341,7 +340,7 @@ class RouteActivity : ComponentActivity() {
                             rememberViewModelStoreNavEntryDecorator(),
                         ),
                         modifier = Modifier.fillMaxSize(),
-                        onBack = { backStack.removeLastOrNull() },
+                        onBack = { navigator.popBackStack() },
                         transitionSpec = {
                             if (backStack.size == 1) fadeIn() togetherWith fadeOut()
                             else {
@@ -636,6 +635,9 @@ class RouteActivity : ComponentActivity() {
                             }
                         }
                     }
+                    Toaster(state = toastState, modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)))
                 }
             }
         }

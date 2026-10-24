@@ -124,6 +124,7 @@ fun ChatMessage(
     onToolDecision: (suspend (locator: ToolCallLocator, decision: ToolInteractionDecision) -> Boolean)? = null,
     onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     toolLivePhases: Map<ToolCallLocator, ToolLivePhase> = emptyMap(),
+    toolDurationsMillis: Map<ToolCallLocator, Long> = emptyMap(),
     onShowTerminalError: ((UIMessage) -> Unit)? = null,
     readOnly: Boolean = false,
     contextSummary: net.weero.measix.pilot.service.MessageContextSummary? = null,
@@ -198,21 +199,26 @@ fun ChatMessage(
                 Text(originLabel, style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            MessagePartsBlock(
-                detailSource = detailSource,
-                assistant = assistant,
-                messageId = message.id,
-                role = message.role,
-                parts = renderableParts,
-                annotations = message.annotations,
-                loading = loading,
-                onToolDecision = if (readOnly) null else onToolDecision,
-                onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
-                toolLivePhases = toolLivePhases,
-                onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
-                contextUpdates = contextUpdates,
-                onContextUpdate = { contextRequestId = it },
-            )
+            net.weero.measix.pilot.ui.components.richtext.MessageRichTextHost(
+                detailSource, contextConversationId, message.id, hasRenderableParts,
+            ) {
+                MessagePartsBlock(
+                    detailSource = detailSource,
+                    assistant = assistant,
+                    messageId = message.id,
+                    role = message.role,
+                    parts = renderableParts,
+                    annotations = message.annotations,
+                    loading = loading,
+                    onToolDecision = if (readOnly) null else onToolDecision,
+                    onSubAssistantAnswer = if (readOnly) null else onSubAssistantAnswer,
+                    toolLivePhases = toolLivePhases,
+                    toolDurationsMillis = toolDurationsMillis,
+                    onUserMessageClick = if (!readOnly && message.role == MessageRole.USER) onEdit else null,
+                    contextUpdates = contextUpdates,
+                    onContextUpdate = { contextRequestId = it },
+                )
+            }
         }
 
         message.terminalStatus?.let { terminalStatus ->
@@ -407,6 +413,7 @@ private fun MessagePartsBlock(
     onToolDecision: (suspend (locator: ToolCallLocator, decision: ToolInteractionDecision) -> Boolean)? = null,
     onSubAssistantAnswer: (suspend (runId: String, interactionId: String, answer: String) -> Boolean)? = null,
     toolLivePhases: Map<ToolCallLocator, ToolLivePhase>,
+    toolDurationsMillis: Map<ToolCallLocator, Long>,
     onUserMessageClick: (() -> Unit)? = null,
     contextUpdates: List<net.weero.measix.pilot.service.ConversationContextUpdateMarker> = emptyList(),
     onContextUpdate: (Uuid) -> Unit = {},
@@ -423,7 +430,7 @@ private fun MessagePartsBlock(
             onDismiss = { attachmentOpenFailure = null })
     }
     fun openAttachment(preview: net.weero.measix.pilot.service.AttachmentPreview?) {
-        if (preview == null) { toaster.show(openFailureText, type = com.dokar.sonner.ToastType.Error); return }
+        if (preview == null) { toaster.show(openFailureText, type = net.weero.measix.pilot.ui.components.toast.ToastType.Error); return }
         exportScope.launch {
             try { exportService.openAttachment(context, preview) }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
@@ -506,6 +513,7 @@ private fun MessagePartsBlock(
                                         tool = step.tool,
                                         locator = locator,
                                         phase = toolLivePhases[locator],
+                                        durationMillis = toolDurationsMillis[locator],
                                         onToolDecision = onToolDecision,
                                     )
                                 }
@@ -527,12 +535,14 @@ private fun MessagePartsBlock(
                             tool = streamedTool,
                             locator = locator,
                             phase = phase,
+                            durationMillis = toolDurationsMillis[locator],
                             onToolDecision = onToolDecision,
                         )
                     }
                 } else {
                     SubAssistantCallCard(
                         tool = block.tool,
+                        durationMillis = toolDurationsMillis[locator],
                         detailSource = detailSource,
                         onAnswer = onSubAssistantAnswer,
                         modifier = Modifier.animateContentSize(),
@@ -540,7 +550,7 @@ private fun MessagePartsBlock(
                 }
             }
 
-            is MessagePartBlock.ContentBlock -> key(block.index) {
+            is MessagePartBlock.ContentBlock -> key(messageId, block.index) {
                 val preview = resolveAttachmentPreview(block.part, attachmentPreview)
                 if (preview?.diagnostic != null) {
                     AttachmentPreviewDiagnostic(preview)
@@ -560,6 +570,10 @@ private fun MessagePartsBlock(
                             Text(display.type, style = MaterialTheme.typography.labelMedium)
                     }
                     is UIMessagePart.Text -> {
+                        val previewPreferences = remember(messageId, block.index) {
+                            net.weero.measix.pilot.ui.components.richtext.CodePreviewPreferences()
+                        }
+                        previewPreferences.observe(part.text, loading && role == MessageRole.ASSISTANT)
                         val textContent = @Composable {
                             if (role == MessageRole.USER) {
                                 Surface(
@@ -620,11 +634,13 @@ private fun MessagePartsBlock(
                         // 内部可选择的 Text 会频繁注册/注销，与 Compose 选择工具栏在绘制阶段
                         // 对 selectable 列表的排序产生并发修改，导致 ConcurrentModificationException。
                         // 生成结束后内容稳定，再启用文本选择。
-                        if (loading) {
-                            textContent()
-                        } else {
-                            SelectionContainer {
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            net.weero.measix.pilot.ui.components.richtext.LocalCodePreviewPreferences provides previewPreferences,
+                        ) {
+                            if (loading) {
                                 textContent()
+                            } else {
+                                SelectionContainer { textContent() }
                             }
                         }
                     }

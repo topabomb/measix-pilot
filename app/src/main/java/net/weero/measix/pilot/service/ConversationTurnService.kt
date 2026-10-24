@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -126,8 +127,19 @@ import net.weero.measix.pilot.service.runtime.UpdateHeader
 import net.weero.measix.pilot.service.runtime.ResolveToolInteraction
 import net.weero.measix.pilot.service.runtime.ToolInteractionDecision
 import net.weero.measix.pilot.service.runtime.toInteractionState
+import net.weero.measix.pilot.service.runtime.InputQueueRequestOutcome
+import net.weero.measix.pilot.service.runtime.InputQueuePauseReason
+import net.weero.measix.pilot.service.runtime.QueuedConversationInput
+import net.weero.measix.pilot.service.runtime.QueuedInputDispatch
 
 private const val TAG = "ConversationTurnService"
+
+private fun TurnRunResult.queueOutcome(): InputQueueRequestOutcome = when (this) {
+    is TurnOutcome.Completed -> InputQueueRequestOutcome.COMPLETED
+    is TurnPause -> InputQueueRequestOutcome.AWAITING_USER
+    is TurnOutcome.Cancelled -> InputQueueRequestOutcome.CANCELLED
+    else -> InputQueueRequestOutcome.FAILED
+}
 
 /** 用户会话 Turn 有两个不可互换的入口协议。 */
 internal enum class TurnEntry {
@@ -299,6 +311,18 @@ data class SendMessageReceipt(
     val userMessageId: Uuid,
 )
 
+internal data class QueuedInputReceipt(val conversationId: Uuid, val itemId: Uuid, val version: Long)
+
+internal sealed interface ChatInputSubmissionReceipt {
+    data class Sent(val receipt: SendMessageReceipt) : ChatInputSubmissionReceipt
+    data class Queued(val receipt: QueuedInputReceipt) : ChatInputSubmissionReceipt
+}
+
+private sealed interface RequestAdmission {
+    data class Started(val turnId: Uuid) : RequestAdmission
+    data class Queued(val receipt: QueuedInputReceipt) : RequestAdmission
+}
+
 class ConversationTurnService internal constructor(
     private val context: Application,
     private val appScope: AppScope,
@@ -364,13 +388,27 @@ class ConversationTurnService internal constructor(
 
     private suspend fun <T> withUiTarget(
         target: ConversationCommandTarget,
+        expectedAssistantId: me.rerere.common.configuration.ConfigurationReference? = null,
         operation: suspend (ConversationRuntime) -> T,
     ): T {
         recoveryGate.awaitReady()
         return sessions.withSelectedRealmSelection(target.selection) {
-            commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {
-                target.requireOpen()
-                operation(requireRuntime(target.conversationId))
+            suspend fun execute(): T =
+                commandCoordinator.withRootHeaders(target.selection.access.scope, listOf(target.conversationId)) {
+                    target.requireOpen()
+                    val runtime = requireRuntime(target.conversationId)
+                    if (expectedAssistantId != null) {
+                        check(runtime.durable.header.assistantId == expectedAssistantId) { "conversation_assistant_changed" }
+                    }
+                    operation(runtime)
+                }
+            if (expectedAssistantId == null) execute()
+            else settingsStore.withResolvedConfiguration(target.selection.access.scope, sessions.state.value) { configuration ->
+                // Keep admission and definition deletion ordered without requiring a usable model to queue a draft.
+                check(expectedAssistantId in configuration.assistants) { "conversation_assistant_unavailable" }
+                check(configuration.access(net.weero.measix.pilot.data.configuration.ConfigurationCategory.ASSISTANT,
+                    expectedAssistantId).canSelect) { "conversation_assistant_unavailable" }
+                execute()
             }
         }
     }
@@ -411,8 +449,10 @@ class ConversationTurnService internal constructor(
         artifactDraftScope: ArtifactDraftScope?,
         errorTitle: Int,
         onFailure: suspend (Throwable, ArtifactSubmission?) -> Unit = { _, _ -> },
-        operation: suspend (ConversationRuntime, Uuid, ArtifactSubmission?) -> Unit,
-    ): Uuid {
+        queueForAssistant: me.rerere.common.configuration.ConfigurationReference? = null,
+        queuedAnswer: Boolean = true,
+        operation: suspend (ConversationRuntime, Uuid, ArtifactSubmission?) -> InputQueueRequestOutcome,
+    ): RequestAdmission {
         recoveryGate.awaitReady()
         fun reportFailure(error: Exception) {
             logDiagnosticFailure(TAG, "Conversation request preparation or cleanup failed", error)
@@ -425,6 +465,10 @@ class ConversationTurnService internal constructor(
         val submission = artifactDraftScope?.claimSubmission(target, content)
         val turnId = Uuid.random()
         var accepted = false
+        var queueEpoch = 0L
+        var outcome = InputQueueRequestOutcome.FAILED
+        var installedRuntime: ConversationRuntime? = null
+        var queuedReceipt: QueuedInputReceipt? = null
         val ready = CompletableDeferred<Pair<ConversationRuntime, InstalledTurnWorker>?>()
         val job = appScope.launch(start = CoroutineStart.UNDISPATCHED) {
             val requestWorker = requireNotNull(coroutineContext[Job])
@@ -440,8 +484,9 @@ class ConversationTurnService internal constructor(
                 val (runtime, installed) = ready.await() ?: return@launch
                 closePrevious(runtime, installed)
                 currentCoroutineContext().ensureActive()
-                operation(runtime, turnId, submission)
+                outcome = operation(runtime, turnId, submission)
             } catch (cancelled: CancellationException) {
+                outcome = InputQueueRequestOutcome.CANCELLED
                 withContext(NonCancellable) {
                     if (ready.await() != null) onFailure(cancelled, submission)
                 }
@@ -468,19 +513,40 @@ class ConversationTurnService internal constructor(
                 }
             }
         }
+        job.invokeOnCompletion { cause ->
+            installedRuntime?.let { runtime -> notifyQueueRequestFinished(runtime, job, queueEpoch,
+                if (cause != null && outcome == InputQueueRequestOutcome.COMPLETED) InputQueueRequestOutcome.FAILED else outcome) }
+        }
         try {
-            withUiTarget(target) { runtime ->
+            withUiTarget(target, queueForAssistant) { runtime ->
                 currentCoroutineContext().ensureActive()
                 check(!job.isCancelled) { "conversation_request_scope_closed" }
                 withContext(NonCancellable) {
+                    if (queueForAssistant != null) {
+                        check(runtime.durable.header.assistantId == queueForAssistant) { "conversation_assistant_changed" }
+                        if (runtime.mustQueueInput()) {
+                            val item = runtime.enqueueInput(target.selection, queueForAssistant, content, queuedAnswer, submission)
+                            queuedReceipt = QueuedInputReceipt(runtime.id, item.id, item.version)
+                            accepted = true
+                            ready.complete(null)
+                            job.cancel()
+                            return@withContext
+                        }
+                    }
+                    queueEpoch = runtime.inputQueue.value.epoch
                     val installed = runtimeRegistry.installAndStartTurnWorker(
                         runtime.id, turnId, job, supersedeReason = TurnTerminalReasons.SUPERSEDED_BY_NEW_TURN,
+                        requireQueueOutcome = true,
                     )
                     accepted = true
+                    installedRuntime = runtime
                     ready.complete(runtime to installed)
                 }
             }
-            return turnId
+            return queuedReceipt?.let {
+                requestQueueDispatch(target.conversationId)
+                RequestAdmission.Queued(it)
+            } ?: RequestAdmission.Started(turnId)
         } finally {
             if (!accepted) {
                 ready.complete(null)
@@ -490,17 +556,327 @@ class ConversationTurnService internal constructor(
         }
     }
 
+    internal suspend fun enqueueMessage(
+        target: ConversationAssistantTarget,
+        content: List<UIMessagePart>,
+        answer: Boolean,
+        draft: ArtifactDraftScope?,
+    ): QueuedInputReceipt? {
+        if (content.isEmptyInputMessage()) return null
+        val submission = draft?.claimSubmission(target.conversation, content)
+        var accepted = false
+        try {
+            val item = withUiTarget(target.conversation, target.assistantId) { runtime ->
+                currentCoroutineContext().ensureActive()
+                runtime.enqueueInput(target.conversation.selection, target.assistantId, content, answer, submission)
+                    .also { accepted = true }
+            }
+            requestQueueDispatch(target.conversation.conversationId)
+            return QueuedInputReceipt(target.conversation.conversationId, item.id, item.version)
+        } finally {
+            if (!accepted && submission != null) requireNotNull(draft).returnToDraft(submission)
+        }
+    }
+
+    internal suspend fun removeQueuedInput(target: ConversationCommandTarget, itemId: Uuid, version: Long) {
+        withUiTarget(target) { it.removeQueuedInput(itemId, version) }
+        requestQueueDispatch(target.conversationId)
+    }
+
+    internal suspend fun clearQueuedInputs(target: ConversationCommandTarget, expectedVersions: Map<Uuid, Long>) {
+        withUiTarget(target) { runtime -> runtime.clearQueuedInputs(expectedVersions) }
+    }
+
+    internal suspend fun beginQueuedInputEdit(
+        target: ConversationAssistantTarget,
+        itemId: Uuid,
+        version: Long,
+    ): QueueInputEditLease {
+        var created: QueueInputEditLease? = null
+        var handedOff = false
+        try {
+            val lease = withUiTarget(target.conversation, target.assistantId) { runtime ->
+                check(runtime.durable.header.assistantId == target.assistantId) { "conversation_assistant_changed" }
+                check(runtime.inputQueue.value.items.singleOrNull { it.id == itemId && it.version == version }
+                    ?.selection?.access == target.conversation.selection.access) { "queue_edit_changed" }
+                currentCoroutineContext().ensureActive()
+                withContext(NonCancellable) {
+                    val item = runtime.beginQueuedInputEdit(itemId, version)
+                    try {
+                        check(item.selection.access == target.conversation.selection.access) { "queue_session_mismatch" }
+                        QueueInputEditLease(target, runtime, item, createDraft = { requireEditor ->
+                            artifactUseCase.openDraftScope(ConversationCommandTarget(runtime.id, target.conversation.selection) {
+                                target.conversation.requireOpen()
+                                requireEditor()
+                            })
+                        }, onClose = ::closeQueuedInputEdit).also { editor ->
+                            created = editor
+                            runtime.registerQueuedInputEditCleanup(item.id, item.version, requireNotNull(item.editToken), editor::close)
+                        }
+                    } catch (error: Throwable) {
+                        runtime.cancelQueuedInputEdit(item.id, item.version, requireNotNull(item.editToken))
+                        throw error
+                    }
+                }
+            }
+            val observer = appScope.launch {
+                try {
+                    combine(lease.runtime.inputQueue, lease.runtime.snapshot, sessions.observeSelectedRealmSelection()) { queue, snapshot, selection ->
+                        selection != lease.target.conversation.selection || snapshot.durable.header.assistantId != lease.target.assistantId ||
+                            (queue.epoch != lease.initialQueueEpoch && queue.pauseReason == InputQueuePauseReason.CONTEXT_CHANGED) || queue.items.none {
+                            it.id == lease.itemId && it.version == lease.version && it.editToken == lease.editToken
+                        }
+                    }.first { it }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    reportQueuedInputEditFailure(lease, error)
+                } finally { lease.close() }
+            }
+            lease.observeWith(observer)
+            currentCoroutineContext().ensureActive()
+            handedOff = true
+            return lease
+        } finally {
+            if (!handedOff) created?.close()
+        }
+    }
+
+    internal suspend fun saveQueuedInputEdit(
+        lease: QueueInputEditLease,
+        parts: List<UIMessagePart>,
+    ): QueuedInputReceipt? {
+        if (parts.isEmptyInputMessage()) return null
+        lease.beginSave()
+        var replacement: ArtifactSubmission? = null
+        var accepted = false
+        try {
+            replacement = lease.draft.claimSubmission(lease.draft.target, parts)
+            withUiTarget(lease.target.conversation, lease.target.assistantId) { runtime ->
+                requireQueuedInputEdit(lease, runtime)
+                currentCoroutineContext().ensureActive()
+                withContext(NonCancellable) {
+                    lease.acceptReplacement {
+                        try {
+                            runtime.replaceQueuedInputContents(lease.itemId, lease.version, lease.editToken, parts, replacement)
+                        } finally {
+                            // The Runtime closes the edit lease after accepting its replacement.
+                            accepted = runtime.inputQueue.value.items.any { item ->
+                                item.id == lease.itemId && item.version == lease.version + 1 &&
+                                    item.submission === replacement && item.editToken == null
+                            }
+                        }
+                    }
+                }
+            }
+            requestQueueDispatch(lease.runtime.id)
+            return QueuedInputReceipt(lease.runtime.id, lease.itemId, lease.version + 1)
+        } finally {
+            withContext(NonCancellable) {
+                try {
+                    if (!accepted) replacement?.let { lease.draft.returnToDraft(it) }
+                } finally {
+                    lease.finishSave()
+                    if (accepted) lease.close()
+                }
+            }
+        }
+    }
+
+    internal suspend fun queuedInputEditPreviews(
+        lease: QueueInputEditLease,
+        parts: List<UIMessagePart>,
+    ): Map<String, ArtifactInputPreview> {
+        suspend fun verify() = withUiTarget(lease.target.conversation) { runtime -> requireQueuedInputEdit(lease, runtime) }
+        verify()
+        fun attachmentUrl(part: UIMessagePart): String? = when (part) {
+            is UIMessagePart.Image -> part.url
+            is UIMessagePart.Audio -> part.url
+            is UIMessagePart.Video -> part.url
+            is UIMessagePart.Document -> part.url
+            else -> null
+        }
+        val borrowedUris = lease.parts.mapNotNull(::attachmentUrl).toSet()
+        val (originalParts, newParts) = parts.partition { attachmentUrl(it) in borrowedUris }
+        val originals = lease.original.submission?.describeInputs(originalParts, ::verify)
+            ?: lease.draft.describeInputs(originalParts)
+        // The two owners each take Session independently; never call one while the other holds it.
+        val added = lease.draft.describeInputs(newParts)
+        verify()
+        return originals + added
+    }
+
+    private fun requireQueuedInputEdit(lease: QueueInputEditLease, runtime: ConversationRuntime) {
+        lease.requireReadable()
+        check(runtime === lease.runtime && runtime.durable.header.assistantId == lease.target.assistantId) { "queue_edit_context_changed" }
+        check(runtime.inputQueue.value.items.any { item ->
+            item.id == lease.itemId && item.version == lease.version && item.editToken == lease.editToken &&
+                item.selection.access == lease.target.conversation.selection.access
+        }) { "queue_edit_changed" }
+    }
+
+    private fun closeQueuedInputEdit(lease: QueueInputEditLease, closeFailure: Throwable?) {
+        appScope.launch {
+            try {
+                closeFailure?.let { reportQueuedInputEditFailure(lease, it) }
+                commandCoordinator.withResidentRuntime(lease.runtime.id) { current ->
+                    if (current === lease.runtime) current.cancelQueuedInputEdit(lease.itemId, lease.version, lease.editToken)
+                }
+                requestQueueDispatch(lease.runtime.id)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                reportQueuedInputEditFailure(lease, error)
+            }
+        }
+    }
+
+    private fun reportQueuedInputEditFailure(lease: QueueInputEditLease, error: Throwable) {
+        logDiagnosticFailure(TAG, "Queued input editing failed", error)
+        chatErrorStore.add(ChatError(title = context.getString(R.string.error_title_send_message),
+            detail = error.userVisibleDiagnostic(), conversationId = lease.runtime.id))
+    }
+
+    internal suspend fun resumeInputQueue(target: ConversationAssistantTarget) {
+        withUiTarget(target.conversation) { it.resumeInputQueue(target.conversation.selection, target.assistantId) }
+        requestQueueDispatch(target.conversation.conversationId)
+    }
+
+    private fun notifyQueueRequestFinished(runtime: ConversationRuntime, worker: Job, epoch: Long, result: InputQueueRequestOutcome) {
+        appScope.launch {
+            try {
+                val reconciled = commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                    current === runtime && current.reconcileInputQueueOutcome(worker, epoch, result)
+                }
+                if (reconciled == true) dispatchQueuedInput(runtime.id)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportQueueFailure(runtime.id, error) }
+        }
+    }
+
+    private fun requestQueueDispatch(conversationId: Uuid) {
+        appScope.launch {
+            try { dispatchQueuedInput(conversationId) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { reportQueueFailure(conversationId, error) }
+        }
+    }
+
+    private fun reportQueueFailure(conversationId: Uuid, error: Exception) {
+        chatErrorStore.add(error, conversationId, context.getString(R.string.error_title_send_message))
+    }
+
+    private suspend fun dispatchQueuedInput(conversationId: Uuid) {
+        recoveryGate.awaitReady()
+        val runtime = runtimeRegistry.findRuntime(conversationId) ?: return
+        val dispatch = runtime.nextQueuedInputDispatch() ?: return
+        val original = runtime.inputQueue.value.items.firstOrNull { it.id == dispatch.itemId && it.version == dispatch.version } ?: return
+        val turnId = Uuid.random()
+        val ready = CompletableDeferred<QueuedConversationInput?>()
+        var accepted = false
+        var result = InputQueueRequestOutcome.FAILED
+        // Enter cleanup before admission: cancellation after installation may beat the first resumed instruction.
+        val worker = appScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val requestWorker = requireNotNull(coroutineContext[Job])
+            var acceptedItem: QueuedConversationInput? = null
+            var committed = false
+            var settled = false
+            try {
+                val item = ready.await() ?: return@launch
+                acceptedItem = item
+                val processed = appendRequestInput(runtime, turnId, item.selection.access, item.userMessageId, item.parts) {
+                    committed = true
+                    runtime.settleQueuedInputSubmission(dispatch, true)
+                    settled = true
+                }
+                item.submission?.publishCommittedReferences(processed)
+                result = if (item.answer) launchRun(runtime.id, turnId, launch = TurnLaunch.Start(item.selection.access)).queueOutcome()
+                    else InputQueueRequestOutcome.COMPLETED
+            } catch (cancelled: CancellationException) {
+                result = InputQueueRequestOutcome.CANCELLED
+                throw cancelled
+            } catch (error: Exception) {
+                result = InputQueueRequestOutcome.FAILED
+                reportQueueFailure(runtime.id, error)
+            } finally {
+                withContext(NonCancellable) {
+                    // Admission always completes ready, including rejection. An accepted item must settle
+                    // even when cancellation prevented ready.await from returning to the request body.
+                    val item = acceptedItem ?: ready.await()
+                    if (item != null) try {
+                        committed = committed || runtime.durable.nodes.any { node -> node.messages.any { it.id == item.userMessageId } }
+                        if (!settled) commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                            check(current === runtime) { "queue_runtime_changed" }
+                            current.settleQueuedInputSubmission(dispatch, committed)
+                        }
+                        if (committed) item.submission?.close()
+                    } finally {
+                        runtime.releaseTurnWorker(turnId, requestWorker)
+                    }
+                }
+            }
+        }
+        worker.invokeOnCompletion { cause ->
+            if (accepted) notifyQueueRequestFinished(runtime, worker, dispatch.epoch,
+                if (cause != null && result == InputQueueRequestOutcome.COMPLETED) InputQueueRequestOutcome.FAILED else result)
+        }
+        try {
+            sessions.withSelectedRealmSelection(original.selection) {
+                commandCoordinator.withRootHeaders(original.selection.access.scope, listOf(conversationId)) {
+                    if (runtimeRegistry.findRuntime(conversationId) !== runtime) return@withRootHeaders
+                    currentCoroutineContext().ensureActive()
+                    withContext(NonCancellable) {
+                        val item = runtimeRegistry.installAndStartQueuedInputWorker(conversationId, dispatch,
+                            original.selection, turnId, worker)
+                        accepted = item != null
+                        ready.complete(item)
+                    }
+                }
+            }
+        } catch (error: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) {
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime && current.inputQueue.value.epoch == dispatch.epoch)
+                    current.pauseInputQueue(InputQueuePauseReason.REALM_CHANGED)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            commandCoordinator.withResidentRuntime(runtime.id) { current ->
+                if (current === runtime && current.inputQueue.value.epoch == dispatch.epoch)
+                    current.pauseInputQueue(InputQueuePauseReason.REQUEST_FAILED)
+            }
+            throw error
+        } finally {
+            if (!accepted) {
+                ready.complete(null)
+                worker.cancel()
+            }
+        }
+    }
+
     suspend fun sendMessage(
         target: ConversationCommandTarget,
         content: List<UIMessagePart>,
         answer: Boolean = true,
         artifactDraftScope: ArtifactDraftScope? = null,
-    ): SendMessageReceipt? {
+    ): SendMessageReceipt? = (sendMessageWithAdmission(target, content, answer, artifactDraftScope, null)
+        as? ChatInputSubmissionReceipt.Sent)?.receipt
+
+    internal suspend fun submitChatInput(
+        target: ConversationAssistantTarget, content: List<UIMessagePart>, answer: Boolean = true,
+        artifactDraftScope: ArtifactDraftScope? = null,
+    ): ChatInputSubmissionReceipt? = sendMessageWithAdmission(target.conversation, content, answer, artifactDraftScope, target.assistantId)
+
+    private suspend fun sendMessageWithAdmission(
+        target: ConversationCommandTarget, content: List<UIMessagePart>, answer: Boolean,
+        artifactDraftScope: ArtifactDraftScope?, queueForAssistant: me.rerere.common.configuration.ConfigurationReference?,
+    ): ChatInputSubmissionReceipt? {
         if (content.isEmptyInputMessage()) return null
         val userMessageId = Uuid.random()
         val access = target.selection.access
         val appended = CompletableDeferred<Boolean>()
-        val turnId = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message,
+        val admission = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message,
+            queueForAssistant = queueForAssistant, queuedAnswer = answer,
             onFailure = { error, submission ->
                 // Cancellation can arrive after the command committed but before its caller resumed.
                 if (!appended.isCompleted) {
@@ -519,38 +895,46 @@ class ConversationTurnService internal constructor(
                 }
             },
         ) { runtime, turnId, submission ->
-            val processed = sessions.withRealmAccess(access) {
-                if (access is RealmAccess.Enterprise) {
-                    check((sessions.state.value as? net.weero.measix.pilot.data.enterprise.EnterpriseState.Available)
-                        ?.manifest?.phase == net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase.READY) {
-                        "enterprise_session_not_ready"
-                    }
-                }
-                settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
-                    withRequestOwner(access, runtime, turnId, tree = true) {
-                        val snapshot = runtime.durable
-                        if (snapshot.header.newConversation) {
-                            snapshot.opening?.let { requireCurrentStarterOpening(it, snapshot.header.assistantId, configuration) }
-                        }
-                        val assistant = configuration.assistants[snapshot.header.assistantId]
-                            ?: error("conversation_assistant_unavailable")
-                        val parts = preprocessUserInputParts(content, assistant)
-                        val message = UIMessage(id = userMessageId, role = MessageRole.USER, parts = parts)
-                        val localTitle = deriveLocalConversationTitle(message)
-                        commandCoordinator.executeOrThrow(runtime.id, AppendUserMessage(message, initialTitle = localTitle))
-                        appended.complete(true)
-                        if (snapshot.header.title.isBlank()) {
-                            titleCoordinator.synchronize(runtime.id, runtime.durable.header.title, localTitle)
-                        }
-                        parts
-                    }
-                }
-            }
+            val processed = appendRequestInput(runtime, turnId, access, userMessageId, content) { appended.complete(true) }
             // Publication follows the message transaction, without holding Session/conversation locks.
             submission?.publishCommittedReferences(processed)
-            if (answer) launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access))
+            if (answer) launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access)).queueOutcome()
+            else InputQueueRequestOutcome.COMPLETED
         }
-        return if (appended.await()) SendMessageReceipt(target.conversationId, turnId, userMessageId) else null
+        return when (admission) {
+            is RequestAdmission.Queued -> ChatInputSubmissionReceipt.Queued(admission.receipt)
+            is RequestAdmission.Started -> if (appended.await()) ChatInputSubmissionReceipt.Sent(
+                SendMessageReceipt(target.conversationId, admission.turnId, userMessageId)) else null
+        }
+    }
+
+    private suspend fun appendRequestInput(
+        runtime: ConversationRuntime, turnId: Uuid, access: RealmAccess, userMessageId: Uuid,
+        content: List<UIMessagePart>, onCommitted: () -> Unit = {},
+    ): List<UIMessagePart> = sessions.withRealmAccess(access) {
+        if (access is RealmAccess.Enterprise) {
+            check((sessions.state.value as? net.weero.measix.pilot.data.enterprise.EnterpriseState.Available)
+                ?.manifest?.phase == net.weero.measix.pilot.data.enterprise.EnterpriseSessionPhase.READY) {
+                "enterprise_session_not_ready"
+            }
+        }
+        settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
+            withRequestOwner(access, runtime, turnId, tree = true) {
+                val snapshot = runtime.durable
+                if (snapshot.header.newConversation) {
+                    snapshot.opening?.let { requireCurrentStarterOpening(it, snapshot.header.assistantId, configuration) }
+                }
+                val assistant = configuration.assistants[snapshot.header.assistantId]
+                    ?: error("conversation_assistant_unavailable")
+                val parts = preprocessUserInputParts(content, assistant)
+                val message = UIMessage(id = userMessageId, role = MessageRole.USER, parts = parts)
+                val localTitle = deriveLocalConversationTitle(message)
+                commandCoordinator.executeOrThrow(runtime.id, AppendUserMessage(message, initialTitle = localTitle))
+                onCommitted()
+                if (snapshot.header.title.isBlank()) titleCoordinator.synchronize(runtime.id, runtime.durable.header.title, localTitle)
+                parts
+            }
+        }
     }
 
     suspend fun editAndResend(
@@ -560,10 +944,11 @@ class ConversationTurnService internal constructor(
         artifactDraftScope: ArtifactDraftScope? = null,
     ): SendMessageReceipt? {
         if (content.isEmptyInputMessage()) return null
+        withUiTarget(target) { it.pauseInputQueue(InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true) }
         val userMessageId = Uuid.random()
         val access = target.selection.access
         val edited = CompletableDeferred<Boolean>()
-        val turnId = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message,
+        val admission = startRequest(target, content, artifactDraftScope, R.string.error_title_send_message,
             onFailure = { error, submission ->
                 if (!edited.isCompleted) {
                     val committed = runtimeRegistry.findRuntime(target.conversationId)?.durable?.nodes?.any { node ->
@@ -601,9 +986,10 @@ class ConversationTurnService internal constructor(
                 parts
             }
             submission?.publishCommittedReferences(processed)
-            launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access))
+            launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access)).queueOutcome()
         }
-        return if (edited.await()) SendMessageReceipt(target.conversationId, turnId, userMessageId) else null
+        return if (edited.await()) SendMessageReceipt(target.conversationId,
+            (admission as RequestAdmission.Started).turnId, userMessageId) else null
     }
 
     suspend fun regenerateAtMessage(
@@ -611,6 +997,7 @@ class ConversationTurnService internal constructor(
         message: UIMessage,
         regenerateAssistantMsg: Boolean = true,
     ) {
+        withUiTarget(target) { it.pauseInputQueue(InputQueuePauseReason.CONTEXT_CHANGED, contextChanged = true) }
         val access = target.selection.access
         startRequest(target, emptyList(), null, R.string.error_title_regenerate_message) { runtime, turnId, _ ->
             withRequest(access, runtime, turnId, tree = true) {
@@ -629,8 +1016,8 @@ class ConversationTurnService internal constructor(
                 } else commandCoordinator.executeOrThrow(runtime.id, ReplaceMessageTree(snapshot.nodes))
             }
             if (message.role == MessageRole.USER || regenerateAssistantMsg) {
-                launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access))
-            }
+                launchRun(runtime.id, turnId, launch = TurnLaunch.Start(access)).queueOutcome()
+            } else InputQueueRequestOutcome.COMPLETED
         }
     }
 
@@ -659,13 +1046,27 @@ class ConversationTurnService internal constructor(
                         onMoreApprovalsPending = {},
                         continueTurn = { owner, _ ->
                             val handle = TurnHandle(runtime.id, owner.epoch, owner.turnId, owner.assistantMessageId)
+                            val queueEpoch = runtime.inputQueue.value.epoch
+                            var result = InputQueueRequestOutcome.FAILED
+                            var installed = false
                             val resumeJob = appScope.launch(start = CoroutineStart.LAZY) {
+                                val worker = requireNotNull(coroutineContext[Job])
                                 try {
-                                    launchRun(runtime.id, owner.turnId, launch = TurnLaunch.Continue(original.realmAccess))
-                                } finally { runtime.releaseTurnWorker(owner.turnId, coroutineContext[Job]) }
+                                    result = launchRun(runtime.id, owner.turnId, launch = TurnLaunch.Continue(original.realmAccess)).queueOutcome()
+                                } catch (cancelled: CancellationException) {
+                                    result = InputQueueRequestOutcome.CANCELLED
+                                    throw cancelled
+                                } finally { withContext(NonCancellable) { runtime.releaseTurnWorker(owner.turnId, worker) } }
                             }
-                            try { runtimeRegistry.installAndStartUserInteractionContinuation(runtime.id, handle, resumeJob) }
-                            catch (error: Throwable) { resumeJob.cancel(); throw error }
+                            resumeJob.invokeOnCompletion { cause ->
+                                if (installed) notifyQueueRequestFinished(runtime, resumeJob, queueEpoch,
+                                    if (cause != null && result == InputQueueRequestOutcome.COMPLETED) InputQueueRequestOutcome.FAILED else result)
+                            }
+                            try {
+                                installed = true
+                                runtimeRegistry.installAndStartUserInteractionContinuation(runtime.id, handle, resumeJob, requireQueueOutcome = true)
+                            }
+                            catch (error: Throwable) { installed = false; resumeJob.cancel(); throw error }
                         },
                     )
                 }
@@ -678,7 +1079,7 @@ class ConversationTurnService internal constructor(
         turnId: Uuid,
         messageRange: ClosedRange<Int>? = null,
         launch: TurnLaunch,
-    ) {
+    ): TurnRunResult {
         val entry = launch.entry
         // 用户可见地开始或继续本会话生成后，请求平台保活；何时停止由 service 依据
         // conversationActivities 投影自决，这里只做单向请求，不读取任何运行结果。
@@ -851,6 +1252,7 @@ class ConversationTurnService internal constructor(
                         mediaCapabilities = mediaCapabilities,
                         conversationSystemPrompt = snapshot.header.customSystemPrompt,
                         conversationModeInjectionIds = snapshot.header.modeInjectionIds,
+                        workspaceCwd = snapshot.header.workspaceCwd,
                         tools = tools,
                           opening = snapshot.opening,
                           disclosure = TurnDisclosureSource.capture(
@@ -1024,12 +1426,12 @@ class ConversationTurnService internal constructor(
                 senderName = senderName.orEmpty(),
             )
             if (!shouldLaunchCompletionSideEffects(turnResult)) {
-                return
+                return turnResult
             }
             val hasPendingApproval = liveSnapshot(conversationId)
                 .currentMessages().lastOrNull()?.getTools()?.any { it.isPending } == true
             if (hasPendingApproval) {
-                return
+                return turnResult
             }
 
             if (isForeground.value && generationSoundEnabled) {
@@ -1044,6 +1446,7 @@ class ConversationTurnService internal constructor(
             } catch (error: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) {
                 if (error.reason != "enterprise_data_access_unavailable") throw error
             }
+            return turnResult
         } catch (e: CancellationException) {
             val outcome = TurnOutcome.Cancelled(
                 startedRuntime?.consumeCancelReason(turnId) ?: TurnTerminalReasons.USER_STOP
@@ -1087,6 +1490,7 @@ class ConversationTurnService internal constructor(
                 inFlightAssistantMessageId = inFlightAssistantMessageId,
                 senderName = senderName.orEmpty(),
             )
+            return outcome
         }
     }
 

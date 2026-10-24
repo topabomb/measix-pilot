@@ -69,7 +69,7 @@ class DirectionalIconsAndroidTest {
                 CompositionLocalProvider(LocalLayoutDirection provides direction.value) {
                     val rows = pages.collectAsLazyPagingItems()
                     Column(Modifier.width(280.dp).height(300.dp)) {
-                        ConversationList(conversation.id, rows, emptyMap(), rememberLazyListState(),
+                        ConversationList(conversation.id, rows, emptyMap(), rememberLazyListState(), header = {}, footer = {},
                             onMoveToAssistant = { moved += it })
                     }
                 }

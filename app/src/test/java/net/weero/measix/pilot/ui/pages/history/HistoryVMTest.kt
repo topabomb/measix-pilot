@@ -37,6 +37,57 @@ import java.time.Instant
 import kotlin.uuid.Uuid
 
 class HistoryVMTest {
+    @Test fun `pending input deletion confirmation is cancelled by realm round trip`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val selection = RealmSelection(RealmAccess.Personal, 1)
+            val selected = MutableStateFlow<RealmSelection?>(selection)
+            val application = mockk<ConversationApplicationService>()
+            val vm = commandVm(selected, application)
+            store.put("history", vm)
+            val preview = mockk<net.weero.measix.pilot.service.ConversationDeletionPreview>()
+            every { preview.pendingInputCount } returns 3
+            coEvery { application.prepareDeletion(any()) } returns preview
+            val row = historyRow(selection, ConfigurationReference.random())
+            vm.deleteForUndo(row); runCurrent()
+            val pending = requireNotNull(vm.pendingDeletion.value)
+            assertEquals(3, pending.preview.pendingInputCount)
+            coVerify(exactly = 0) { application.deleteForUndo(any(), any()) }
+            selected.value = selection.copy(revision = 3); runCurrent()
+            org.junit.Assert.assertNull(vm.pendingDeletion.value)
+            vm.confirmDeletion(pending); runCurrent()
+            coVerify(exactly = 0) { application.deleteForUndo(any(), any()) }
+        } finally { store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `history batch passes confirmed original targets without adding later rows`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val selection = RealmSelection(RealmAccess.Personal, 1)
+            val selected = MutableStateFlow<RealmSelection?>(selection)
+            val application = mockk<ConversationApplicationService>()
+            val vm = commandVm(selected, application)
+            store.put("history", vm)
+            val preview = mockk<net.weero.measix.pilot.service.ConversationDeletionPreview>()
+            every { preview.pendingInputCount } returns 1
+            coEvery { application.prepareDeletion(any()) } returns preview
+            coEvery { application.deleteConversations(any(), preview, any()) } returns Unit
+            val rows = mutableListOf(historyRow(selection, ConfigurationReference.random()))
+            val originalId = rows.single().id
+            vm.deleteConversations(rows)
+            rows += historyRow(selection, ConfigurationReference.random())
+            runCurrent()
+            val pending = requireNotNull(vm.pendingDeletion.value)
+            assertEquals(1, pending.conversations.size)
+            vm.confirmDeletion(pending); runCurrent()
+            assertEquals(listOf(originalId), pending.targets.map { it.conversationId })
+            coVerify(exactly = 1) { application.prepareDeletion(pending.targets) }
+            coVerify(exactly = 1) { application.deleteConversations(pending.targets, preview, any()) }
+        } finally { store.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun sortReadFailureIsDiagnosedAndRetriedByHistoryAndDrawer() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()
@@ -149,8 +200,8 @@ class HistoryVMTest {
             val application = mockk<ConversationApplicationService>()
             coEvery { application.deletionContinuation(receipt) } returns ConversationContinuation(
                 ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant))
-            coEvery { application.deleteConversations(any(), any()) } coAnswers {
-                secondArg<suspend (ConversationDeletionReceipt) -> Unit>()(receipt)
+            coEvery { application.deleteConversations(any(), any(), any()) } coAnswers {
+                thirdArg<suspend (ConversationDeletionReceipt) -> Unit>()(receipt)
                 throw java.io.IOException("second deletion failed")
             }
             val vm = commandVm(selected, application)
@@ -179,9 +230,9 @@ class HistoryVMTest {
             val row = historyRow(selection, assistant)
             val pending = CompletableDeferred<Unit>()
             val application = mockk<ConversationApplicationService>()
-            coEvery { application.deleteConversations(any(), any()) } coAnswers {
+            coEvery { application.deleteConversations(any(), any(), any()) } coAnswers {
                 pending.await()
-                secondArg<suspend (ConversationDeletionReceipt) -> Unit>()(ConversationDeletionReceipt(row.id, assistant, selection))
+                thirdArg<suspend (ConversationDeletionReceipt) -> Unit>()(ConversationDeletionReceipt(row.id, assistant, selection))
                 throw java.io.IOException("old operation failure")
             }
             val vm = commandVm(selected, application)
@@ -210,7 +261,7 @@ class HistoryVMTest {
             every { token.selection } returns selection
             every { token.deletion } returns receipt
             val application = mockk<ConversationApplicationService>()
-            coEvery { application.deleteForUndo(any()) } returns token
+            coEvery { application.deleteForUndo(any(), any()) } returns token
             coEvery { application.deletionContinuation(receipt) } returns ConversationContinuation(null, "assistant unavailable")
             coEvery { application.restore(token) } returns Unit
             val vm = commandVm(selected, application)
@@ -243,8 +294,8 @@ class HistoryVMTest {
             }
             val pending = CompletableDeferred<Unit>()
             val application = mockk<ConversationApplicationService>()
-            coEvery { application.deleteForUndo(match { it.conversationId == rows[0].id }) } returns tokens[0]
-            coEvery { application.deleteForUndo(match { it.conversationId == rows[1].id }) } coAnswers { pending.await(); tokens[1] }
+            coEvery { application.deleteForUndo(match { it.conversationId == rows[0].id }, any()) } returns tokens[0]
+            coEvery { application.deleteForUndo(match { it.conversationId == rows[1].id }, any()) } coAnswers { pending.await(); tokens[1] }
             coEvery { application.deletionContinuation(any()) } returns ConversationContinuation(null, "assistant unavailable")
             coEvery { application.restore(tokens[0]) } returns Unit
             val vm = commandVm(selected, application)
@@ -281,7 +332,7 @@ class HistoryVMTest {
                     every { token.deletion } returns ConversationDeletionReceipt(row.id, assistant, selection)
                     val pending = CompletableDeferred<Unit>()
                     val application = mockk<ConversationApplicationService>()
-                    coEvery { application.deleteForUndo(any()) } returns token
+                    coEvery { application.deleteForUndo(any(), any()) } returns token
                     coEvery { application.deletionContinuation(any()) } returns ConversationContinuation(null, "assistant unavailable")
                     coEvery { application.togglePin(any()) } coAnswers { pending.await() }
                     val vm = commandVm(selected, application)
@@ -304,6 +355,7 @@ class HistoryVMTest {
         Uuid.random(), assistant, "History", null, false, Instant.EPOCH, Instant.EPOCH, selection)
 
     private fun commandVm(selected: MutableStateFlow<RealmSelection?>, application: ConversationApplicationService): HistoryVM {
+        coEvery { application.prepareDeletion(any()) } returns net.weero.measix.pilot.service.ConversationDeletionPreview(null, emptyList())
         val query = mockk<ConversationQueryService>()
         every { query.observeSortOrder() } returns flowOf(ConversationSortOrder.UPDATED)
         every { query.conversationsInRealm(any(), any()) } returns flowOf(Result.success(emptyList()))

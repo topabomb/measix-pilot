@@ -24,10 +24,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import com.dokar.sonner.Toaster
-import com.dokar.sonner.ToasterState
+import net.weero.measix.pilot.ui.components.toast.Toaster
+import net.weero.measix.pilot.ui.components.toast.ToasterState
+import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import net.weero.measix.pilot.ui.context.LocalToaster
-import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -63,6 +63,7 @@ fun AdaptiveModal(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val adaptiveInfo = LocalAdaptiveLayoutInfo.current
+    val modalFeedback = feedback ?: rememberToasterState()
 
     if (forceDialog || adaptiveInfo.useExpandedModal) {
         val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
@@ -127,7 +128,7 @@ fun AdaptiveModal(
                     tonalElevation = 6.dp,
                     shadowElevation = 12.dp,
                 ) {
-                    AdaptiveModalContent(modifier, feedback, feedbackVisible, content)
+                    AdaptiveModalContent(modifier, modalFeedback, feedbackVisible, content)
                 }
             }
         }
@@ -141,7 +142,7 @@ fun AdaptiveModal(
             sheetGesturesEnabled = sheetGesturesEnabled,
             dragHandle = dragHandle,
         ) {
-            AdaptiveModalContent(modifier, feedback, feedbackVisible, content)
+            AdaptiveModalContent(modifier, modalFeedback, feedbackVisible, content)
         }
     }
 }
@@ -160,18 +161,16 @@ private fun AdaptiveModalDragHandle() {
 
 /** A caller-owned feedback state is displayed only by its active modal. */
 @Composable
-private fun AdaptiveModalContent(modifier: Modifier, feedback: ToasterState?, feedbackVisible: Boolean, content: @Composable ColumnScope.() -> Unit) {
+private fun AdaptiveModalContent(modifier: Modifier, feedback: ToasterState, feedbackVisible: Boolean, content: @Composable ColumnScope.() -> Unit) {
     // Text menus hold their creating window's View. A nested modal must create its own providers.
     CompositionLocalProvider(
         LocalTextContextMenuToolbarProvider provides null,
         LocalTextContextMenuDropdownProvider provides null,
     ) {
-        if (feedback == null) Column(modifier.fillMaxWidth(), content = content)
-        else CompositionLocalProvider(LocalToaster provides feedback) {
+        CompositionLocalProvider(LocalToaster provides feedback) {
             Box(Modifier.fillMaxWidth()) {
                 Column(modifier.fillMaxWidth(), content = content)
-                if (feedbackVisible) Toaster(state = feedback, darkTheme = LocalDarkMode.current,
-                    richColors = true, alignment = Alignment.TopCenter, showCloseButton = true)
+                if (feedbackVisible) Toaster(state = feedback, alignment = Alignment.TopCenter)
             }
         }
     }

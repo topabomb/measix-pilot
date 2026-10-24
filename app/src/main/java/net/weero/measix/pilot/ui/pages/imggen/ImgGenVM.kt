@@ -336,6 +336,38 @@ class ImgGenVM internal constructor(
         false
     }
 
+    internal suspend fun reconcileGallerySelection(selection: RealmSelection, ids: Set<Int>): Set<Int> {
+        check(realmSelection.value == selection) { "gallery_selection_changed" }
+        return fileManagementQueryService.existingGeneratedIds(selection, ids).also {
+            check(realmSelection.value == selection) { "gallery_selection_changed" }
+        }
+    }
+
+    internal suspend fun deleteGallerySelection(
+        selection: RealmSelection,
+        ids: Set<Int>,
+        onItem: (net.weero.measix.pilot.service.GeneratedImageBatchItemResult) -> Unit,
+    ) {
+        check(realmSelection.value == selection) { "gallery_selection_changed" }
+        fileManagementApplicationService.deleteGeneratedBatch(ids.map { ManagedFileKey.Generated(it, selection) }) {
+            if (realmSelection.value == selection) onItem(it)
+        }
+    }
+
+    internal suspend fun saveGallerySelection(
+        selection: RealmSelection,
+        ids: Set<Int>,
+        context: android.content.Context,
+        exporter: net.weero.measix.pilot.service.MediaExportService,
+        onItem: (net.weero.measix.pilot.service.GeneratedImageBatchItemResult) -> Unit,
+    ) {
+        check(realmSelection.value == selection) { "gallery_selection_changed" }
+        fileManagementApplicationService.saveGeneratedBatch(ids.map { ManagedFileKey.Generated(it, selection) },
+            context, exporter) {
+            if (realmSelection.value == selection) onItem(it)
+        }
+    }
+
     private fun deleteReferenceFiles(paths: List<String>) {
         paths.forEach { path ->
             val reader = referenceReaders[path]

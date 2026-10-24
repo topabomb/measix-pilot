@@ -171,7 +171,7 @@ class ConversationQueryServiceTest {
             titleCoordinator = mockk<ConversationTitleCoordinator>(relaxed = true),
             attachmentPreviewProjector = mockk(relaxed = true),
             sessions = sessions ?: EnterpriseSessionController(
-                net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())).apply { recover() },
+                net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).apply { recover() },
             recoveryGate = ApplicationRecoveryGate().also { it.ready() },
             settings = mockk(),
             coordinator = mockk(),

@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.utils
+package net.weero.measix.pilot.utils
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -8,6 +8,7 @@ import kotlinx.serialization.serializer
 
 val JsonInstant by lazy {
     Json {
+        exceptionsWithDebugInfo = false
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
@@ -15,6 +16,7 @@ val JsonInstant by lazy {
 
 val JsonInstantPretty by lazy {
     Json {
+        exceptionsWithDebugInfo = false
         ignoreUnknownKeys = true
         encodeDefaults = true
         prettyPrint = true

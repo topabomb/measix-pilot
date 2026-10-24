@@ -37,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.ContainedLoadingIndicator
 import androidx.compose.material3.FilterChip
@@ -57,11 +58,13 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -81,9 +84,10 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.compose.itemContentType
 import androidx.paging.compose.itemKey
 import coil3.compose.AsyncImage
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.ui.ImageGenSize
@@ -101,6 +105,9 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.imggen.imageGenerationFailureStringRes
 import net.weero.measix.pilot.service.MediaExportService
+import net.weero.measix.pilot.service.GeneratedImageBatchItemResult
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.ui.adaptive.AdaptiveModal
 import net.weero.measix.pilot.ui.components.ai.ModelListSheet
 import net.weero.measix.pilot.ui.components.ai.ModelSelectorButton
@@ -183,7 +190,7 @@ fun ImageGenPage(
         ) { page ->
             when (page) {
                 0 -> ImageGenScreen(vm = vm)
-                1 -> ImageGalleryScreen(vm = vm)
+                1 -> ImageGalleryScreen(vm = vm, active = pagerState.currentPage == 1 && pagerState.settledPage == 1)
             }
         }
     }
@@ -532,8 +539,9 @@ private fun ReferenceImagesRow(
 }
 
 @Composable
-private fun ImageGalleryScreen(
+internal fun ImageGalleryScreen(
     vm: ImgGenVM,
+    active: Boolean,
 ) {
     val generatedImages = vm.generatedImages.collectAsLazyPagingItems()
     val context = LocalContext.current
@@ -547,6 +555,27 @@ private fun ImageGalleryScreen(
     var previewIndex by remember { mutableStateOf(-1) }
     var pendingDelete by remember { mutableStateOf<GeneratedImage?>(null) }
     val realmSelection by vm.realmSelection.collectAsStateWithLifecycle()
+    val activeState = rememberUpdatedState(active)
+    var selectionMode by remember(realmSelection) { mutableStateOf(false) }
+    var selectedIds by remember(realmSelection) { mutableStateOf(emptySet<Int>()) }
+    var batchJob by remember(realmSelection) { mutableStateOf<Job?>(null) }
+    var batchBusy by remember(realmSelection) { mutableStateOf(false) }
+    var batchTotal by remember(realmSelection) { mutableStateOf(0) }
+    var batchResults by remember(realmSelection) { mutableStateOf(emptyList<GeneratedImageBatchItemResult>()) }
+    var batchLabels by remember(realmSelection) { mutableStateOf(emptyMap<Int, String>()) }
+    var batchFailure by remember(realmSelection) { mutableStateOf<Throwable?>(null) }
+    var showBatchResults by remember(realmSelection) { mutableStateOf(false) }
+    var pendingBatchDelete by remember(realmSelection) { mutableStateOf<Set<Int>?>(null) }
+    DisposableEffect(realmSelection) { onDispose { batchJob?.cancel() } }
+    LaunchedEffect(active) {
+        if (!active) {
+            batchJob?.cancel()
+            pendingBatchDelete = null
+            pendingDelete = null
+            previewIndex = -1
+            showBatchResults = false
+        }
+    }
     LaunchedEffect(realmSelection) {
         previewIndex = -1
         pendingDelete = null
@@ -556,11 +585,80 @@ private fun ImageGalleryScreen(
     val generatedNoPrompt = stringResource(R.string.imggen_page_no_prompt)
     val imageDeleteFailed = stringResource(R.string.image_viewer_delete_failed)
     val refreshState = generatedImages.loadState.refresh
+    val loadedImages = generatedImages.itemSnapshotList.items.filter { it.selection == realmSelection }
+    val loadedIds = loadedImages.mapTo(linkedSetOf()) { it.id }
+    LaunchedEffect(realmSelection, active, refreshState, loadedIds, selectedIds, batchBusy) {
+        val original = realmSelection
+        if (active && !batchBusy && original != null && selectedIds.isNotEmpty() && refreshState is LoadState.NotLoading) {
+            val captured = selectedIds
+            try {
+                val existing = vm.reconcileGallerySelection(original, captured)
+                if (vm.realmSelection.value == original && activeState.value) selectedIds = selectedIds - (captured - existing)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                android.util.Log.w("ImageGallery", "Unable to reconcile selected images", error)
+                if (vm.realmSelection.value == original && activeState.value) batchFailure = error
+            }
+        }
+    }
+    fun toggleImage(id: Int) {
+        if (!batchBusy && active) selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+    }
+    fun runBatch(delete: Boolean, ids: Set<Int>) {
+        val original = realmSelection ?: return
+        if (!active || batchBusy || ids.isEmpty()) return
+        batchBusy = true
+        batchTotal = ids.size
+        batchResults = emptyList()
+        batchFailure = null
+        batchLabels = loadedImages.filter { it.id in ids }.associate { it.id to shortGeneratedLabel(it.prompt, generatedNoPrompt) }
+        batchJob = scope.launch {
+            fun publish(result: GeneratedImageBatchItemResult) {
+                if (vm.realmSelection.value != original) return
+                batchResults = batchResults + result
+                if (result !is GeneratedImageBatchItemResult.Failed) selectedIds = selectedIds - result.key.mediaId
+            }
+            try {
+                if (delete) vm.deleteGallerySelection(original, ids, ::publish)
+                else vm.saveGallerySelection(original, ids, context, mediaExportService, ::publish)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) {
+                android.util.Log.w("ImageGallery", "Gallery batch operation failed", error)
+                if (vm.realmSelection.value == original) batchFailure = error
+            } finally {
+                batchBusy = false
+                if (vm.realmSelection.value == original && activeState.value &&
+                    (batchResults.isNotEmpty() || batchFailure != null)) showBatchResults = true
+            }
+        }
+    }
 
+    Column(Modifier.fillMaxSize()) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        if (!selectionMode) {
+            TextButton(enabled = active && loadedIds.isNotEmpty(), onClick = { selectionMode = true; previewIndex = -1; pendingDelete = null }) {
+                Text(stringResource(R.string.gallery_batch_select))
+            }
+        } else if (batchBusy) {
+            Text(stringResource(R.string.gallery_batch_progress, batchResults.size, batchTotal))
+            TextButton(onClick = { batchJob?.cancel() }) { Text(stringResource(R.string.common_cancel)) }
+        } else {
+            Text(stringResource(R.string.gallery_batch_selected, selectedIds.size))
+            TextButton(enabled = active, onClick = { selectedIds = selectedIds + loadedIds }) { Text(stringResource(R.string.gallery_batch_select_loaded)) }
+            TextButton(enabled = active && selectedIds.isNotEmpty(), onClick = { runBatch(false, selectedIds.toSet()) }) { Text(stringResource(R.string.imggen_page_save)) }
+            TextButton(enabled = active && selectedIds.isNotEmpty(), onClick = { pendingBatchDelete = selectedIds.toSet() }) { Text(stringResource(R.string.imggen_page_delete)) }
+            TextButton(onClick = { selectionMode = false; selectedIds = emptySet() }) { Text(stringResource(R.string.gallery_batch_done)) }
+        }
+        if (!batchBusy && (batchResults.isNotEmpty() || batchFailure != null)) {
+            TextButton(enabled = active, onClick = { showBatchResults = true }) { Text(stringResource(R.string.gallery_batch_results)) }
+        }
+    }
     PullToRefreshBox(
         isRefreshing = refreshState is LoadState.Loading && generatedImages.itemCount > 0,
         onRefresh = { generatedImages.refresh() },
-        state = pullToRefreshState
+        state = pullToRefreshState,
+        modifier = Modifier.weight(1f),
     ) {
         if (refreshState is LoadState.Loading && generatedImages.itemCount == 0) {
             Box(
@@ -654,9 +752,16 @@ private fun ImageGalleryScreen(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .aspectRatio(1f)
-                                        .clickable { previewIndex = index },
+                                        .clickable(enabled = active && !batchBusy) {
+                                            if (selectionMode) toggleImage(it.id) else previewIndex = index
+                                        },
                                     contentScale = ContentScale.Crop
                                 )
+                                if (selectionMode) Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = it.id in selectedIds, enabled = active && !batchBusy,
+                                        onCheckedChange = { _ -> toggleImage(it.id) })
+                                    Text(stringResource(R.string.gallery_batch_select), style = MaterialTheme.typography.labelMedium)
+                                }
 
                                 Column(
                                     modifier = Modifier
@@ -678,8 +783,9 @@ private fun ImageGalleryScreen(
                                         )
                                     }
 
-                                    Row {
+                                    if (!selectionMode) Row {
                                         IconButton(
+                                            enabled = active,
                                             onClick = {
                                                 clipboardManager.setText(AnnotatedString(it.prompt))
                                                 toaster.show(
@@ -701,6 +807,7 @@ private fun ImageGalleryScreen(
                                         val imageSavedSuccess = stringResource(R.string.imggen_page_image_saved_success)
                                         val saveFailedFmt = stringResource(R.string.imggen_page_save_failed)
                                         IconButton(
+                                            enabled = active,
                                             onClick = {
                                                 scope.launch {
                                                     try {
@@ -729,6 +836,7 @@ private fun ImageGalleryScreen(
                                         }
 
                                         IconButton(
+                                            enabled = active,
                                             onClick = { pendingDelete = it },
                                             modifier = Modifier.size(32.dp)
                                         ) {
@@ -769,8 +877,38 @@ private fun ImageGalleryScreen(
             }
         }
     }
+    }
 
-    if (previewIndex >= 0) {
+    pendingBatchDelete?.takeIf { active }?.let { ids ->
+        AlertDialog(onDismissRequest = { pendingBatchDelete = null },
+            title = { Text(stringResource(R.string.imggen_page_delete_image_title)) },
+            text = { Text(stringResource(R.string.gallery_batch_delete_confirm, ids.size)) },
+            confirmButton = { TextButton(onClick = { pendingBatchDelete = null; runBatch(true, ids) }) { Text(stringResource(R.string.imggen_page_delete)) } },
+            dismissButton = { TextButton(onClick = { pendingBatchDelete = null }) { Text(stringResource(R.string.common_cancel)) } })
+    }
+    if (active && showBatchResults) {
+        AlertDialog(onDismissRequest = { showBatchResults = false },
+            title = { Text(stringResource(R.string.gallery_batch_results)) },
+            text = { Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                batchFailure?.let { DiagnosticDisclosure(it.userVisibleDiagnostic()) }
+                batchResults.forEach { result ->
+                    Text(batchLabels[result.key.mediaId] ?: generatedNoPrompt, style = MaterialTheme.typography.labelLarge)
+                    when (result) {
+                        is GeneratedImageBatchItemResult.Saved -> Text(stringResource(R.string.image_viewer_saved, result.exportedName))
+                        is GeneratedImageBatchItemResult.Deleted -> Text(stringResource(R.string.gallery_batch_deleted))
+                        is GeneratedImageBatchItemResult.AlreadyAbsent -> Text(stringResource(R.string.gallery_batch_absent))
+                        is GeneratedImageBatchItemResult.CleanupPending -> {
+                            Text(stringResource(R.string.gallery_batch_cleanup_pending))
+                            DiagnosticDisclosure(result.cause.userVisibleDiagnostic())
+                        }
+                        is GeneratedImageBatchItemResult.Failed -> DiagnosticDisclosure(result.cause.userVisibleDiagnostic())
+                    }
+                }
+            } },
+            confirmButton = { TextButton(onClick = { showBatchResults = false }) { Text(stringResource(R.string.gallery_batch_done)) } })
+    }
+
+    if (active && previewIndex >= 0) {
         // 当前已加载项的快照组成一本相册, 从点击位进入; 用 id 定位以兼容占位 null 导致的下标偏移
         val snapshotItems = generatedImages.itemSnapshotList.items.filter { it.selection == realmSelection }
         val urls = snapshotItems.map { it.image }
@@ -812,7 +950,7 @@ private fun ImageGalleryScreen(
         }
     }
 
-    pendingDelete?.takeIf { it.selection == realmSelection }?.let { target ->
+    pendingDelete?.takeIf { active && it.selection == realmSelection }?.let { target ->
         val promptLabel = shortGeneratedLabel(
             target.prompt,
             stringResource(R.string.imggen_page_no_prompt),

@@ -37,6 +37,77 @@ import kotlin.uuid.Uuid
 @RunWith(AndroidJUnit4::class)
 class UserSettingsMigrationAndroidTest {
     @Test
+    fun summaryDefaultUpgradeRollsBackAndPreservesCustomTemplatesAfterReopen() = runBlocking {
+        val file = testFile()
+        val oldPrompt = net.weero.measix.pilot.data.ai.prompts.LEGACY_COMPRESS_PROMPT
+        val newPrompt = net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
+        val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_summary"), "usr_one")
+        val original = UserSettingsDocument.empty().withPersonalSettings(Settings(compressPrompt = oldPrompt)).let {
+            it.copy(preferences = it.preferences.copy(scopes = it.preferences.scopes + ScopedUserPreferences(enterprise)))
+        }
+        val reject = object : DataMigration<Preferences> {
+            override suspend fun shouldMigrate(currentData: Preferences) = true
+            override suspend fun migrate(currentData: Preferences): Preferences = error("reject summary upgrade")
+            override suspend fun cleanUp() = Unit
+        }
+        try {
+            withStore(file, false) { store -> store.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(original) } }
+            val before = file.readBytes()
+            withStore(file, true, listOf(reject)) { store ->
+                try { store.data.first(); error("Expected failed upgrade") }
+                catch (expected: IllegalStateException) { assertEquals("reject summary upgrade", expected.message) }
+            }
+            assertTrue(before.contentEquals(file.readBytes()))
+            withStore(file, true) { store ->
+                val migrated = JsonInstant.decodeFromString<UserSettingsDocument>(store.data.first()[SettingsStore.USER_SETTINGS]!!)
+                assertEquals(newPrompt, migrated.configuration.compressPrompt)
+                assertEquals(original.preferences, migrated.preferences)
+                val custom = migrated.withPersonalSettings(migrated.personalSettings().copy(compressPrompt = "Custom {content}"))
+                store.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(custom) }
+            }
+            withStore(file, true) { store ->
+                val reopened = JsonInstant.decodeFromString<UserSettingsDocument>(store.data.first()[SettingsStore.USER_SETTINGS]!!)
+                assertEquals("Custom {content}", reopened.configuration.compressPrompt)
+                assertEquals(original.preferences.common, reopened.preferences.common)
+                assertEquals(original.preferences.scopes.associateBy { it.scope }, reopened.preferences.scopes.associateBy { it.scope })
+            }
+        } finally { file.delete() }
+    }
+
+    @Test
+    fun modelCapacitiesRemainScopedAfterPersonalRestoreAndReopen() = runBlocking {
+        val file = testFile()
+        val first = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_capacity"), "usr_one")
+        val second = first.copy(userId = "usr_two")
+        val reference = ConfigurationReference.Enterprise(first.authority, "mdl_shared")
+        val model = me.rerere.ai.provider.Model(modelId = "local", contextLength = 32000)
+        val original = UserSettingsDocument.empty().withPersonalSettings(Settings(
+            providers = listOf(ProviderSetting.OpenAI(models = listOf(model)))))
+        val configured = original.copy(preferences = original.preferences
+            .withModelContextLength(first, reference, 64000).withModelContextLength(second, reference, 128000))
+        try {
+            withStore(file, false) { store ->
+                store.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(configured) }
+            }
+            withStore(file, true) { store ->
+                val restored = JsonInstant.decodeFromString<UserSettingsDocument>(store.data.first()[SettingsStore.USER_SETTINGS]!!)
+                assertEquals(32000, restored.personalSettings().providers.single().models.single().contextLength)
+                val personalBackup = JsonInstant.decodeFromString<Settings>(JsonInstant.encodeToString(restored.personalSettings()))
+                val next = restored.withPersonalSettings(personalBackup).let {
+                    it.copy(preferences = it.preferences.withModelContextLength(first, reference, null))
+                }
+                store.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(next) }
+            }
+            withStore(file, true) { store ->
+                val reopened = JsonInstant.decodeFromString<UserSettingsDocument>(store.data.first()[SettingsStore.USER_SETTINGS]!!)
+                assertTrue(reopened.preferences.modelContextLengths(first).isEmpty())
+                assertEquals(128000, reopened.preferences.modelContextLengths(second)[reference])
+                assertEquals(32000, reopened.personalSettings().providers.single().models.single().contextLength)
+            }
+        } finally { file.delete() }
+    }
+
+    @Test
     fun historyWindowSchemaUpgradeRollsBackRetriesAndKeepsNewSmallValuesAfterReopen() = runBlocking {
         val file = testFile()
         val assistant = net.weero.measix.pilot.data.model.Assistant(contextMessageLimit = 7)

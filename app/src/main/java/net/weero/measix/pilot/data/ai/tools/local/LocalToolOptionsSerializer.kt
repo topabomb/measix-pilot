@@ -10,6 +10,8 @@ import kotlinx.serialization.json.JsonTransformingSerializer
 /** Retired local options are removed only at their typed compatibility boundary. */
 object LocalToolOptionsSerializer : JsonTransformingSerializer<List<LocalToolOption>>(ListSerializer(LocalToolOption.serializer())) {
     override fun transformDeserialize(element: JsonElement): JsonElement = if (element is JsonArray) {
-        JsonArray(element.filterNot { (it as? JsonObject)?.get("type") == JsonPrimitive("javascript_engine") })
+        JsonArray(element.filterNot {
+            (it as? JsonObject)?.get("type") in setOf(JsonPrimitive("javascript_engine"), JsonPrimitive("chart_display"))
+        })
     } else element
 }

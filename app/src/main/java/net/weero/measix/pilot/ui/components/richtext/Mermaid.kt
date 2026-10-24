@@ -18,7 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.dokar.sonner.ToastType
+import net.weero.measix.pilot.ui.components.toast.ToastType
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.webview.WEB_VIEW_ASSET_URL
 import net.weero.measix.pilot.ui.components.webview.WEB_VIEW_BASE_URL

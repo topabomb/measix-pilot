@@ -1,8 +1,24 @@
 package net.weero.measix.pilot.service
 
+/** Query-issued provenance bound to one selected message and its original page lease. */
+class ConversationMessageResourceSource internal constructor(
+    internal val view: ConversationViewLease,
+    internal val workspace: net.weero.measix.pilot.data.model.WorkspaceContextOrigin?,
+    private val verify: suspend () -> Unit,
+) {
+    internal val identity = kotlin.uuid.Uuid.random()
+    internal val documentUrlPath: String? = workspace?.let {
+        java.net.URI(null, null, it.cwd.trimEnd('/') + "/_message", null).toASCIIString()
+    }
+    internal suspend fun requireAccess() = verify()
+}
+
 /** The rendered document borrows its original source; it never reconstructs permission from a route or URL. */
 sealed interface RenderedContentSource {
-    data class Conversation(val view: ConversationViewLease) : RenderedContentSource
+    data class WorkspaceFile(val file: RenderedFileSource) : RenderedContentSource
+    data class Conversation(val view: ConversationViewLease, val message: ConversationMessageResourceSource? = null) : RenderedContentSource {
+        init { require(message == null || message.view === view) { "message_resource_view_mismatch" } }
+    }
     data class RealmConfiguration(val view: ConversationViewLease) : RenderedContentSource
     data object UserConfiguration : RenderedContentSource
     data object Static : RenderedContentSource

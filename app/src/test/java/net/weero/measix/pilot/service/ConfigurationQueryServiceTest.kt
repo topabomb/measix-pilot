@@ -66,7 +66,7 @@ class ConfigurationQueryServiceTest {
     }
 
     private suspend fun fixture(packet: EnterprisePackage, now: () -> Long = { 1000L }): Fixture {
-        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), now)
+        val sessions = EnterpriseSessionController(enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")), now)
         sessions.enrollFixture(packet, Instant.ofEpochMilli(3000L))
         return Fixture(packet, sessions, requireNotNull(sessions.readPresentation().selection))
     }

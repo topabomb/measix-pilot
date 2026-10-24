@@ -9,7 +9,7 @@ import androidx.core.view.WindowInsetsAnimationCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -144,9 +144,9 @@ class ChatContextFlowAndroidTest {
             // Keep advancing Compose while the click's coroutine starts the real request.
             compose.waitUntil(30_000) { server.firstRequest.count == 0L }
             val row = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }.first { it.isNotEmpty() }.single() }
-            val lease = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal)) }
+            val lease = awaitUi(30_000) { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, RealmAccess.Personal)) }
             view = lease
-            val original = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val original = awaitUi(30_000) { requireNotNull(query.aggregateSnapshot(row.id)) }
             assertEquals(systemBefore, original.header.customSystemPrompt)
             val originalOwner = original.contextAdmissions.single().owner.messageId
             // This UI selection happens after the first request was admitted, while its HTTP response is held.
@@ -158,7 +158,7 @@ class ChatContextFlowAndroidTest {
             compose.onNode(hasText(secondModel.displayName) and hasClickAction() and !hasSetTextAction()).performClick()
             awaitUi(30_000) { query.conversationUiModel(lease).first { it?.configuration?.model?.id == secondModel.id } }
             hideKeyboardAndWait(requireNotNull(activity))
-            runBlocking {
+            awaitUi(30_000) {
                 // Other asynchronous writers use the real owners, not UI events in this test.
                 conversations.updateCustomSystemPrompt(ConversationAssistantTarget(lease.commandTarget, assistant.id), systemAfter)
                 settings.updateLocal { current -> current.copy(
@@ -179,7 +179,7 @@ class ChatContextFlowAndroidTest {
             compose.onNodeWithContentDescription(uiContext.getString(R.string.chat_message_tool_approve)).performScrollTo().performClick()
             compose.waitUntil(60_000) { compose.onAllNodesWithText("Context mock answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
             awaitUi(30_000) { query.conversationUiModel(lease).first { it != null && it.presentation.activeTurnId == null } }
-            val firstDone = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val firstDone = awaitUi(30_000) { requireNotNull(query.aggregateSnapshot(row.id)) }
             assertEquals(setOf(originalOwner), firstDone.contextAdmissions.map { it.owner.messageId }.toSet())
             assertEquals(2, firstDone.contextAdmissions.size)
             val changed = firstDone.modelContextEntries.filter { it.payload.source is ConversationContextSource.Disclosure }
@@ -187,10 +187,10 @@ class ChatContextFlowAndroidTest {
             assertEquals(mapOf(DisclosureSection.MEMORY to ContextAdmissionReason.EXTERNAL_STATE,
                 DisclosureSection.SUB_ASSISTANTS to ContextAdmissionReason.EXTERNAL_STATE),
                 (changed.last().payload.source as ConversationContextSource.Disclosure).reasons)
-            val actualMemory = runBlocking { memory.read(requireNotNull(memory.captureExecution(RealmAccess.Personal, assistant))) }
+            val actualMemory = awaitUi(30_000) { memory.read(requireNotNull(memory.captureExecution(RealmAccess.Personal, assistant))) }
             assertEquals(setOf("External context added while the model was waiting", "Own tool note", "Own second tool note"),
                 actualMemory.map { it.content }.toSet())
-            assertEquals("Own directory changed by tool", runBlocking { settings.userSettings.first() }.assistants.single { it.id == ownChild.id }.description)
+            assertEquals("Own directory changed by tool", awaitUi(30_000) { settings.userSettings.first() }.assistants.single { it.id == ownChild.id }.description)
             val updateLabel = uiContext.getString(R.string.context_updated_categories,
                 "${uiContext.getString(R.string.context_memory)} · ${uiContext.getString(R.string.context_assistants)}")
             val updated = uiContext.getString(R.string.context_details_accessibility, updateLabel)
@@ -262,7 +262,7 @@ class ChatContextFlowAndroidTest {
             assertTrue(nextSystem.contains("SYSTEM_ASYNC_AFTER"))
             assertFalse(nextSystem.contains("SYSTEM_UI_BEFORE"))
             assertTrue(nextMessages.toString().contains("CONTEXT_RULE_TWO"))
-            val nextSnapshot = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val nextSnapshot = awaitUi(30_000) { requireNotNull(query.aggregateSnapshot(row.id)) }
             assertEquals(3, nextSnapshot.contextAdmissions.size)
             assertEquals(2, nextSnapshot.contextAdmissions.map { it.owner.messageId }.distinct().size)
             assertEquals(changed, nextSnapshot.modelContextEntries.filter { it.payload.source is ConversationContextSource.Disclosure })
@@ -272,18 +272,18 @@ class ChatContextFlowAndroidTest {
             compose.onNode(hasScrollToIndexAction() and SemanticsMatcher("visible chat history") { it.boundsInRoot.left >= 0f && it.boundsInRoot.right > 0f }).performScrollToNode(hasText("Context second answer", substring = true))
             capture(context, "04-next-start-model-system-rule.png")
             val nextOwner = nextSnapshot.contextAdmissions.last().owner.messageId
-            val nextDetails = runBlocking { query.contextDetails(lease, row.id, nextOwner) }.requests.single()
+            val nextDetails = awaitUi(30_000) { query.contextDetails(lease, row.id, nextOwner) }.requests.single()
             assertTrue("A new START reusing known state must not report a new change",
                 nextDetails.items.none { it.isCurrentUpdate })
             val systemItem = nextDetails.items.single { ConversationContextCategory.SYSTEM in it.categories }
-            val savedSystem = runBlocking { query.contextContent(lease, row.id, nextOwner, nextDetails.id, systemItem.key) }
+            val savedSystem = awaitUi(30_000) { query.contextContent(lease, row.id, nextOwner, nextDetails.id, systemItem.key) }
             assertEquals(nextSystem, savedSystem.text)
             assertTrue(savedSystem.presentation.sections.any {
                 it.systemOwner == ConversationContextSystemOwner.CONVERSATION && it.text?.contains("SYSTEM_ASYNC_AFTER") == true
             })
             val ruleItem = nextDetails.items.single { ConversationContextCategory.PROMPT_RULE in it.categories }
             assertEquals(rule.name, ruleItem.name)
-            assertEquals("CONTEXT_RULE_TWO", runBlocking {
+            assertEquals("CONTEXT_RULE_TWO", awaitUi(30_000) {
                 query.contextContent(lease, row.id, nextOwner, nextDetails.id, ruleItem.key).text
             })
             compose.onAllNodesWithText(nextSystem).assertCountEquals(0)
@@ -315,7 +315,7 @@ class ChatContextFlowAndroidTest {
             compose.onNode(hasTestTag("chat_send_button") and isEnabled()).assertIsDisplayed().performClick()
             compose.waitUntil(60_000) { compose.onAllNodesWithText("Context third answer", substring = true).fetchSemanticsNodes().isNotEmpty() }
             awaitUi(30_000) { query.conversationUiModel(lease).first { it != null && it.presentation.activeTurnId == null } }
-            val disabledSnapshot = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val disabledSnapshot = awaitUi(30_000) { requireNotNull(query.aggregateSnapshot(row.id)) }
             assertEquals(4, server.mainRequests.size)
             assertEquals(3, disabledSnapshot.contextAdmissions.map { it.owner.messageId }.distinct().size)
             assertTrue(requireNotNull(disabledSnapshot.contextAdmissions.last().selection).ruleEntryIds.isEmpty())
@@ -328,8 +328,8 @@ class ChatContextFlowAndroidTest {
 
             // Regenerate from the middle USER through its own action row, preserving the first Turn.
             val repository = koin.get<ConversationRepository>()
-            val beforeRegenerate = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
-            val beforeRegenerateRoom = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
+            val beforeRegenerate = awaitUi(30_000) { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val beforeRegenerateRoom = awaitUi(30_000) { requireNotNull(repository.getConversationSnapshotById(row.id)) }
             val targetText = "Next START uses updated configuration"
             val targetIndex = beforeRegenerate.nodes.indexOfFirst {
                 it.currentMessage.role == MessageRole.USER && it.currentMessage.toText() == targetText
@@ -348,8 +348,8 @@ class ChatContextFlowAndroidTest {
             compose.onNode(hasText(uiContext.getString(R.string.cancel)) and hasClickAction() and hasAnyAncestor(isDialog()))
                 .performClick()
             compose.onNodeWithText(warning).assertDoesNotExist()
-            assertEquals(beforeRegenerate, runBlocking { query.aggregateSnapshot(row.id) })
-            assertEquals(beforeRegenerateRoom, runBlocking { repository.getConversationSnapshotById(row.id) })
+            assertEquals(beforeRegenerate, awaitUi(30_000) { query.aggregateSnapshot(row.id) })
+            assertEquals(beforeRegenerateRoom, awaitUi(30_000) { repository.getConversationSnapshotById(row.id) })
             assertEquals(4, server.mainRequests.size)
 
             clickMessageRegenerate(uiContext, targetText, oldTexts)
@@ -362,7 +362,7 @@ class ChatContextFlowAndroidTest {
                     it.snapshot.currentMessages().lastOrNull()?.toText() == "Context user regenerated answer"
             } }
             compose.onNodeWithText(warning).assertDoesNotExist()
-            val regenerated = runBlocking { requireNotNull(query.aggregateSnapshot(row.id)) }
+            val regenerated = awaitUi(30_000) { requireNotNull(query.aggregateSnapshot(row.id)) }
             assertEquals(retainedNodes, regenerated.nodes.take(retainedNodes.size))
             assertEquals(retainedNodes.size + 1, regenerated.nodes.size)
             assertTrue(regenerated.nodes.none { node -> node.messages.any { it.id in removedMessageIds } })
@@ -389,7 +389,7 @@ class ChatContextFlowAndroidTest {
                     admission.selection?.let { selection -> selection.systemEntryId in regeneratedEntryIds &&
                         selection.ruleEntryIds.all { it in regeneratedEntryIds } } != false
             })
-            val regeneratedRoom = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
+            val regeneratedRoom = awaitUi(30_000) { requireNotNull(repository.getConversationSnapshotById(row.id)) }
             assertEquals(regenerated.nodes, regeneratedRoom.nodes)
             assertEquals(regenerated.modelContextEntries.associateBy { it.id }, regeneratedRoom.modelContextEntries.associateBy { it.id })
             assertEquals(regenerated.contextAdmissions.associateBy { it.id }, regeneratedRoom.contextAdmissions.associateBy { it.id })
@@ -407,7 +407,7 @@ class ChatContextFlowAndroidTest {
                 it != null && it.presentation.activeTurnId == null &&
                     it.snapshot.currentMessages().lastOrNull()?.toText() == "Context assistant regenerated answer"
             } }
-            val assistantRegenerated = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
+            val assistantRegenerated = awaitUi(30_000) { requireNotNull(repository.getConversationSnapshotById(row.id)) }
             assertEquals(regenerated.nodes.dropLast(1), assistantRegenerated.nodes.dropLast(1))
             assertEquals(regenerated.nodes.last().id, assistantRegenerated.nodes.last().id)
             assertEquals(regenerated.nodes.last().messages.size + 1, assistantRegenerated.nodes.last().messages.size)
@@ -454,7 +454,7 @@ class ChatContextFlowAndroidTest {
                 coil3.SingletonImageLoader.setUnsafe(previousImageLoader)
                 if (testImageLoader !== previousImageLoader) testImageLoader.shutdown()
             }
-            cleanup { runBlocking {
+            cleanup { awaitUi(30_000) {
                 val access = memory.captureExecution(RealmAccess.Personal, assistant)
                 if (access != null) memory.read(access).forEach { memory.delete(access, it.id) }
                 query.recentConversations(RealmAccess.Personal, assistant.id, Int.MAX_VALUE).forEach { row ->
@@ -463,7 +463,7 @@ class ChatContextFlowAndroidTest {
                     finally { view.close() }
                 }
             } }
-            cleanup { runBlocking {
+            cleanup { awaitUi(30_000) {
                 settings.updateLocal { it.copy(providers = it.providers.filterNot { candidate -> candidate.id == provider.id },
                     assistants = it.assistants.filterNot { candidate -> candidate.id in setOf(assistant.id, ownChild.id, externalChild.id) },
                     modeInjections = it.modeInjections.filterNot { candidate -> candidate.id == rule.id },
@@ -512,6 +512,8 @@ class ChatContextFlowAndroidTest {
         regenerate.assertIsDisplayed().performClick()
     }
 
+    // Effect queries can retain configuration locks across dispatcher switches. Keep v2's
+    // composition scheduler advancing while real owners finish reads, writes, and cleanup.
     private fun <T> awaitUi(timeoutMillis: Long, action: suspend () -> T): T {
         val scope = CoroutineScope(Dispatchers.Default)
         val pending = scope.async { withTimeout(timeoutMillis) { action() } }

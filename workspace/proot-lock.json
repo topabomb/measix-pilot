@@ -1,14 +1,14 @@
 {
   "proot": {
-    "tag": "v5.1.107.92",
-    "commit": "7266fb3e8516535682f5a9c8f3a7e70f6506eddb",
-    "sourceZipUrl": "https://github.com/termux/proot/archive/refs/tags/v5.1.107.92.zip",
-    "sourceZipSha256": "29385d1ddb619a9c4449ab512bfd55032034b22f724ddf98fc95ff300ea32135",
+    "tag": "v5.1.107.96",
+    "commit": "a179d3e8a4e045aaa1fb8cc3284f23509d96d353",
+    "sourceZipUrl": "https://github.com/termux/proot/archive/refs/tags/v5.1.107.96.zip",
+    "sourceZipSha256": "75f654fe60dea92dabff2bf083ae8bfe4f91baa6a1a374786a6bf391015eebaa",
     "upstreamBinaryCommit": "f4508dfac2255cf83e75859a8fe37dd7da6778a3",
     "upstreamBinaryMatch": "locally-patched-source-build",
     "patch": {
       "repoPath": "workspace/tools/patches/proot-termination.patch",
-      "sha256": "99ecba9ef47e8ddbf6071a7e888361dbeef16cc5bd92fb4b33fccbb3c1f8295a"
+      "sha256": "16135db0f95a0d7c8c451fc90ac27d3004b8bf99b55f51bd0b5cc426ee4385ca"
     }
   },
   "termuxPackage": {
@@ -46,7 +46,7 @@
     {
       "abi": "arm64-v8a",
       "repoPath": "workspace/src/main/jniLibs/arm64-v8a/libproot_exec.so",
-      "sha256": "4a14877087029a68333da9d14439dcb8c03fc2f1340774ec0007b208c9755087",
+      "sha256": "c212d4ed8347185b6c80a1cc4938b69915c6fa88e58732443f1931f25d751d52",
       "elfMachine": "AArch64",
       "interpreter": "/system/bin/linker64",
       "androidApi": 24,
@@ -58,7 +58,7 @@
     {
       "abi": "x86_64",
       "repoPath": "workspace/src/main/jniLibs/x86_64/libproot_exec.so",
-      "sha256": "6bc1186ccc5784f8bf751e86f7727302ec0f8be2a5444ab181081fe020f2b4a6",
+      "sha256": "0cfdec580ea324ebf22136e3689251bf234e33c511eb0fd4cbfcd34625526443",
       "elfMachine": "x86-64",
       "interpreter": "/system/bin/linker64",
       "androidApi": 24,

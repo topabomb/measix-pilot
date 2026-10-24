@@ -20,7 +20,10 @@ internal open class EnterpriseConfigurationException(val reason: String, detail:
 
 internal object EnterpriseConfigurationCodec {
     const val MAX_BYTES = 4 * 1024 * 1024
-    internal val json = Json { encodeDefaults = true }
+    internal val json = Json {
+        exceptionsWithDebugInfo = false
+        encodeDefaults = true
+    }
 
     fun validateIdentity(identity: EnterpriseIdentity) {
         check(!me.rerere.common.configuration.RetiredLocalEnterpriseIdentity.isReserved(identity.authority.deploymentId),

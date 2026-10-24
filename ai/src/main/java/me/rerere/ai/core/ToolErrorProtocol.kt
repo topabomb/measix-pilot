@@ -3,6 +3,7 @@ package me.rerere.ai.core
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import me.rerere.common.util.ThrowableDiagnosticText
 import java.util.Collections
 import java.util.IdentityHashMap
 
@@ -29,6 +30,7 @@ object ToolErrorProtocol {
     }
 
     fun exceptionDetail(error: Throwable): String {
+        val diagnostics = ThrowableDiagnosticText(error)
         val visited = Collections.newSetFromMap(IdentityHashMap<Throwable, Boolean>())
         var cursor: Throwable? = error
         var selected = error
@@ -38,7 +40,7 @@ object ToolErrorProtocol {
         }
         fun describe(value: Throwable): String {
             val type = value.javaClass.simpleName.ifBlank { value.javaClass.name }
-            val message = value.message?.trim().orEmpty()
+            val message = diagnostics.message(value)?.trim().orEmpty()
             return if (message.isBlank() || message == type) type else "$type: $message"
         }
         val root = describe(selected)

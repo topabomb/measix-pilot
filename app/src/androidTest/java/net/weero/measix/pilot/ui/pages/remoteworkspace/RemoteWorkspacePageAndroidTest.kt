@@ -80,6 +80,7 @@ class RemoteWorkspacePageAndroidTest {
         f.show()
         files.forEach { current ->
             compose.onNodeWithText(current.name).performClick()
+            if (current.name == "page.html") compose.onNodeWithText(text(R.string.file_preview_source)).performClick()
             var native: EditText? = null
             onView(isAssignableFrom(EditText::class.java)).check { view, error ->
                 if (error != null) throw error
@@ -155,6 +156,7 @@ class RemoteWorkspacePageAndroidTest {
                     androidx.compose.material3.darkColorScheme() else androidx.compose.material3.lightColorScheme()) {
                     CompositionLocalProvider(LocalNavController provides Navigator(mutableListOf(Screen.Enterprise)),
                         LocalSettings provides Settings(),
+                        net.weero.measix.pilot.ui.context.LocalToaster provides net.weero.measix.pilot.ui.components.toast.rememberToasterState(),
                         net.weero.measix.pilot.ui.theme.LocalDarkMode provides androidx.compose.foundation.isSystemInDarkTheme(),
                         net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
                         val density = LocalDensity.current

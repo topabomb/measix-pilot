@@ -773,8 +773,9 @@ class ArtifactStore(
         state: net.weero.measix.pilot.data.enterprise.EnterpriseState,
         callerId: me.rerere.common.configuration.ConfigurationReference?,
         change: net.weero.measix.pilot.data.datastore.AssistantManagementChange,
+        beforeCommit: suspend () -> Unit = {},
         requireOwner: () -> Unit,
-    ) = settingsCoordinator.manageAssistant(scope, state, callerId, change, requireOwner, ::commitSettingsRoots)
+    ) = settingsCoordinator.manageAssistant(scope, state, callerId, change, beforeCommit, requireOwner, ::commitSettingsRoots)
 
     internal suspend fun restoreSettingsReferences(settings: Settings): Settings =
         settingsCoordinator.restore(settings) { candidate, commit ->

@@ -173,13 +173,19 @@ class ArchitectureDependencyTest {
 
     @Test
     fun `image read capabilities are issued by their existing application owners`() {
-        val allowed = setOf("service/ImageSource.kt", "service/FileManagementApplicationService.kt", "service/ArtifactUseCase.kt",
+        val allowed = setOf("service/ImageSource.kt", "service/RenderedFileSource.kt", "service/FileManagementApplicationService.kt", "service/ArtifactUseCase.kt",
             "service/workspace/WorkspaceApplicationService.kt", "service/remoteworkspace/RemoteWorkspaceService.kt",
             "service/webdav/WebDavBrowserService.kt")
         val constructor = Regex("""(?<![\w])ImageSource\s*\(""")
         val violations = architectureSources.filter { constructor.containsMatchIn(it.readText()) }
             .map { it.relativeTo(architectureSourceRoot).invariantSeparatorsPath }.filterNot(allowed::contains)
         assertTrue("UI and data owners must not create image capabilities: $violations", violations.isEmpty())
+        // A rendered document can derive a bounded image read only from its original file session.
+        val renderedOwners = setOf("service/files/FileBrowserSession.kt", "service/workspace/WorkspaceApplicationService.kt")
+        val renderedConstructor = Regex("""(?<![\w])RenderedFileSource\s*\(""")
+        val renderedViolations = architectureSources.filter { renderedConstructor.containsMatchIn(it.readText()) }
+            .map { it.relativeTo(architectureSourceRoot).invariantSeparatorsPath }.filterNot(renderedOwners::contains)
+        assertTrue("Rendered sources must retain an application-owned file session: $renderedViolations", renderedViolations.isEmpty())
         assertNoHits("ManagedImageInterceptor")
         assertNoHits("ManagedImageFetcherFactory")
     }

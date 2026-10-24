@@ -28,6 +28,45 @@ import org.robolectric.annotation.Config
 class EnterpriseExitServiceTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `queue validation and closing share the session boundary`() = runTest {
+        fixture { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val preview = requireNotNull(f.service.captureRequest())
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            coEvery { f.conversations.requireEnterpriseExitInputs(preview) } coAnswers {
+                entered.complete(Unit)
+                release.await()
+            }
+            val exiting = async { f.service.exit(preview) }
+            entered.await()
+            val read = async { f.sessions.captureExitRequest() }
+            runCurrent()
+            assertFalse(read.isCompleted)
+            assertEquals(EnterpriseSessionPhase.READY, f.manifest.phase)
+            release.complete(Unit)
+            exiting.await()
+            read.await()
+            assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
+        }
+    }
+
+    @Test fun `changed pending inputs reject before closing or resource cleanup`() = runTest {
+        fixture { f ->
+            f.sessions.enrollFixture(exampleEnterprisePackage())
+            val preview = requireNotNull(f.service.captureRequest())
+            coEvery { f.conversations.requireEnterpriseExitInputs(preview) } throws
+                EnterpriseConfigurationException("enterprise_pending_inputs_changed")
+            try { f.service.exit(preview); fail("Expected changed input rejection") }
+            catch (expected: EnterpriseConfigurationException) {
+                assertEquals("enterprise_pending_inputs_changed", expected.message)
+            }
+            assertEquals(EnterpriseSessionPhase.READY, f.manifest.phase)
+            assertNull(f.service.failure.value)
+            coVerify(exactly = 0) { f.conversations.stopEnterpriseWork(any()) }
+        }
+    }
+
     @Test fun `remote logout failure completes local exit and reports unconfirmed revocation`() = runTest {
         fixture { f ->
             f.sessions.enrollFixture(exampleEnterprisePackage())
@@ -53,7 +92,7 @@ class EnterpriseExitServiceTest {
             val request = requireNotNull(f.service.captureRequest())
             f.gate.loading()
             f.logout = { throw IOException("server offline during recovery") }
-            f.sessions.beginExit(request)
+            f.sessions.beginExit(request.request)
             f.service.completeDuringRecovery()
             assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
             assertTrue(f.service.recoveryLogoutFailure.value.orEmpty().contains("server offline during recovery"))
@@ -344,7 +383,7 @@ class EnterpriseExitServiceTest {
             if (failCommit && checkpoint == EnterpriseStorageCheckpoint.BEFORE_MANIFEST_COMMIT) {
                 throw IOException("manifest unavailable")
             }
-        }) { now }
+        }, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))) { now }
         val gate = ApplicationRecoveryGate().apply { if (!virtualTime) ready() }
         val conversations = mockk<ConversationApplicationService>()
         val identityData = mockk<EnterpriseIdentityDataDisposer>(relaxed = true)
@@ -355,6 +394,8 @@ class EnterpriseExitServiceTest {
         val manifest get() = (sessions.state.value as EnterpriseState.Available).manifest
         init {
             coEvery { sync.cancelAndAwait(any()) } returns Unit
+            coEvery { conversations.captureEnterpriseExitInputs(any()) } returns emptyMap()
+            coEvery { conversations.requireEnterpriseExitInputs(any()) } returns Unit
             coEvery { conversations.stopEnterpriseWork(any()) } coAnswers { cleanup(firstArg()) }
             coEvery { conversations.requireEnterpriseStopped(any()) } returns Unit
             service = EnterpriseExitService(sessions, sync, conversations, gate, scope, net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), identityData = identityData, remoteWorkspace = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, webDav = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, platformLogout = { logout(it) })

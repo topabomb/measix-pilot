@@ -28,12 +28,19 @@ Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏根记
 `UIMessage.modelInfo` 为可空的生成模型显示快照，START 时保存，旧数据保持未知；它不是可编辑模型定义。
 两类新增历史事实都经原 JSON codec、Room 消息／上下文和个人备份链保存，不改企业数据所有权。
 
+请求 System 来源的可空 `WorkspaceContextOrigin` 保存 START 时捕获的 workspaceId、注册 root 和规范化 cwd。
+主会话与子助手由 `TurnContextFactory` 捕获，`TurnRequestAdmission` 随首次接纳的 System payload 一起提交，
+后续 Step 沿原 selection 继承；来源字段不加入模型正文，也不是文件读取授权。旧 payload 缺字段解码为 null，
+不根据当前助手回填；未知来源版本或非法路径拒绝解码。分支复制沿原上下文映射保留来源值，
+不复制工作区本身。来源保存不自动授予历史消息图片访问能力。
+
 `ConversationRepository.getContextToolHistory` 经 `ToolExecutionDAO.getConversationOutcomes` 一次 LEFT JOIN
 读取已记录的 Assistant owner 和工具终态。没有 Tool 行的已记录 Turn 仍保留，用于区分审批前拒绝与只复制 transcript、
 没有本地执行记录的 Fork 历史；不逐条查询或复制 execution 行。
 
 `ConversationQueryService` 管选中域订阅，`SelectedRealmPagingSource` 对每次惰性加载重新验证原 Session；
 切域或订阅结束使旧源失效。FTS 在排序和限额前经所属根会话过滤 scope，不能在 UI 拿到跨域结果后再过滤。
+`MessageFtsManager` 在原会话事务内同时维护 `message_fts` 与 `message_fts_rowid`；后者以会话、节点、消息变体唯一键映射 FTS rowid，节点重建、删除和标题更新先通过普通索引定位 rowid。所有非空文本变体继续参与索引，搜索语义与范围过滤保持不变。新装由数据库创建回调建立 FTS5 表，`Migration_16_17` 显式创建映射并使投影版本失效；启动恢复沿原 `ensureSearchProjection` 重建两表后才开放查询，不在每次打开数据库时补建。备份在全新数据库内仅从保留消息重建这两张派生表，不复制源库映射或全文索引。
 显示排序 `ConversationSortOrder` 默认为更新时间；业务使用的最近会话仍按更新时间读取。查询投影的 `sortTime` 与同次 SQL 排序一致，供日期分组和显示使用，不能用新的偏好重新解释尚未替换的旧页。
 历史页读取本空间全部根会话，侧栏保留助手及文件夹范围；Settings 恢复后缺失助手定义的历史仍可打开。历史可读不授予继续生成资格，不自动补建助手或改写会话归属，用户可通过既有操作显式切换到可用助手。
 索引服务查询而非授权；前置通配符搜索、JSON 聚合和低频恢复也不因补齐普通索引就免除扫描。

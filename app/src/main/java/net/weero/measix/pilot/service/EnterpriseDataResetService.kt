@@ -5,6 +5,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -64,9 +66,20 @@ internal class EnterpriseDataResetService(
     private val _progress = MutableStateFlow<EnterpriseDataResetProgress?>(null)
     val progress: StateFlow<EnterpriseDataResetProgress?> = _progress.asStateFlow()
 
-    /** UI command path: the one-time confirmed request starts a durable, restart-safe reset. */
-    suspend fun reset(request: EnterpriseDataResetRequest) {
+    suspend fun prepare(mode: EnterpriseDataResetMode): EnterpriseResetPreview {
         recoveryGate.awaitReady()
+        var preview: EnterpriseResetPreview? = null
+        sessions.captureLocalDataResetAdmission { admission ->
+            preview = EnterpriseResetPreview(EnterpriseDataResetRequest(Uuid.random(), mode), admission,
+                conversations.captureEnterpriseResetInputs())
+        }
+        return requireNotNull(preview)
+    }
+
+    /** UI command path: the one-time confirmed request starts a durable, restart-safe reset. */
+    suspend fun reset(preview: EnterpriseResetPreview) {
+        recoveryGate.awaitReady()
+        val request = preview.request
         val task = mutex.withLock {
             active?.takeIf { !it.result.isCompleted }?.let {
                 if (it.operationId != request.operationId) {
@@ -75,10 +88,37 @@ internal class EnterpriseDataResetService(
                 return@withLock it.result
             }
             if (store.read() != null) throw EnterpriseConfigurationException("enterprise_reset_in_progress")
-            val intent = intent(request, freezeScopes())
-            currentCoroutineContext().ensureActive()
-            store.write(intent)
-            start(intent)
+            var attempted: EnterpriseDataResetIntent? = null
+            var accepted: EnterpriseDataResetIntent? = null
+            try {
+                sessions.acceptLocalDataResetAdmission(preview.admission) {
+                    conversations.requireEnterpriseResetInputs(preview)
+                    val intent = intent(request, freezeScopes())
+                    currentCoroutineContext().ensureActive()
+                    attempted = intent
+                    store.write(intent)
+                    accepted = intent
+                }
+            } catch (error: Exception) {
+                accepted?.let { committed ->
+                    // Only the already-owned durable intent makes this handoff cancellation-safe.
+                    withContext(NonCancellable) { start(committed) }
+                } ?: attempted?.let { candidate ->
+                    // AtomicFile verification can fail after bytes reached disk. Expose retry only
+                    // after checking the original operation, without treating an uncertain write as success.
+                    val retained = try { store.read()?.takeIf { it.operationId == candidate.operationId } }
+                    catch (readFailure: Exception) {
+                        if (readFailure !== error) error.addSuppressed(readFailure)
+                        candidate
+                    }
+                    retained?.let {
+                        _progress.value = progressOf(it).copy(running = false,
+                            failure = if (error is CancellationException) null else reason(error))
+                    }
+                }
+                throw error
+            }
+            withContext(NonCancellable) { start(requireNotNull(accepted)) }
         }
         task.await()
     }
@@ -175,6 +215,7 @@ internal class EnterpriseDataResetService(
                 // check would deadlock the recovery gate before turn recovery could converge those turns.
                 if (stopDomainWork) exits.closeEnterpriseDomain(token)
             }
+            conversations.clearEnterpriseInputQueuesAfterResetStop()
             // The first enumeration only makes the request durable. An enterprise write may have committed
             // before CLOSING revoked admission, so freeze the union again after the stop barrier and before
             // any owner is cleared. This closes the only window where a residual realm could be missed.
@@ -300,7 +341,7 @@ internal class EnterpriseDataResetService(
 
     private fun reason(error: Exception): String = when (error) {
         is EnterpriseConfigurationException -> error.reason
-        is net.weero.measix.pilot.data.enterprise.EnterpriseStorageException -> error.reason
+        is net.weero.measix.pilot.data.enterprise.EnterpriseStorageException -> error.userVisibleDiagnostic()
         else -> error.userVisibleDiagnostic()
     }
 }

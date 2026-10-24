@@ -94,7 +94,7 @@ class SubAssistantRunCoordinatorTest {
         val root = java.nio.file.Files.createTempDirectory("child-realm-test").toFile()
         try {
             val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
-                net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root),
+                net.weero.measix.pilot.data.enterprise.enterpriseTestStore(root), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")),
             )
             val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
             sessions.enrollFixture(packet)
@@ -121,7 +121,7 @@ class SubAssistantRunCoordinatorTest {
         val packet = net.weero.measix.pilot.data.enterprise.exampleEnterprisePackage()
         val realm = packet.identity.scope
         val sessions = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
-            net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()))
+            net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}")))
         sessions.enrollFixture(packet)
         val harness = harness(AttachmentResolveResult.Success(listOf(image)), configurationScope = realm, sessions = sessions)
         val created = slot<Conversation>()
@@ -368,7 +368,7 @@ class SubAssistantRunCoordinatorTest {
         configurationScope: ConfigurationScope = ConfigurationScope.Personal,
         configurations: net.weero.measix.pilot.service.ConfigurationQueryService? = null,
         sessions: net.weero.measix.pilot.data.enterprise.EnterpriseSessionController = net.weero.measix.pilot.data.enterprise.EnterpriseSessionController(
-            net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder())),
+            net.weero.measix.pilot.data.enterprise.enterpriseTestStore(temporary.newFolder()), net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))),
     ): Harness {
         val modelId = ConfigurationReference.random()
         val model = Model(

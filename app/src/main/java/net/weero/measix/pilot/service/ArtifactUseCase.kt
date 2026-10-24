@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service
 
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.ai.attachments.AttachmentRefs
 
 import android.net.Uri
@@ -9,7 +10,10 @@ import android.util.Log
 import androidx.core.net.toUri
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -66,7 +70,12 @@ class ArtifactUseCase internal constructor(
 ) {
     internal fun openDraftScope(view: ConversationViewLease): ArtifactDraftScope {
         view.requireOpen()
-        return ArtifactDraftScope(store, recoveryGate, sessions, view.commandTarget)
+        return openDraftScope(view.commandTarget)
+    }
+
+    internal fun openDraftScope(target: ConversationCommandTarget): ArtifactDraftScope {
+        target.requireOpen()
+        return ArtifactDraftScope(store, recoveryGate, sessions, target)
     }
 
     /** 验证并创建 Settings 图像 artifact，由同一挂起所有者提交 durable root。 */
@@ -247,6 +256,47 @@ class ArtifactDraftScope internal constructor(
         )
     }
 
+    /** Accepts a flattened edit into the original editor; source attachments are never deleted here. */
+    internal suspend fun acceptAnnotatedImage(png: ByteArray, accept: (UIMessagePart.Image) -> Boolean): Boolean =
+        sessions.withSelectedRealmSelection(target.selection) { withOwnershipLock {
+            target.requireOpen()
+            require(png.size <= GeneratedMediaStore.MAX_IMAGE_BYTES) {
+                "image_annotation_png_too_large: ${png.size} bytes exceeds ${GeneratedMediaStore.MAX_IMAGE_BYTES}; original image retained"
+            }
+            require(GeneratedMediaStore.detectImageMime(png) == "image/png") { "image_annotation_invalid_png" }
+            val artifact = store.createFromBytes(scope, png, "annotation.png", "image/png",
+                origin = net.weero.measix.pilot.data.db.entity.ArtifactOrigin.USER)
+            var accepted = false
+            var failure: Throwable? = null
+            try {
+                currentCoroutineContext().ensureActive()
+                ensureOpen()
+                target.requireOpen()
+                sessions.requirePublishedSelection(target.selection)
+                // A new image intentionally carries none of the source's MCP preservation metadata.
+                val image = UIMessagePart.Image(artifact.uri.toString())
+                if (accept(image)) {
+                    owned[image.url] = artifact
+                    accepted = true
+                    inputsChanged()
+                }
+                accepted
+            } catch (error: Throwable) {
+                failure = error
+                throw error
+            } finally {
+                if (!accepted) withContext(NonCancellable) {
+                    try {
+                        store.discardUnpublished(artifact).requireDiscarded("image annotation rollback")
+                    } catch (cleanup: Throwable) {
+                        // A failed deletion remains recoverable by the store, without an orphaned creation pin.
+                        store.abandonUnpublished(artifact)
+                        if (failure != null) failure.addSuppressed(cleanup) else throw cleanup
+                    }
+                }
+            }
+        } }
+
     internal fun requireTarget(requestTarget: ConversationCommandTarget) {
         target.requireOpen()
         check(target === requestTarget) { "artifact_draft_owner_mismatch" }
@@ -258,7 +308,7 @@ class ArtifactDraftScope internal constructor(
         val retention = store.retainInputUris(scope, uris)
         val claimed = uris.mapNotNull(owned::remove)
         if (claimed.isNotEmpty()) inputsChanged()
-        ArtifactSubmission(store, claimed, retention)
+        ArtifactSubmission(store, claimed, retention, requestTarget.selection.access, uris, recoveryGate, sessions)
     }
 
     /** Returns an uncommitted request's creation ownership before its failure is exposed to the editor. */
@@ -356,29 +406,173 @@ class ArtifactDraftScope internal constructor(
 /** Creation pins transferred from the editor to one accepted input request. */
 internal class ArtifactSubmission(
     private val store: ArtifactStore,
-    private val artifacts: List<OwnedArtifact>,
+    artifacts: List<OwnedArtifact>,
     private val retention: net.weero.measix.pilot.data.files.ArtifactRetentionLease,
+    private val access: RealmAccess,
+    retainedUris: Set<String>,
+    private val recoveryGate: ApplicationRecoveryGate,
+    private val sessions: EnterpriseSessionController,
 ) : AutoCloseable {
-    private val closed = AtomicBoolean(false)
+    private val ownership = Any()
+    private val lockOrder = nextLockOrder.getAndIncrement()
+    private val artifacts = artifacts.toMutableList()
+    private var closed = false
+    private var publishing = false
+    private var resourcesReleased = false
+    private val retainedUris = retainedUris.toSet()
+    private val imageReadIdentity = kotlin.uuid.Uuid.random()
+
+    /** The accepted input owns its previews independently of the editor which transferred it. */
+    internal suspend fun describeInputs(
+        parts: List<UIMessagePart>,
+        verifyAccess: suspend () -> Unit,
+    ): Map<String, ArtifactInputPreview> {
+        val uris = parts.collectArtifactUris()
+        check(retainedUris.containsAll(uris)) { "artifact_submission_input_mismatch" }
+        return withPreviewAccess(verifyAccess) {
+            val names = store.describeInput(access.scope, uris.map(Uri::parse))
+            val images = parts.filterIsInstance<UIMessagePart.Image>().mapTo(hashSetOf()) { it.url }
+            names.mapValues { (uri, name) ->
+                val image = if (uri in images) {
+                    val artifact = synchronized(ownership) {
+                        requireOpenLocked()
+                        artifacts.firstOrNull { it.uri.toString() == uri }
+                    }
+                    if (artifact != null) inputImageSource(artifact.entity.id, artifact, verifyAccess)
+                    else AttachmentRefs.parseFileUrl(uri)?.let { file ->
+                        store.resolveImagePreviewForFile(access.scope, file)?.let {
+                            inputImageSource(it.artifactId, null, verifyAccess)
+                        }
+                    }
+                } else null
+                ArtifactInputPreview(name, image)
+            }
+        }
+    }
+
+    private fun inputImageSource(
+        artifactId: Long,
+        artifact: OwnedArtifact?,
+        verifyAccess: suspend () -> Unit,
+    ): ImageSource = ImageSource(
+        cacheIdentity = "submission:$imageReadIdentity:$artifactId:${artifact?.ownershipToken}",
+        origin = ImageOrigin.UPLOAD,
+        displayName = artifact?.entity?.displayName,
+        modifiedAtMillis = artifact?.entity?.updatedAt,
+        verifyAccess = { withPreviewAccess(verifyAccess, artifact) {
+            if (artifact == null) store.requireImageAccess(access.scope, artifactId)
+            else store.requireOwnedImageAccess(access.scope, artifact)
+        } },
+        readPayload = { withPreviewAccess(verifyAccess, artifact) {
+            if (artifact == null) store.readImage(access.scope, artifactId)
+            else store.readOwnedImage(access.scope, artifact)
+        } },
+    )
+
+    /** Queue callbacks may acquire conversation locks; never invoke them under the Session lock. */
+    private suspend fun <T> withPreviewAccess(
+        verifyAccess: suspend () -> Unit,
+        artifact: OwnedArtifact? = null,
+        action: suspend () -> T,
+    ): T {
+        recoveryGate.awaitReady()
+        requirePreviewOwnership(artifact)
+        verifyAccess()
+        val result = sessions.withSelectedRealmAccess(access) {
+            requirePreviewOwnership(artifact)
+            action().also { requirePreviewOwnership(artifact) }
+        }
+        verifyAccess()
+        sessions.withSelectedRealmAccess(access) {
+            requirePreviewOwnership(artifact)
+        }
+        return result
+    }
+
+    private fun requirePreviewOwnership(artifact: OwnedArtifact?) = synchronized(ownership) {
+        requireOpenLocked()
+        check(artifact == null || artifacts.any { it === artifact }) { "artifact_submission_ownership_transferred" }
+    }
+
+    private fun requireOpenLocked() = check(!closed) { "artifact_submission_closed" }
+
+    /** The replacement has already pinned every retained input before the queue accepts this transfer. */
+    internal fun transferRetainedCreationTo(replacement: ArtifactSubmission) {
+        check(replacement !== this) { "artifact_submission_self_transfer" }
+        val first = if (lockOrder < replacement.lockOrder) this else replacement
+        val second = if (first === this) replacement else this
+        synchronized(first.ownership) { synchronized(second.ownership) {
+            requireOpenLocked()
+            replacement.requireOpenLocked()
+            check(!publishing && !replacement.publishing) { "artifact_submission_publishing" }
+            check(access == replacement.access && store === replacement.store) { "artifact_submission_scope_mismatch" }
+            val moving = artifacts.filter { it.uri.toString() in replacement.retainedUris }
+            check(moving.all { it.entity.scope == access.scope && it.uri.toString() in retainedUris }) {
+                "artifact_submission_input_mismatch"
+            }
+            check(moving.none { old -> replacement.artifacts.any { it.entity.id == old.entity.id } }) {
+                "artifact_submission_ownership_duplicated"
+            }
+            replacement.artifacts.addAll(moving)
+            artifacts.removeAll(moving.toSet())
+        } }
+    }
 
     internal fun returnOwnership(): List<OwnedArtifact> {
-        check(closed.compareAndSet(false, true)) { "artifact submission ownership already released" }
+        val returned = synchronized(ownership) {
+            requireOpenLocked()
+            check(!publishing) { "artifact_submission_publishing" }
+            closed = true
+            releaseOwnershipLocked()
+        }
         retention.close()
-        return artifacts
+        return returned
     }
 
     suspend fun publishCommittedReferences(parts: List<UIMessagePart>) = withContext(NonCancellable) {
-        check(!closed.get()) { "artifact submission is closed" }
         val references = parts.collectArtifactUris()
-        store.publishAllUnpublished(artifacts.filter { it.uri.toString() in references })
-        close()
+        val publishedArtifacts = synchronized(ownership) {
+            requireOpenLocked()
+            check(!publishing) { "artifact_submission_publishing" }
+            artifacts.filter { it.uri.toString() in references }.also { publishing = true }
+        }
+        var published = false
+        try {
+            store.publishAllUnpublished(publishedArtifacts)
+            published = true
+        } finally {
+            val released = synchronized(ownership) {
+                publishing = false
+                if (published) closed = true
+                if (closed) releaseOwnershipLocked() else null
+            }
+            released?.let(::releaseResources)
+        }
     }
 
     override fun close() {
-        if (closed.compareAndSet(false, true)) {
-            artifacts.forEach(store::abandonUnpublished)
-            retention.close()
+        val released = synchronized(ownership) {
+            if (closed) return
+            closed = true
+            // Publication owns its snapshot until the Store finishes; close revokes reads immediately.
+            if (publishing) null else releaseOwnershipLocked()
         }
+        released?.let(::releaseResources)
+    }
+
+    private fun releaseOwnershipLocked(): List<OwnedArtifact> {
+        check(!resourcesReleased) { "artifact_submission_ownership_already_released" }
+        resourcesReleased = true
+        return artifacts.toList().also { artifacts.clear() }
+    }
+
+    private fun releaseResources(released: List<OwnedArtifact>) {
+        try { released.forEach(store::abandonUnpublished) }
+        finally { retention.close() }
+    }
+
+    private companion object {
+        val nextLockOrder = AtomicLong(0)
     }
 }
 

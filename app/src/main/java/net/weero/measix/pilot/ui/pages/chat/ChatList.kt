@@ -143,6 +143,7 @@ private const val ScrollBottomKey = "ScrollBottomKey"
 @Composable
 internal fun ChatList(
     detailSource: net.weero.measix.pilot.service.ConversationViewLease?,
+    draftFolderLocation: @Composable () -> Unit,
     innerPadding: PaddingValues,
     snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
@@ -204,6 +205,7 @@ internal fun ChatList(
         } else {
             ChatListNormal(
                 detailSource = detailSource,
+                draftFolderLocation = draftFolderLocation,
                 innerPadding = innerPadding,
                 snapshot = snapshot,
                 favoriteNodeIds = favoriteNodeIds,
@@ -251,6 +253,7 @@ internal fun ChatList(
 @Composable
 private fun ChatListNormal(
     detailSource: net.weero.measix.pilot.service.ConversationViewLease?,
+    draftFolderLocation: @Composable () -> Unit,
     innerPadding: PaddingValues,
     snapshot: ConversationPresentationSnapshot,
     favoriteNodeIds: Set<Uuid>,
@@ -470,6 +473,7 @@ private fun ChatListNormal(
                             Column(
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
+                                draftFolderLocation()
                                 if (readiness.requiresProviderConfiguration && snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal) {
                                     ProviderConfigWarningCard(onClick = onProviderConfigClick)
                                 }
@@ -567,6 +571,7 @@ private fun ChatListNormal(
                                     onToolDecision = onToolDecision,
                                     onSubAssistantAnswer = onSubAssistantAnswer,
                                     toolLivePhases = turnPresentation.toolLivePhases,
+                                    toolDurationsMillis = snapshot.toolDurationsMillis,
                                     lastMessage = index == lastMessageIndex,
                                 )
                             }

@@ -158,7 +158,7 @@ object MemoryToolUI : ToolUIRenderer {
                                     record?.let { memoryService.deleteToolRecord(it) }
                                     onDismissRequest()
                                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                                catch (_: Exception) { toaster.show(memoryFailureMessage, type = com.dokar.sonner.ToastType.Error) }
+                                catch (_: Exception) { toaster.show(memoryFailureMessage, type = net.weero.measix.pilot.ui.components.toast.ToastType.Error) }
                             }
                         }
                     ) {

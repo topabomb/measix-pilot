@@ -39,6 +39,13 @@ internal sealed interface EnterpriseState {
 }
 
 internal data class EnterpriseExitRequest(val access: RealmAccess.Enterprise, val selection: RealmSelection)
+/** Original selection and Session publication captured for one explicit local reset confirmation. */
+@ConsistentCopyVisibility
+internal data class EnterpriseLocalDataResetAdmission internal constructor(
+    val selection: RealmSelection?,
+    internal val publication: EnterpriseState,
+    internal val revision: Long,
+)
 internal data class EnterpriseAddressChangeRequest(
     val access: RealmAccess.Enterprise,
     val selection: RealmSelection,
@@ -121,6 +128,7 @@ internal class EnterprisePlatformOperationLease internal constructor(
 /** Serializes session changes with the only durable enterprise publication protocol. */
 internal class EnterpriseSessionController(
     private val store: EnterpriseAppliedStore,
+    private val resetStore: EnterpriseDataResetStore,
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val mutex = Mutex()
@@ -134,7 +142,51 @@ internal class EnterpriseSessionController(
     private var enrollmentAttempt: PlatformEnrollmentAttempt? = null
     private val platformAccessTokens = mutableMapOf<String, PlatformAccessToken>()
 
+    suspend fun captureLocalDataResetAdmission(
+        capture: suspend (EnterpriseLocalDataResetAdmission) -> Unit = {},
+    ): EnterpriseLocalDataResetAdmission = mutex.withLock {
+        requireResetAdmissionIdentity()
+        localDataResetAdmission().also { capture(it) }
+    }
+
+    suspend fun acceptLocalDataResetAdmission(
+        admission: EnterpriseLocalDataResetAdmission,
+        beforeIntent: suspend () -> Unit,
+    ) = mutex.withLock {
+        requireResetAdmissionIdentity()
+        if (localDataResetAdmission() != admission) fail("enterprise_selection_revoked")
+        try {
+            beforeIntent()
+        } finally {
+            // A write may have committed even when its acknowledgement failed or was cancelled.
+            if (!resetAllowsAdmission()) leases.values.forEach { it.revoke() }
+        }
+    }
+
+    private suspend fun requireResetAdmissionIdentity() {
+        requireNoPendingReset()
+        if (enrollmentAttempt != null) fail("enterprise_enrollment_in_progress")
+        if (state.value !is EnterpriseState.Failed) ensureLoaded()
+    }
+
+    private fun localDataResetAdmission(): EnterpriseLocalDataResetAdmission {
+        val published = state.value
+        val selection = (published as? EnterpriseState.Available)?.manifest?.let(::exitSelection)
+        return EnterpriseLocalDataResetAdmission(selection, published, selectionRevision.value)
+    }
+
+    private fun requireNoPendingReset() {
+        if (resetStore.read() != null) fail("enterprise_reset_in_progress")
+    }
+
+    private fun resetAllowsAdmission(): Boolean = try {
+        resetStore.read() == null
+    } catch (error: EnterpriseStorageException) {
+        false
+    }
+
     suspend fun beginPlatformEnrollment(): PlatformEnrollmentAttempt = mutex.withLock {
+        requireNoPendingReset()
         val manifest = ensureLoaded().manifest
         if (manifest.session != null || manifest.pendingEnrollment != null) fail("exit_current_enterprise_first")
         if (enrollmentAttempt != null) fail("enterprise_enrollment_in_progress")
@@ -149,6 +201,7 @@ internal class EnterpriseSessionController(
     /** An exchanged one-use code now belongs to this operation; persist its refresh credential before Bootstrap. */
     suspend fun acceptPlatformEnrollment(attempt: PlatformEnrollmentAttempt, connection: PlatformConnection,
         response: PlatformEnrollmentExchangeResponse): String = withContext(NonCancellable) { mutex.withLock {
+        requireNoPendingReset()
         val current = ensureLoaded().manifest
         if (enrollmentAttempt != attempt || current.session != null || current.pendingEnrollment != null) fail("enterprise_enrollment_replaced")
         if (response.deploymentId != connection.discovery.deploymentId) fail("enterprise_enrollment_identity_mismatch")
@@ -231,6 +284,7 @@ internal class EnterpriseSessionController(
     }
 
     suspend fun recoverablePlatformAccess(): RealmAccess.Enterprise? = mutex.withLock {
+        if (!resetAllowsAdmission()) return@withLock null
         val manifest = ensureLoaded().manifest
         manifest.session?.takeIf { session ->
             session.platform != null && session.expiresAtMillis > nowMillis() &&
@@ -242,6 +296,7 @@ internal class EnterpriseSessionController(
     suspend fun platformContext(sessionId: String): PlatformSessionContext = mutex.withLock { platformContextLocked(sessionId) }
 
     private suspend fun platformContextLocked(sessionId: String): PlatformSessionContext {
+        requireNoPendingReset()
         val manifest = ensureLoaded().manifest
         if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
         val context = manifest.pendingEnrollment?.takeIf { it.sessionId == sessionId }?.let {
@@ -300,6 +355,7 @@ internal class EnterpriseSessionController(
     }
 
     suspend fun completePlatformBootstrap(sessionId: String, bootstrap: PlatformBootstrap): RealmAccess.Enterprise = mutex.withLock {
+        requireNoPendingReset()
         val current = ensureLoaded().manifest
         val pending = current.pendingEnrollment ?: fail("platform_bootstrap_not_pending")
         if (pending.sessionId != sessionId || bootstrap.session.sessionId != sessionId || bootstrap.user.userId != pending.userId ||
@@ -323,6 +379,7 @@ internal class EnterpriseSessionController(
 
     /** Refreshes mutable display and authorization facts without changing the durable enterprise principal. */
     suspend fun acceptPlatformBootstrap(access: RealmAccess.Enterprise, bootstrap: PlatformBootstrap) = mutex.withLock {
+        requireNoPendingReset()
         val current = ensureLoaded()
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         val session = current.manifest.session ?: fail("enterprise_session_required")
@@ -356,6 +413,7 @@ internal class EnterpriseSessionController(
         connection: PlatformConnection,
         bootstrap: PlatformBootstrap,
     ): RealmAccess.Enterprise = mutex.withLock {
+        requireNoPendingReset()
         val current = ensureLoaded()
         if (request.selection.revision != selectionRevision.value ||
             exitSelection(current.manifest).access != request.selection.access ||
@@ -407,6 +465,7 @@ internal class EnterpriseSessionController(
     }
 
     suspend fun platformConfiguration(access: RealmAccess.Enterprise): PlatformConfigurationInput = mutex.withLock {
+        requireNoPendingReset()
         val current = ensureLoaded()
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         val session = requireNotNull(current.manifest.session)
@@ -432,6 +491,7 @@ internal class EnterpriseSessionController(
     }
 
     suspend fun recordPlatformPending(access: RealmAccess.Enterprise): EnterpriseState.Available = mutex.withLock {
+        requireNoPendingReset()
         val current = ensureLoaded()
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         if (current.manifest.session?.platform == null) fail("platform_session_required")
@@ -450,6 +510,7 @@ internal class EnterpriseSessionController(
 
     /** A fetched candidate cannot renew, recreate or switch the session that requested it. */
     suspend fun synchronize(access: RealmAccess.Enterprise, candidate: EnterpriseCandidate): EnterpriseState.Available = mutex.withLock {
+        requireNoPendingReset()
         val current = ensureLoaded()
         if (!allowsDataAccess(current.manifest, access)) fail("enterprise_data_access_unavailable")
         if (candidate.identity.scope != access.scope) fail("enterprise_principal_mismatch")
@@ -459,6 +520,7 @@ internal class EnterpriseSessionController(
 
     private suspend fun applyValidated(candidate: EnterpriseCandidate, enter: Boolean,
         expectedAccess: RealmAccess.Enterprise? = null): EnterpriseState.Available {
+        requireNoPendingReset()
         val current = ensureLoaded()
         val manifest = current.manifest
         if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
@@ -538,6 +600,7 @@ internal class EnterpriseSessionController(
         val selected = exitSelection(current.manifest)
         if (request.selection != selected) fail("enterprise_selection_revoked")
         if (request.target is RealmAccess.Enterprise) {
+            requireNoPendingReset()
             val session = current.manifest.session ?: fail("enterprise_session_required")
             if (session.id != request.target.sessionId || session.identity.scope != request.target.scope) fail("enterprise_data_access_unavailable")
             if (session.expiresAtMillis <= nowMillis()) {
@@ -569,6 +632,7 @@ internal class EnterpriseSessionController(
     }
 
     private suspend fun requirePortalSelection(selection: RealmSelection): LoadedEnterpriseState {
+        requireNoPendingReset()
         val current = ensureLoaded()
         val access = selection.access as? RealmAccess.Enterprise ?: fail("enterprise_session_required")
         if (selection.revision != selectionRevision.value || current.manifest.selectedScope != access.scope ||
@@ -591,6 +655,7 @@ internal class EnterpriseSessionController(
     suspend fun captureRealmAccess(scope: ConfigurationScope): RealmAccess = when (scope) {
         ConfigurationScope.Personal -> RealmAccess.Personal
         is ConfigurationScope.Enterprise -> mutex.withLock {
+            requireNoPendingReset()
             val current = ensureLoaded()
             val session = current.manifest.session ?: fail("enterprise_session_required")
             val access = RealmAccess.Enterprise(scope, session.id)
@@ -636,6 +701,7 @@ internal class EnterpriseSessionController(
 
     /** Recheck after awaited work inside the selected-session boundary; wall-clock expiry needs no publication. */
     internal fun requirePublishedSelection(selection: RealmSelection) {
+        if (selection.access is RealmAccess.Enterprise) requireNoPendingReset()
         if (selection.revision != selectionRevision.value) fail("enterprise_selection_revoked")
         val published = state.value
         if (published is EnterpriseState.Failed && selection.access == RealmAccess.Personal) return
@@ -648,12 +714,13 @@ internal class EnterpriseSessionController(
     /** Recheck the original execution authority immediately before a durable write under this owner. */
     internal fun requirePublishedRealmAccess(access: RealmAccess) {
         if (access == RealmAccess.Personal) return
+        requireNoPendingReset()
         val manifest = (state.value as? EnterpriseState.Available)?.manifest ?: fail("enterprise_data_access_unavailable")
         if (!allowsDataAccess(manifest, access as RealmAccess.Enterprise)) fail("enterprise_data_access_unavailable")
     }
 
     /** UI directory subscriptions follow the selected realm; expiry revokes the original session. */
-    fun observeSelectedRealmAccess(): Flow<RealmAccess?> = state.flatMapLatest { published ->
+    fun observeSelectedRealmAccess(): Flow<RealmAccess?> = combine(state, resetStore.changes) { published, _ -> published }.flatMapLatest { published ->
         val manifest = (published as? EnterpriseState.Available)?.manifest
         when {
             published is EnterpriseState.Failed -> flowOf(RealmAccess.Personal)
@@ -671,13 +738,24 @@ internal class EnterpriseSessionController(
     suspend fun <T> withRealmAccess(access: RealmAccess, operation: suspend () -> T): T = when (access) {
         RealmAccess.Personal -> operation()
         is RealmAccess.Enterprise -> mutex.withLock {
+            requireNoPendingReset()
             if (!allowsDataAccess(ensureLoaded().manifest, access)) fail("enterprise_data_access_unavailable")
             operation()
         }
     }
 
+    /** Shared-definition deletion must exclude selected UI admissions even for a personal execution. */
+    internal suspend fun <T> withRealmAdmission(access: RealmAccess, operation: suspend () -> T): T = mutex.withLock {
+        if (access is RealmAccess.Enterprise) requireNoPendingReset()
+        if (access is RealmAccess.Enterprise && !allowsDataAccess(ensureLoaded().manifest, access)) {
+            fail("enterprise_data_access_unavailable")
+        }
+        operation()
+    }
+
     /** Current-space UI reads cannot continue using an old selection after a realm switch. */
     suspend fun <T> withSelectedRealmAccess(access: RealmAccess, operation: suspend () -> T): T = mutex.withLock {
+        if (access is RealmAccess.Enterprise) requireNoPendingReset()
         if (state.value is EnterpriseState.Failed && access == RealmAccess.Personal) return@withLock operation()
         val manifest = ensureLoaded().manifest
         if (manifest.selectedScope != access.scope ||
@@ -686,7 +764,7 @@ internal class EnterpriseSessionController(
     }
 
     /** A captured subscription expires even when no command changes the manifest. New sessions cannot revive it. */
-    fun observeRealmAccess(access: RealmAccess): Flow<Boolean> = state.flatMapLatest {
+    fun observeRealmAccess(access: RealmAccess): Flow<Boolean> = combine(state, resetStore.changes) { published, _ -> published }.flatMapLatest {
         flow {
             if (access == RealmAccess.Personal) {
                 emit(true)
@@ -707,7 +785,7 @@ internal class EnterpriseSessionController(
     }.distinctUntilChanged()
 
     private fun allowsDataAccess(manifest: EnterpriseManifest, access: RealmAccess.Enterprise): Boolean =
-        manifest.session?.let { session ->
+        resetAllowsAdmission() && manifest.session?.let { session ->
             session.id == access.sessionId && session.identity.scope == access.scope && session.expiresAtMillis > nowMillis() &&
                 manifest.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE, EnterpriseSessionPhase.CONFIGURATION_PENDING)
         } == true
@@ -722,19 +800,25 @@ internal class EnterpriseSessionController(
         operation(current.toAvailable())
     }
 
-    suspend fun captureExitRequest(): EnterpriseExitRequest? = mutex.withLock {
+    suspend fun captureExitRequest(
+        capture: suspend (EnterpriseExitRequest) -> Unit = {},
+    ): EnterpriseExitRequest? = mutex.withLock {
         val manifest = manifestForExit()
         val session = manifest.session ?: return@withLock null
         val access = RealmAccess.Enterprise(session.identity.scope, session.id)
-        EnterpriseExitRequest(access, exitSelection(manifest))
+        EnterpriseExitRequest(access, exitSelection(manifest)).also { capture(it) }
     }
 
     /** First revoke admission, then the application owner cancels domain work and closes leases. */
-    suspend fun beginExit(request: EnterpriseExitRequest): EnterpriseExitToken = mutex.withLock {
+    suspend fun beginExit(
+        request: EnterpriseExitRequest,
+        beforeClosing: suspend () -> Unit = {},
+    ): EnterpriseExitToken = mutex.withLock {
         val manifest = manifestForExit()
         requireExitIdentity(manifest, request.access)
         if (manifest.phase == EnterpriseSessionPhase.CLOSING) fail("enterprise_exit_in_progress")
         if (exitSelection(manifest) != request.selection) fail("enterprise_selection_revoked")
+        beforeClosing()
         beginClosing(manifest, EnterpriseExitReason.USER_REQUEST)
     }
 
@@ -936,6 +1020,7 @@ internal class EnterpriseSessionController(
     }
 
     private suspend fun requireSession(allowOffline: Boolean): LoadedEnterpriseState {
+        requireNoPendingReset()
         val current = ensureLoaded()
         val session = current.manifest.session ?: fail("enterprise_session_required")
         if (session.expiresAtMillis <= nowMillis()) {

@@ -41,12 +41,12 @@ Assistant 消息的 `MessageModelInfo` 在 START 提交时从捕获模型保存�
 不能从参数或“存在结果”推断写入成功；统一 diff 来自显示 metadata，不混入 Provider 工具文本。
 工具的本地化名称只用于显示，协议名仍是执行和持久化身份。
 
-`chart_display` 使用 `ChartSpec` 的唯一纯校验；聊天和图片导出通过 `completedChart` 核对明确 COMPLETED 结果与阶段，
+`chart_display` 已退休，仅保留历史结果的 `ChartSpec` 纯校验；聊天和图片导出通过 `completedChart` 核对明确 COMPLETED 结果与阶段，
 畸形历史或非成功调用保留通用详情。原生 Canvas 支持折线、线性零基线柱状和散点，图表与分页表格共享参数。
 表格每页六行，列可横向滚动，不增加嵌套纵向滚动；默认线性刻度保留端点和步长的小数精度，极窄范围使用有界科学计数。
 图表至多 8 个系列、1000 个数据点、规范化 JSON 64 KiB 字符，标签至多 160 字符；非零数值绝对值在 1e-100 至 1e100，
 显式轴范围包含所有数据点。对数值和对数域严格校验，刻度去重后至多六个，对数刻度按相邻间距保留可辨精度，不加载脚本或网络。
-工具默认关闭，启用沿原助手本地工具偏好；成功输出为有界保留结果，调用参数与结果仍由原 Turn 检查点持久化。
+不再提供工具开关或执行装配。历史调用参数、结果和成功阶段保持原样，不把未知或失败的历史调用升级为成功图表。
 
 ## 2. 应用上下文变化展示
 
@@ -72,8 +72,19 @@ Assistant 消息的 `MessageModelInfo` 在 START 提交时从捕获模型保存�
 ## 3. Markdown、代码与原生媒体
 
 Text 先经过助手视觉正则，再进入 `MarkdownBlock`；视觉转换与生成管道的持久化转换不同。
-流式生成时禁用正文选择，结束后恢复。Markdown 预处理 LaTeX 分隔符时避开代码块；首次同步解析，
+`ChatMessage` 通过 `MessageRichTextHost` 按原会话与消息身份取得查询层签发的资源来源，子助手详情沿用此入口。
+工作区图片使用请求保存的工作区与 cwd；缺来源不查询当前助手。首次内容出现后刷新来源，普通流式文本追加
+不重复签发；失败提供诊断和重试。图片导出在点击时为每条选中消息分别绑定来源，保存/分享前复验，
+不能用一个会话级 resolver 解释所有历史图片。`/upload` 始终走 ArtifactStore，工作区来源不扩大附件权限。
+流式生成时禁用正文选择，结束后恢复。两条解析路径通过 `prepareMarkdownSource` 共用换行与数学分隔符预处理；
+只在解析副本中将 CRLF/CR 变为 LF，并用位置映射保留代码复制与导出的原文。AST 识别的围栏、行内和缩进代码
+保持字面内容，未闭合与四反引号围栏同样受保护；数学分隔符在单次替换中处理，避免前次替换导致代码位置偏移。
+首次同步解析，
 后续通过 `snapshotFlow`、`mapLatest` 和后台 dispatcher 更新 AST。
+
+两套 Markdown 的搜索引用角标使用实色 tertiaryContainer / onTertiaryContainer 与中等字重，
+避免深色主题下透明底色和细字降低可读性。思考正文以 bodySmall 为基准，字号和行高同时应用聊天 fontSizeRatio，
+保留聊天字体；折叠预览与展开正文共用该样式。
 
 | 内容 | 渲染路径 | 边界 |
 | --- | --- | --- |
@@ -89,8 +100,17 @@ Text 先经过助手视觉正则，再进入 `MarkdownBlock`；视觉转换与�
 ### 代码与全文预览
 
 宿主允许 HTML 预览且代码围栏闭合时，`HighlightCodeBlock` 才提供 HTML/SVG/Mermaid 预览；
-流式未闭合内容显示源码高亮。HTML/SVG 默认源码，由用户切换；完整 Mermaid 默认显示图表。
+流式未闭合内容显示源码高亮。完整 HTML/SVG/Mermaid 默认预览，三类均可切换源码；Mermaid 使用离线图表渲染。
 HTML 直接成为文档内容，SVG 包装为展示文档，两者经 `RenderedContentWebView` 读取。
+
+`MarkdownFence` 从 AST 提供闭合状态、块起点和原始代码。HTML 路径通过本次生成的私有标记关联解析后的
+Element，随后删除标记；模型原始 HTML 属性不能声明围栏已闭合。`CodePreviewPreferences` 保存文本块的
+显示选择，聊天按 messageId 与 part index 持有，在流式追加、解析器切换和 SelectionContainer 重建后保留。
+已完成正文再次编辑或替换时清除旧选择；该状态不持久化、不提供资源访问资格。
+
+`EscapedMathProvider` 在 HTML 生成边界转义公式，Jsoup 解码一次；直接 AST 渲染不重复 HTML 转义。
+JLatexMath 的测量、分段及绘制都经 `processLatex` 去除不支持的换行间距参数（如双反斜线后的 [4pt]），
+不改存储正文或复制内容，普通方括号表达式保留。
 
 内联 Mermaid 使用专用 `Mermaid` 宿主；`buildMermaidHtml` 转义代码并加载本地 `mermaid.min.js`，
 以 `themeVariables` 映射当前主题。代码、主题或图片来源解析器变化时重建文档与导出桥。
@@ -105,7 +125,7 @@ Markdown 全文预览只提取消息顶层 Text，经 `buildMarkdownPreviewHtml`
 `RichTextHost` 提供链接、预览和唯一待处理文档选择器。聊天/子助手使用 `ConversationViewLease`，
 受域约束的配置预览使用 `RealmConfiguration`，共享用户配置使用 `UserConfiguration`，开发示例和更新说明使用 `Static`。
 渲染组件不访问 Store，也不按当前空间重建来源。无交互宿主时，Markdown 链接使用不可用 handler，代码/表格不安装文档选择器。
-`RichTextActions.exportText` 缺失时不显示文本保存动作；远程文件 `RestrictedMarkdown` 沿用此边界，文件下载仍由文件页负责。
+`RichTextActions.exportText` 缺失时不显示文本保存动作；文件预览使用原来源的 RichTextHost，文本导出沿同一授权入口，原文件下载仍由文件页负责。
 
 `LocalConversationImages` 在点击时按当前分支顺序收集顶层与 Tool.output 图片，过滤空加载占位，形成会话相册；
 未命中时单图打开。Markdown/HTML 正文图片经 `LocalImageSourceResolver` 解析并单图浏览，背景与输入附件不并入相册。
@@ -136,11 +156,19 @@ Markdown 全文预览只提取消息顶层 Text，经 `buildMarkdownPreviewHtml`
 来源未授权或已撤销时不创建/继续展示预览；`RenderedContentReadState` 区分 Loading、Unavailable、Failed 与 Ready。
 异常初始化、刷新或资源读取显示诊断，重试沿用原 `RenderedContent` 和来源，不能重建失效权限。
 旧回调只更新原读取尝试，不覆盖新文档；预览关闭或失败不主动关闭借用的父 lease，撤权按原查询门禁处理。
+每次读取尝试持有独立 Job，WebView 同步资源回调通过该 Job 运行底层挂起读取。关闭、重试、失败或撤权
+立即取消旧 Job 并拒绝迟到请求；原组合协程在清理阶段挂起等待读取退出，不在 Main 阻塞等待。
+原生回调边界将取消收口为不可访问响应，不把取消显示成读取失败，也不关闭共享文件会话或父 lease。
 
-通用预览将 `file:` 和 `/upload` 图片映射到当前虚拟 origin，经文件服务读取，动态节点和 CSS 使用同一路径。
+聊天/配置来源将 `file:` 和 `/upload` 图片映射到当前虚拟 origin，经文件服务读取，动态节点和 CSS 使用同一路径。
 外部 `<base>` 不改变这些映射的目标；本地读取只交付通过图片识别的字节，不提供通用文件接口。
 原生 file/content 访问关闭，用户手势链接交给原宿主；无手势导航被拦截。
 HTML/SVG 不获得 Portal Bridge，也不注入业务 JavaScript 接口。
+
+工作区文件来源为 `RenderedContentSource.WorkspaceFile`，借用 `RenderedFileSource` 的原文档身份和目录；
+虚拟 origin 下的相对 URL 经 `readRenderedResource` 交回原服务，按 MIME 返回 CSS/JS/图片等有界字节。
+它不访问聊天 Artifact；页面中的 base 标签不能更换借用目录。`FileDocumentPreview` 同时观察文件来源变化，
+因此没有新网络请求的已加载 Markdown、HTML/SVG 或 Mermaid 也会在撤权时撤下；细节见 [工作区架构](workspace-architecture.md)。
 
 `WebView.kt` 负责原生实例的创建与释放：普通重组比较数据避免重复加载；`onReset` 停止加载并移除接口；
 `onRelease` 仅清空匹配实例的状态引用，停止加载、移除接口和客户端、清空内容并销毁实例。
@@ -160,6 +188,16 @@ HTML/SVG 不获得 Portal Bridge，也不注入业务 JavaScript 接口。
 结果在组件协程中转为 PNG data URL，经原宿主 `ImageSource` 和 `MediaExportService.saveImage` 读取与保存，
 不在桥接线程直接解码或写相册。未提供图片解析器的独立使用场景采用 `externalImageSource`，不能据此读取本地文件。
 组件销毁取消导出协程；导出失败通过提示反馈，不具备通用预览错误卡的完整诊断展示。
+
+### 发送前图片预览与标注
+
+`MediaFileInputRow` 点击图片打开多图 `ImagePreviewDialog`，标注动作携带冻结列表中的图片序号，
+再映射到 `ChatInputState.ImageEditTarget`；重复 URI 或重复 Image 实例不合并为同一个输入附件。
+输入被发送、删除重选或切换编辑目标后撤下旧预览/标注，历史消息中的附件位置按独立身份保留。
+`ChatImageAnnotation` 经 ChatVM 读取原授权图片并准备预览，`ImageAnnotationDialog` 只持有临时笔画，
+支持自由线、椭圆、矩形、箭头、颜色粗细、撤销重做及缩放平移。取消不接纳结果，失败显示诊断并保留重试。
+GIF 可预览和发送，但不进入静态标注；空笔画完成保留原附件。绘制、编码及新图片所有权规则见
+[多模态资源](multimodal-context-and-turn-durability.md)，不从界面直接写入文件或改写历史附件。
 
 ## 6. 验证边界
 

@@ -1,6 +1,10 @@
 package net.weero.measix.pilot.service.turn
 
 import me.rerere.common.configuration.ConfigurationReference
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.every
+import io.mockk.mockk
 
 
 import me.rerere.ai.provider.Model
@@ -25,8 +29,45 @@ import java.util.Locale
 @RunWith(org.robolectric.RobolectricTestRunner::class)
 @Config(sdk = [34])
 class TurnContextFactoryTest {
+    @Test fun `launch captures original workspace root and cwd before configuration changes`() = kotlinx.coroutines.test.runTest {
+        val id = kotlin.uuid.Uuid.random()
+        val repository = mockk<net.weero.measix.pilot.data.repository.WorkspaceRepository>()
+        var workspace = net.weero.measix.pilot.data.db.entity.WorkspaceEntity(id.toString(), "Original", "original-root",
+            me.rerere.workspace.WorkspaceShellStatus.READY.name, 1, 1)
+        coEvery { repository.getById(id.toString()) } answers { workspace }
+        coEvery { repository.rootfsEnvironment(any()) } returns me.rerere.workspace.RootfsEnvironment(listOf("/usr/bin/env"), "/bin/sh", "test")
+        val execution = mockk<net.weero.measix.pilot.service.ModelExecutionSnapshot> {
+            every { model } returns Model(modelId = "test")
+        }
+        val factory = TurnContextFactory(repository)
+        val plan = factory.prepareLaunch(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal,
+            Settings(), Assistant(workspaceId = id), execution, me.rerere.ai.provider.RequestMediaCapabilities.NONE,
+            null, emptySet(), emptyList(), disclosure = mockk {
+                every { withInstalledTools(any()) } returns this
+            }, workspaceCwd = "/workspace/reports/./daily")
+        workspace = workspace.copy(root = "replacement-root", name = "Replacement")
+        val context = factory.materialize(plan)
+        assertEquals("original-root", context.system.workspace?.root)
+        assertEquals(id.toString(), context.system.workspace?.workspaceId)
+        assertEquals("/workspace/reports/daily", context.system.workspace?.cwd)
+        assertTrue(context.system.text.contains("Original"))
+        assertTrue(!context.system.text.contains("Replacement"))
+        coVerify(exactly = 1) { repository.getById(id.toString()) }
+    }
+
     private val instant: Instant = Instant.parse("2026-09-03T10:15:30Z")
     private val zoneId: ZoneId = ZoneId.of("Asia/Shanghai")
+
+    @Test
+    fun `time reminder interval is captured independently from enablement`() {
+        val before = freeze(assistant = Assistant(enableTimeReminder = true, timeReminderIntervalMinutes = 5))
+        val after = freeze(assistant = Assistant(enableTimeReminder = false, timeReminderIntervalMinutes = 90))
+        assertEquals(5, before.timeReminderIntervalMinutes)
+        assertTrue(before.enableTimeReminder)
+        assertEquals(90, after.timeReminderIntervalMinutes)
+        assertTrue(!after.enableTimeReminder)
+        assertEquals(60, freeze(assistant = Assistant()).timeReminderIntervalMinutes)
+    }
 
     @Test
     fun `skill metadata changes are captured only by a new turn materialization`() {
@@ -77,6 +118,8 @@ class TurnContextFactoryTest {
             model = io.mockk.mockk(),
             mediaCapabilities = me.rerere.ai.provider.RequestMediaCapabilities.NONE,
             promptInputs = inputs,
+            workspace = net.weero.measix.pilot.data.model.WorkspaceContextOrigin(
+                "11111111-1111-4111-8111-111111111111", "captured-root", "/workspace/reports"),
             tools = listOf(tool),
             disclosure = io.mockk.mockk {
                 io.mockk.every { withInstalledTools(any()) } returns this
@@ -99,6 +142,7 @@ class TurnContextFactoryTest {
         assertEquals(2, schemaReads)
         assertEquals(listOf(historyRule), context.promptInputs.promptInjections)
         assertEquals(null, context.promptInputs.workspaceReminder)
+        assertEquals(plan.workspace, context.system.workspace)
         assertTrue(context.system.text.contains("domain captured"))
         assertTrue(context.system.text.contains("workspace {{user}}"))
         assertTrue(context.system.text.contains("tool {{user}}"))

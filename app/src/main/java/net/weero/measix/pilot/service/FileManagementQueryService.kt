@@ -102,6 +102,15 @@ class FileManagementQueryService internal constructor(
         )
     }
 
+    internal suspend fun existingGeneratedIds(selection: RealmSelection, ids: Set<Int>): Set<Int> {
+        recoveryGate.awaitReady()
+        return sessions.withSelectedRealmSelection(selection) {
+            generatedMediaStore.existingIds(selection.access.scope, ids).also {
+                sessions.requirePublishedSelection(selection)
+            }
+        }
+    }
+
     fun observeGeneratedPaging(): Flow<PagingData<GeneratedMediaUiModel>> = observeSelection().flatMapLatest { selection ->
         if (selection == null) flowOf(PagingData.empty()) else selectedRealmPaging(
             sessions, selection, PagingConfig(pageSize = 20, enablePlaceholders = false),

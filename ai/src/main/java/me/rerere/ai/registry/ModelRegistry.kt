@@ -617,6 +617,11 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    val GLM_5_3 = defineModel {
+        exact("glm-5.3")
+        toolReasoningAbility()
+    }
+
     private val MINIMAX_M2 = defineModel {
         tokens("minimax", "m", "2")
         toolReasoningAbility()
@@ -686,6 +691,10 @@ object ModelRegistry {
     private val HY3 = defineModel {
         tokens("hy", "3")
         toolReasoningAbility()
+    }
+
+    val HY4_PREVIEW = defineModel {
+        exact("hy4-preview")
     }
 
     private val LONGCAT_2 = defineModel {
@@ -781,6 +790,7 @@ object ModelRegistry {
         GLM_5,
         GLM_5_1,
         GLM_5_2,
+        GLM_5_3,
         MINIMAX_M2,
         MINIMAX_M2_5,
         MINIMAX_M2_7,
@@ -794,6 +804,7 @@ object ModelRegistry {
         MUSE_SPARK,
         MUSE_GLIMMER,
         HY3,
+        HY4_PREVIEW,
         LONGCAT_2,
     )
 

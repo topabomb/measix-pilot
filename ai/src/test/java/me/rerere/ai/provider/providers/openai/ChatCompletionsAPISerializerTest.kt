@@ -56,6 +56,61 @@ import org.junit.Test
 class ChatCompletionsAPISerializerTest {
 
     @Test
+    fun `glm53 mandatory thinking uses supported effort for JSON and SSE without changing model settings`() {
+        val model = Model(modelId = "glm-5.3", abilities = emptyList())
+        for (host in listOf("open.bigmodel.cn", "proxy.example.com")) {
+            for (stream in listOf(false, true)) {
+                for (level in listOf(ReasoningLevel.AUTO, ReasoningLevel.LOW, ReasoningLevel.HIGH, ReasoningLevel.MAX)) {
+                    val body = api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(),
+                        TextGenerationParams(model = model, reasoningLevel = level),
+                        ProviderSetting.OpenAI(baseUrl = "https://$host/v1"), stream)
+                    if (host == "open.bigmodel.cn") assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+                    else assertFalse(body.containsKey("thinking"))
+                    if (level == ReasoningLevel.AUTO) assertFalse(body.containsKey("reasoning_effort"))
+                    else assertEquals(level.effort, body["reasoning_effort"]!!.jsonPrimitive.content)
+                    assertTrue(model.abilities.isEmpty())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `glm53 rejects unsupported effort and disabling thinking through custom body`() {
+        val model = Model(modelId = "glm-5.3", abilities = listOf(ModelAbility.REASONING))
+        for (host in listOf("open.bigmodel.cn", "proxy.example.com")) {
+            fun reject(params: TextGenerationParams, reason: String) {
+                val error = assertThrows(IllegalArgumentException::class.java) {
+                    api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(), params,
+                        ProviderSetting.OpenAI(baseUrl = "https://$host/v1"))
+                }
+                assertTrue(error.message.orEmpty(), error.message.orEmpty().contains(reason))
+            }
+            for (level in listOf(ReasoningLevel.OFF, ReasoningLevel.MEDIUM, ReasoningLevel.XHIGH)) {
+                reject(TextGenerationParams(model = model, reasoningLevel = level), "glm53_reasoning_unsupported")
+            }
+            for (effort in listOf("none", "medium", "xhigh", "auto")) {
+                reject(TextGenerationParams(model = model, reasoningLevel = ReasoningLevel.AUTO, customBody = listOf(
+                    me.rerere.ai.provider.CustomBody("reasoning_effort", JsonPrimitive(effort)),
+                )), "glm53_reasoning_unsupported")
+            }
+            reject(TextGenerationParams(model = model, reasoningLevel = ReasoningLevel.AUTO, customBody = listOf(
+                me.rerere.ai.provider.CustomBody("thinking", buildJsonObject { put("type", "disabled") }),
+            )), "glm53_thinking_required")
+        }
+    }
+
+    @Test
+    fun `glm53 rules do not change previous or unregistered variants`() {
+        for (id in listOf("glm-5.2", "glm-5.3-flash", "glm-5.30")) {
+            val body = api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(),
+                TextGenerationParams(model = Model(modelId = id, abilities = listOf(ModelAbility.REASONING)), reasoningLevel = ReasoningLevel.OFF),
+                ProviderSetting.OpenAI(baseUrl = "https://open.bigmodel.cn/api/paas/v4"))
+            assertEquals("disabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+            assertFalse(body.containsKey("reasoning_effort"))
+        }
+    }
+
+    @Test
     fun `tool only Steps retain alternating calls and results`() {
         val wire = invokeBuildMessages(me.rerere.ai.testsupport.consecutiveToolSteps())
         assertEquals(listOf("assistant", "tool", "assistant", "tool"), wire.map {

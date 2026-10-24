@@ -290,6 +290,10 @@ class ChatCompletionsAPI(
         val host = providerSetting.baseUrl.toHttpUrl().host
         val endpointVendor = resolveOpenAIEndpointVendor(host)
         val isOfficialOpenAI = endpointVendor == OpenAIEndpointVendor.OPENAI
+        val isGlm53 = ModelRegistry.GLM_5_3.match(params.model.modelId)
+        if (isGlm53) require(params.reasoningLevel in setOf(ReasoningLevel.AUTO, ReasoningLevel.LOW, ReasoningLevel.HIGH, ReasoningLevel.MAX)) {
+            "glm53_reasoning_unsupported: ${params.model.modelId} supports AUTO, LOW, HIGH or MAX; selected ${params.reasoningLevel}"
+        }
         val requestHasTools =
             params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()
         val replayPolicy = resolveChatReasoningReplayPolicy(
@@ -348,7 +352,7 @@ class ChatCompletionsAPI(
                     ?.let { put("session_id", it) }
             }
 
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (params.model.abilities.contains(ModelAbility.REASONING) || isGlm53) {
                 val level = params.reasoningLevel
                 when (endpointVendor) {
                     OpenAIEndpointVendor.OPENROUTER -> {
@@ -429,6 +433,7 @@ class ChatCompletionsAPI(
                         put("thinking", buildJsonObject {
                             put("type", if (!level.isEnabled) "disabled" else "enabled")
                         })
+                        if (isGlm53 && level != ReasoningLevel.AUTO) put("reasoning_effort", level.effort)
                     }
 
                     OpenAIEndpointVendor.MOONSHOT -> {
@@ -516,6 +521,15 @@ class ChatCompletionsAPI(
             params.customBody,
             CHAT_COMPLETIONS_OWNERSHIP,
         ).also { body ->
+            if (isGlm53) {
+                require("reasoning_effort" !in body ||
+                    (body["reasoning_effort"] as? JsonPrimitive)?.content in setOf("low", "high", "max")) {
+                    "glm53_reasoning_unsupported: ${params.model.modelId} reasoning_effort must be low/high/max or omitted"
+                }
+                require("thinking" !in body || (body["thinking"] as? JsonObject)?.get("type") == JsonPrimitive("enabled")) {
+                    "glm53_thinking_required: ${params.model.modelId} only supports thinking.type=enabled"
+                }
+            }
             if (endpointVendor == OpenAIEndpointVendor.DASHSCOPE &&
                 usesDashScopeQwen38Effort(params.model.modelId)
             ) {

@@ -256,6 +256,17 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 
 工具参数分片只合并到当前未完成步骤中定位到的那一个 Tool。后续请求即使复用相同 `providerCallId`，也不能改写前序已完成调用的参数、结果或 metadata。
 
+### GLM-5.3 Chat Completions
+
+`ModelRegistry.GLM_5_3` 精确匹配 `glm-5.3`，默认登记文本输入/输出、工具与推理，不扩展到 Flash 或未知后缀。
+`ChatCompletionsAPI` 对该型号接受 AUTO/LOW/HIGH/MAX，拒绝 OFF/MEDIUM/XHIGH，不静默降档；AUTO 省略 effort，
+使用模型默认 max。官方 BIGMODEL 端点发送 `thinking.type=enabled`，显式档位写 `reasoning_effort`。
+未知兼容端点仍走原兼容编码，不因型号登记推断其供应商或增加 thinking 字段；精确型号的档位校验仍生效。
+合并 custom body 后校验 `reasoning_effort` 和显式 `thinking.type`，禁止非法 effort 或关闭思考。
+该约束不依赖 REASONING 勾选，也不回写用户或企业保存的能力配置；其他 GLM 型号保留既有行为。
+此处为 Chat Completions 适配，不据此宣称 GLM 的 Responses/Anthropic 入口已完成专项适配。
+依据：[GLM-5.3 官方参数](https://docs.bigmodel.cn/cn/guide/models/text/glm-5.3)。
+
 ### MiMo 端点
 
 `OpenAIEndpointVendor.MIMO` 识别 MiMo 官方端点 `api.xiaomimimo.com` 与 `token-plan-cn.xiaomimimo.com`。模型声明 `REASONING` capability 时，Chat Completions 按本地 reasoning 开关发送 `thinking.type=enabled|disabled`；只有 wire 上实际启用 thinking 时才不发送 `temperature`/`top_p`，非 reasoning 模型保留 sampling，token 上限使用 `max_completion_tokens`。Responses 使用 `ResponseEndpointProfile.MIMO` 和 `OpenAIResponseSourceProfile.MIMO`：OFF 映射为 `reasoning.effort=none`，AUTO 省略，LOW/MEDIUM/HIGH 原样，XHIGH/MAX 降为 `high`；sampling 是否省略复用同一 capability + level 判定。MiMo Responses 不请求 unsupported reasoning summary/encrypted content，也不复用其他 endpoint 的 opaque item。
@@ -494,6 +505,9 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
 注册表不决定 Provider 类型或线协议。模型组应服务于可测试的行为差异，在线型号清单不能成为
 endpoint 选择或请求硬阻断条件。匹配测试必须覆盖相邻版本和别名，避免把 `gpt-5.10` 当作 `gpt-5.1`。
 请求媒体能力从 `Model.inputModalities` 派生，不在投影或 endpoint host 另建例外清单；图标匹配只影响显示。
+
+`ModelRegistry.HY4_PREVIEW` 只登记 `hy4-preview` 的文本输入/输出，不预填工具、推理档位或视觉能力，也不新增供应商。
+用户或企业显式声明的能力仍由原配置解析，登记不改写已有模型设置；未知后缀不继承此精确身份。
 
 ## 维护与验证
 

@@ -10,6 +10,27 @@ import org.junit.Test
 
 class ModelRegistryTest {
     @Test
+    fun hy4PreviewRegistrationDoesNotInventVisionOrWireCapabilities() {
+        assertTrue(ModelRegistry.HY4_PREVIEW.match("hy4-preview"))
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("hy4-preview"))
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_OUTPUT_MODALITIES.getData("hy4-preview"))
+        assertTrue(ModelRegistry.MODEL_ABILITIES.getData("hy4-preview").isEmpty())
+        for (id in listOf("hy4", "hy4-preview-vision", "hy4-preview-20260828", "tencent/hy4-preview")) {
+            assertFalse(id, ModelRegistry.HY4_PREVIEW.match(id))
+        }
+    }
+
+    @Test
+    fun glm53IsExactTextOnlyWithoutExtendingItsParameterPolicyToFlash() {
+        assertTrue(ModelRegistry.GLM_5_3.match("glm-5.3"))
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_INPUT_MODALITIES.getData("glm-5.3"))
+        assertEquals(listOf(ModelAbility.TOOL, ModelAbility.REASONING), ModelRegistry.MODEL_ABILITIES.getData("glm-5.3"))
+        for (id in listOf("glm-5.3-flash", "glm-5.30", "glm-5.3-preview", "vendor/glm-5.3")) {
+            assertFalse(id, ModelRegistry.GLM_5_3.match(id))
+        }
+    }
+
+    @Test
     fun geminiArgonRegistrationIsExactAndDoesNotInventOutputModalities() {
         assertTrue(ModelRegistry.GEMINI_4_ARGON.match("gemini-4-argon"))
         assertEquals(listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData("gemini-4-argon"))

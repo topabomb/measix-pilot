@@ -161,6 +161,7 @@ fun List<UIMessagePart>.isEmptyUIMessage(): Boolean {
             is UIMessagePart.Audio -> message.url.isBlank()
             // 工具调用本身在 UI 上有卡片与操作入口，与是否执行、是否产出无关。
             is UIMessagePart.Tool -> false
+            is UIMessagePart.ServerTool -> false
             else -> true
         }
     }
@@ -252,6 +253,7 @@ object TurnTerminalReasons {
 /** Shared part-level predicate behind `UIMessage.isValidToUpload` and `ModelRequestMessage.isValidToUpload`. */
 fun partsAreValidToUpload(parts: List<UIMessagePart>): Boolean = parts.any { part ->
     when (part) {
+        is UIMessagePart.ServerTool -> part.complete
         is UIMessagePart.Step -> false
         is UIMessagePart.Text -> part.text.isNotBlank()
         is UIMessagePart.Image -> part.url.isNotBlank()
@@ -440,6 +442,7 @@ private fun List<UIMessagePart>.replaySafeParts(
     toolOutput: Boolean,
 ): List<UIMessagePart> = mapNotNull { part ->
     when (part) {
+        is UIMessagePart.ServerTool -> part.takeIf { it.complete && !toolOutput }
         is UIMessagePart.Text -> {
             if (part.mediaFailureMetadataOrNull() == null) {
                 part
@@ -478,6 +481,7 @@ private fun List<UIMessagePart>.replaySafeParts(
  */
 private fun List<UIMessagePart>.replaySafeTailParts(): List<UIMessagePart> = mapNotNull { part ->
     when (part) {
+        is UIMessagePart.ServerTool -> null
         is UIMessagePart.Step -> part
         is UIMessagePart.Text -> {
             if (part.mediaFailureMetadataOrNull() == null) {
@@ -613,4 +617,5 @@ data class UIMessageChoice(
         ?.map { ProviderToolCallSlot.Index(it) }.orEmpty(),
     /** Optional exact block identity for every part; deltas reuse their original slot. Never persisted. */
     val contentBlockSlots: List<ProviderContentBlockSlot> = emptyList(),
+    val continuation: ProviderContinuation? = null,
 )

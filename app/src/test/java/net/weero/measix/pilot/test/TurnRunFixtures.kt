@@ -165,7 +165,7 @@ private fun startedMessages(messages: List<UIMessage>, assistantMessageId: Uuid?
         usageCompleteness = me.rerere.ai.core.UsageCompleteness.NONE, providerMetadata = null,
     )) else step
     val parts = last.parts.map { if (it is UIMessagePart.Tool) it.copy(stepId = stepId) else it }
-    val assistant = net.weero.measix.pilot.service.runtime.TurnTransition.advanceCompletedToolStep(
+    val assistant = net.weero.measix.pilot.service.runtime.TurnTransition.advanceCompletedSamplingStep(
         last.copy(parts = listOf(sampled) + parts),
     )
     return messages.dropLast(1) + assistant

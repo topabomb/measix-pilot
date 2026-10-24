@@ -11,6 +11,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isCompleteImageUrl
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.mergeMessageMetadata
+import me.rerere.ai.ui.mergePartMetadata
 import me.rerere.ai.ui.mergeReasoningPartMetadata
 import me.rerere.ai.ui.renderableImageUrl
 import kotlin.time.Clock
@@ -55,7 +56,7 @@ internal class StepOutputAccumulator {
         return active.copy(
             modelId = active.modelId ?: model?.id,
             parts = parts,
-            annotations = delta.annotations.ifEmpty { active.annotations },
+            annotations = (active.annotations + delta.annotations).distinct(),
             providerMetadata = mergeMessageMetadata(active.providerMetadata, delta.providerMetadata),
         )
     }
@@ -63,13 +64,21 @@ internal class StepOutputAccumulator {
     private fun mergeContentBlock(acc: List<UIMessagePart>, delta: UIMessagePart, slot: ProviderContentBlockSlot): List<UIMessagePart> {
         val index = contentIndices[slot]
         if (index == null) {
-            require(delta is UIMessagePart.Text || delta is UIMessagePart.Reasoning) { "Unsupported slotted content type" }
+            require(delta is UIMessagePart.Text || delta is UIMessagePart.Reasoning || delta is UIMessagePart.ServerTool) { "Unsupported slotted content type" }
             contentIndices[slot] = acc.size
             return acc + delta
         }
         val previous = acc[index]
         val merged = when {
-            previous is UIMessagePart.Text && delta is UIMessagePart.Text -> previous.copy(text = previous.text + delta.text)
+            previous is UIMessagePart.ServerTool && delta is UIMessagePart.ServerTool -> {
+                require(previous.source == delta.source) { "Provider content block changed source" }
+                require(!previous.complete || previous == delta) { "Completed server block changed" }
+                delta.copy(metadata = mergePartMetadata(previous.metadata, delta.metadata))
+            }
+            previous is UIMessagePart.Text && delta is UIMessagePart.Text -> previous.copy(
+                text = previous.text + delta.text,
+                metadata = mergePartMetadata(previous.metadata, delta.metadata),
+            )
             previous is UIMessagePart.Reasoning && delta is UIMessagePart.Reasoning -> previous.copy(
                 reasoning = previous.reasoning + delta.reasoning,
                 metadata = mergeReasoningPartMetadata(previous.metadata, delta.metadata),
@@ -170,6 +179,7 @@ internal class StepOutputAccumulator {
             }
 
             is UIMessagePart.Tool -> error("Tool merge requires a transport slot")
+            is UIMessagePart.ServerTool -> error("Server tool merge requires a content slot")
 
             is UIMessagePart.Audio, is UIMessagePart.Video, is UIMessagePart.Document ->
                 acc.insertAt(acc.firstPendingToolIndex(stepStart), deltaPart)
@@ -218,8 +228,12 @@ internal class StepOutputAccumulator {
         return if (relativeIndex >= 0) stepStart + relativeIndex else size
     }
 
-    private fun List<UIMessagePart>.insertAt(index: Int, part: UIMessagePart): List<UIMessagePart> =
-        toMutableList().apply { add(index, part) }
+    private fun List<UIMessagePart>.insertAt(index: Int, part: UIMessagePart): List<UIMessagePart> {
+        // Legacy unslotted media may be inserted before tools; transport slots still address
+        // their original content blocks after the visible list shifts.
+        contentIndices.replaceAll { _, position -> if (position >= index) position + 1 else position }
+        return toMutableList().apply { add(index, part) }
+    }
 
     private fun UIMessagePart.hasProviderPartBoundary(): Boolean {
         val googleMetadata = metadataAs<GoogleThoughtMetadata>()

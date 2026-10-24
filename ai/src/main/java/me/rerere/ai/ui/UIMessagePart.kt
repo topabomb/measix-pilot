@@ -4,6 +4,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import me.rerere.ai.core.ToolOutputPolicy
 import me.rerere.ai.util.json
 import kotlin.time.Clock
@@ -59,6 +62,38 @@ sealed class UIMessagePart {
         val finishedAt: Instant? = Clock.System.now(),
         override val metadata: JsonObject? = null
     ) : UIMessagePart()
+
+    /** Provider-owned execution evidence, never a client tool invocation or approval target. */
+    @Serializable
+    @SerialName("server_tool")
+    data class ServerTool(
+        val source: ServerToolSource,
+        val block: JsonObject,
+        val complete: Boolean = false,
+        override val metadata: JsonObject? = null,
+    ) : UIMessagePart() {
+        /** Derived protocol display fields; raw replay state never needs parsing in the UI. */
+        val presentation: ServerToolPresentation
+            get() {
+                fun JsonObject.string(key: String) = (get(key) as? JsonPrimitive)?.contentOrNull
+                val type = block.string("type")
+                if (source.protocol != ServerToolProtocol.CLAUDE_MESSAGES ||
+                    (type != "web_search_tool_result" && !(type == "server_tool_use" && block.string("name") == "web_search"))) {
+                    return ServerToolPresentation.Unsupported(type ?: "unknown_server_tool")
+                }
+                val input = block["input"] as? JsonObject
+                val content = block["content"]
+                return ServerToolPresentation.WebSearch(
+                    query = input?.string("query"),
+                    links = (content as? JsonArray).orEmpty().mapNotNull { entry ->
+                        val result = entry as? JsonObject ?: return@mapNotNull null
+                        val url = result.string("url") ?: return@mapNotNull null
+                        ServerToolLink(result.string("title") ?: url, url)
+                    },
+                    errorCode = (content as? JsonObject)?.string("error_code"),
+                )
+            }
+    }
 
     /**
      * One logical model sampling plus the full Tool batch its response requested. A committed
@@ -142,3 +177,10 @@ sealed class UIMessagePart {
         }
     }
 }
+
+sealed interface ServerToolPresentation {
+    data class WebSearch(val query: String?, val links: List<ServerToolLink>, val errorCode: String?) : ServerToolPresentation
+    data class Unsupported(val type: String) : ServerToolPresentation
+}
+
+data class ServerToolLink(val title: String, val url: String)

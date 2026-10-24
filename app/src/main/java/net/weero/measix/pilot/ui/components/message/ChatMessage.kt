@@ -545,6 +545,20 @@ private fun MessagePartsBlock(
                 if (preview?.diagnostic != null) {
                     AttachmentPreviewDiagnostic(preview)
                 } else when (val part = block.part) {
+                    is UIMessagePart.ServerTool -> when (val display = part.presentation) {
+                        is me.rerere.ai.ui.ServerToolPresentation.WebSearch -> Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                            Text(stringResource(R.string.use_web_search), style = MaterialTheme.typography.labelMedium)
+                            display.query?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                            display.errorCode?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                            display.links.forEach { link ->
+                                TextButton(onClick = { context.openUrl(link.url) }) {
+                                    Text(link.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                        is me.rerere.ai.ui.ServerToolPresentation.Unsupported ->
+                            Text(display.type, style = MaterialTheme.typography.labelMedium)
+                    }
                     is UIMessagePart.Text -> {
                         val textContent = @Composable {
                             if (role == MessageRole.USER) {

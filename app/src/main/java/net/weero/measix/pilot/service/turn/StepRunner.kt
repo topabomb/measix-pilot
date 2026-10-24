@@ -57,6 +57,7 @@ private const val TAG = "StepRunner"
 internal sealed interface StepExecutionResult {
     data object Final : StepExecutionResult
     data object ContinueToTools : StepExecutionResult
+    data object ContinueSampling : StepExecutionResult
     data class Paused(val pending: List<PendingToolInteraction>) : StepExecutionResult
 }
 
@@ -118,6 +119,8 @@ internal class StepRunner(
             providerSessionId = state.providerSessionId,
             admission = admission,
         )
+        // Routing is a sampling fact, not a value to infer from transformed display/media output.
+        val continuation = state.messages.last().parts.filterIsInstance<UIMessagePart.Step>().last().modelResult?.continuation
         state.replaceMessages(state.finishStreamingLast(state.messages))
         state.replaceMessages(state.messages.withAssistant(state.messages.last().copy(
             finishedAt = Clock.System.now()
@@ -143,6 +146,18 @@ internal class StepRunner(
             ordinal.takeIf { !tool.hasReplayResult }
         }
         if (replayPendingOrdinals.isEmpty()) {
+            if (continuation != null) {
+                val advanced = checkpointMessages.withAssistant(TurnTransition.advanceCompletedSamplingStep(lastMessage))
+                state.commitModelResponse(
+                    publishResources = true,
+                    turnStatus = TurnExecutionStatus.RUNNING,
+                    checkpointMessages = advanced,
+                    toolOutputCompactionPatches = toolOutputCompactionPatches,
+                )
+                state.replaceMessages(advanced)
+                state.publishMessages(advanced)
+                return StepExecutionResult.ContinueSampling
+            }
             // 无 Tool 的 Final step：不发独立 ModelResponseCheckpoint。modelResult、Step Final、
             // Turn COMPLETED 与末批压缩 patch 一次落在唯一 FinalizeTurn。
             // 终态 Assistant 只在 durable rooting 后由 run() 交给 durable 槽，此处不投影。
@@ -169,7 +184,7 @@ internal class StepRunner(
                 },
             )
         }
-        ).let { it.withAssistant(TurnTransition.advanceCompletedToolStep(it.last())) }
+        ).let { it.withAssistant(TurnTransition.advanceCompletedSamplingStep(it.last())) }
         val hasPending = preparation.pending.isNotEmpty()
         state.commitModelResponse(
             publishResources = true,
@@ -317,9 +332,11 @@ internal class StepRunner(
                     }
                 }
                 var finishReason: String? = null
+                var continuation: me.rerere.ai.ui.ProviderContinuation? = null
                 var stepProviderMetadata: kotlinx.serialization.json.JsonObject? = null
                 fun observeProviderMetadata(chunk: MessageChunk) {
                     val choice = chunk.choices.firstOrNull() ?: return
+                    choice.continuation?.let { continuation = it }
                     val message = choice.delta ?: choice.message ?: return
                     stepProviderMetadata = me.rerere.ai.ui.mergeMessageMetadata(stepProviderMetadata, message.providerMetadata)
                 }
@@ -433,6 +450,7 @@ internal class StepRunner(
                             requestDurationMillis = completedUsage.providerRequestDurationMillis,
                             usageCompleteness = completedUsage.coreCompleteness,
                             providerMetadata = stepProviderMetadata,
+                            continuation = continuation.takeIf { requestOutcome == ProviderRequestOutcome.COMPLETED },
                         ),
                     ))
                     try {
@@ -493,6 +511,7 @@ internal fun MessageChunk.hasModelOutputPayload(): Boolean = choices.any { choic
             is UIMessagePart.Text -> part.text.isNotEmpty()
             is UIMessagePart.Reasoning -> part.reasoning.isNotEmpty()
             is UIMessagePart.Tool -> true
+            is UIMessagePart.ServerTool -> true
             is UIMessagePart.Image -> part.url.isNotBlank()
             is UIMessagePart.Audio -> part.url.isNotBlank()
             is UIMessagePart.Video -> part.url.isNotBlank()

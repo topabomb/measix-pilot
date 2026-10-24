@@ -368,6 +368,25 @@ Opus／Sonnet 5.5 的 XHIGH 均发送 xhigh，保留 Claude 3 及旧型号行为
 再附这一批 tool_result。`UIMessageChoice.contentBlockSlots` 只用于增量关联，签名按同槽追加；空正文的签名块和 redacted 块均保留。
 这些可选协议字段通过原 JSON 和备份链兼容，旧数据不补造证据。依据为官方 [Preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking)。
 
+### 服务端搜索与暂停续传
+
+Claude 的 `BuiltInTools.Search` 编码为 `web_search_20250305`，与客户端工具共同进入原 tools 数组；不启用动态过滤或
+额外代码执行。客户端传输支持不保证任意模型或兼容端点接受该功能，拒绝仍保留服务端诊断。
+
+`server_tool_use` 与 `web_search_tool_result` 保存为 `UIMessagePart.ServerTool`，保留原响应块顺序、原始内容和实际
+响应 endpoint，不创建本地 Tool、审批或执行记录。流式 input_json_delta 按块类型路由，服务端块只在成功 message_stop
+之后标记完整；搜索结果错误仍保留其 error_code。正文引用保存到 `ClaudeTextMetadata`，URL 注解是只读显示投影。
+服务端块提供类型化 `ServerToolPresentation`，界面不解析回放 JSON，也不从结果存在推断活动执行状态。
+
+`pause_turn` 由 Provider 在完整成功终态明确返回 `CONTINUE_ASSISTANT`，执行方式见 [Turn/Step 执行](turn-step-execution.md)。
+没有 message_stop 的 EOF、未知 stop reason、失败或取消不续发。完整 Step 可回放服务端块，非成功尾部剔除不完整状态；
+换 endpoint 时剥离不兼容服务端块及引用 wire 字段，普通正文保留。其他线协议不编码 Claude 服务端块。
+
+`StepOutputAccumulator` 按 responseId/index 合并块，文本元数据后到时不覆盖已有正文，服务端完整块替换原片段；
+引用跨响应合并去重。无槽位媒体前插同时平移已登记槽位的列表位置，不能使后续增量写到另一片段。
+协议依据：[Web search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool)、
+[Stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)。
+
 ### Prompt caching
 
 开启 `promptCaching` 时，Provider 同时支持顶层 automatic `cache_control` 和显式 block 断点：最后一个 System block、最后一个 Tool，以及倒数第二条可缓存 user message。TTL 由 `ClaudePromptCacheTtl` 选择。

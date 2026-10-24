@@ -61,12 +61,13 @@ internal object TurnTransition {
     }
 
     /** The last result and the next sampling boundary are rooted by the same checkpoint. */
-    internal fun advanceCompletedToolStep(message: UIMessage): UIMessage {
+    internal fun advanceCompletedSamplingStep(message: UIMessage): UIMessage {
         val index = message.parts.indexOfLast { it is UIMessagePart.Step }
         require(index >= 0) { "A Turn must have a Step before executing tools" }
         val step = message.parts[index] as UIMessagePart.Step
         val tools = message.parts.drop(index + 1).filterIsInstance<UIMessagePart.Tool>()
-        if (step.outcome != null || step.modelResult == null || tools.isEmpty() || tools.any { !it.hasReplayResult }) {
+        if (step.outcome != null || step.modelResult == null ||
+            (tools.isEmpty() && step.modelResult?.continuation == null) || tools.any { !it.hasReplayResult }) {
             return message
         }
         return message.copy(parts = message.parts.mapIndexed { partIndex, part ->

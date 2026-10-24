@@ -9,7 +9,7 @@ import me.rerere.ai.core.UsageCompleteness
  * The terminal classification of one logical model Step. A Step is closed exactly once; the
  * outcome is durable and never re-derived from message content.
  *
- * `Continue` means the Step produced a replayable Tool batch that the next Step consumes.
+ * `Continue` means the Step produced replayable tools or a Provider-requested continuation.
  * `Final` means the Step produced the Turn's final text with no pending Tool batch. The remaining
  * outcomes are non-success closes; `AWAITING_USER` is deliberately absent because waiting for a
  * user is a Turn pause, not a Step outcome.
@@ -71,4 +71,8 @@ data class StepModelResult(
     val requestDurationMillis: Long?,
     val usageCompleteness: UsageCompleteness,
     val providerMetadata: JsonObject?,
+    val continuation: ProviderContinuation? = null,
 )
+
+@Serializable
+enum class ProviderContinuation { CONTINUE_ASSISTANT }

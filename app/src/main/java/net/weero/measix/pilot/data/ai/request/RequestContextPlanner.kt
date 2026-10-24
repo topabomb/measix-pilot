@@ -323,6 +323,7 @@ internal class RequestContextPlanner {
                     is UIMessagePart.Text -> addText(part.text)
                     is UIMessagePart.Reasoning -> addText(part.reasoning)
                     is UIMessagePart.Step -> Unit
+                    is UIMessagePart.ServerTool -> addText(part.block.toString())
                     is UIMessagePart.Tool -> {
                         addText(part.providerCallId)
                         addText(part.toolName)

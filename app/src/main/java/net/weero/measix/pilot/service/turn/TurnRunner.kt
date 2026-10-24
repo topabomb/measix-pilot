@@ -158,6 +158,10 @@ class TurnRunner(
                         break
                     }
                     is StepExecutionResult.ContinueToTools -> Unit
+                    is StepExecutionResult.ContinueSampling -> {
+                        state.sendPhase(TurnRunPhase.BETWEEN_STEPS)
+                        continue
+                    }
                 }
             }
             // 一批 ToolCall 先经过统一门控；仍有 Pending 则暂停，否则全部决策完成后串行执行。

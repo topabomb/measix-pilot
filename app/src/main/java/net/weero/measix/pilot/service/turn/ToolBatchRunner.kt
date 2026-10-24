@@ -83,7 +83,7 @@ internal class ToolBatchRunner(
 
         if (preparation.immediateResults.isNotEmpty()) {
             state.replaceMessages(state.messages.withAssistant(
-                TurnTransition.advanceCompletedToolStep(state.messages.last()),
+                TurnTransition.advanceCompletedSamplingStep(state.messages.last()),
             ))
             state.commitToolResult(toolResults = preparation.immediateResults)
             state.publishMessages(state.messages)
@@ -233,7 +233,7 @@ internal class ToolBatchRunner(
                 requestOrigins = state.outputOrigins,
                 registerUnpublishedResource = state.unpublishedResources::register,
             ).let { state.messages.withAssistant(
-                TurnTransition.advanceCompletedToolStep(it.single()),
+                TurnTransition.advanceCompletedSamplingStep(it.single()),
             ) }
             state.commitToolResult(
                 toolExecution = executionEvent?.copy(

@@ -60,6 +60,11 @@ import me.rerere.ai.ui.ClaudeReasoningMetadata
 import me.rerere.ai.ui.ClaudeResponseMetadata
 import me.rerere.ai.ui.ClaudeReplayState
 import me.rerere.ai.ui.ClaudeContentBlockMetadata
+import me.rerere.ai.ui.ClaudeTextMetadata
+import me.rerere.ai.ui.ServerToolSource
+import me.rerere.ai.ui.ServerToolProtocol
+import me.rerere.ai.ui.ProviderContinuation
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.ClaudeResponseBlock
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
@@ -244,9 +249,9 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         val usage = parseTokenUsage(bodyJson)
 
         val responseId = Uuid.random().toString()
-        val parsed = parseMessage(content)
+        val parsed = parseMessage(content, ServerToolSource(ServerToolProtocol.CLAUDE_MESSAGES, responseEndpoint), completionError == null)
         val responsePositions = content.indices.filter { content[it].jsonObject["type"]?.jsonPrimitive?.content in
-            setOf("text", "thinking", "redacted_thinking", "tool_use") }
+            setOf("text", "thinking", "redacted_thinking", "tool_use", "server_tool_use", "web_search_tool_result") }
         require(parsed.parts.size == responsePositions.size) { "Malformed Claude response block" }
         var reasoningIndex = 0
         val reasoningPositions = content.indices.filter { content[it].jsonObject["type"]?.jsonPrimitive?.content in setOf("thinking", "redacted_thinking") }
@@ -270,6 +275,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     message = completed,
                     finishReason = stopReason,
                     contentBlockSlots = responsePositions.map { ProviderContentBlockSlot(responseId, it) },
+                    continuation = if (completionError == null && stopReason == "pause_turn") ProviderContinuation.CONTINUE_ASSISTANT else null,
                 )
             ),
             usage = usage
@@ -384,8 +390,11 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             put(
                 "messages",
                 buildMessages(
-                    if (ModelRegistry.CLAUDE_5_5.match(params.model.modelId)) messages
-                    else stripClaudeThinkingFromOtherModels(messages, params.model.id),
+                    stripClaudeServerState(
+                        if (ModelRegistry.CLAUDE_5_5.match(params.model.modelId)) messages
+                        else stripClaudeThinkingFromOtherModels(messages, params.model.id),
+                        claudeEndpointIdentity(providerSetting.baseUrl, params.credentials),
+                    ),
                     providerSetting.promptCaching,
                     providerSetting.promptCacheTtl,
                     params.mediaCapabilities,
@@ -426,14 +435,20 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             thinkingFields.forEach { (key, value) -> put(key, value) }
 
             // 处理工具
-            if (params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()) {
+            val clientTools = if (params.model.abilities.contains(ModelAbility.TOOL)) params.tools else emptyList()
+            val search = me.rerere.ai.provider.BuiltInTools.Search in params.model.tools
+            if (clientTools.isNotEmpty() || search) {
                 putJsonArray("tools") {
-                    params.tools.forEachIndexed { index, tool ->
+                    if (search) add(buildJsonObject {
+                        put("type", "web_search_20250305")
+                        put("name", "web_search")
+                    })
+                    clientTools.forEachIndexed { index, tool ->
                         add(buildJsonObject {
                             put("name", tool.name)
                             put("description", tool.description)
                             tool.parameters?.let { put("input_schema", it) }
-                            if (providerSetting.promptCaching && index == params.tools.lastIndex) {
+                            if (providerSetting.promptCaching && index == clientTools.lastIndex) {
                                 put("cache_control", cacheControlEphemeral(providerSetting.promptCacheTtl))
                             }
                         })
@@ -605,7 +620,10 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         is UIMessagePart.Text -> buildJsonObject {
             put("type", "text")
             put("text", text)
+            metadataAs<ClaudeTextMetadata>()?.claudeCitations?.let { put("citations", it) }
         }
+
+        is UIMessagePart.ServerTool -> block.takeIf { complete && source.protocol == ServerToolProtocol.CLAUDE_MESSAGES }
 
         is UIMessagePart.Image -> {
             check(imageSupport == RequestImageSupport.STRUCTURED) {
@@ -664,32 +682,40 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         state.observe(type, reason)
         state.record(data)
         val successful = type == "message_stop" && state.completionError() == null
-        val proofs = if (successful) state.proofUpdates() else emptyList()
-        val parsed = if (proofs.isNotEmpty()) UIMessage(role = MessageRole.ASSISTANT, parts = proofs.map { it.second }) else parseMessage(buildJsonArray {
-            data["content_block"]?.jsonObject?.let { add(it) }
-            data["delta"]?.jsonObject?.let { add(it) }
-        })
-        val indexed = parsed.copy(parts = parsed.parts.mapIndexed { index, part ->
-            val position = if (proofs.isNotEmpty()) proofs[index].first else requireNotNull(data["index"]?.jsonPrimitive?.intOrNull)
-            part.withClaudeBlock(state.responseId, position)
-        })
-        val delta = if (successful) indexed.copy(providerMetadata = state.responseMetadata()) else indexed
+        val index = data["index"]?.jsonPrimitive?.intOrNull
+        val updates: List<Pair<Int, UIMessagePart>> = when {
+            successful -> state.proofUpdates() + state.completedContentUpdates()
+            index != null && state.isServerBlock(index) -> {
+                // Partial JSON belongs to the server invocation, never to the local tool index.
+                if (type == "content_block_delta") emptyList()
+                else listOf(index to state.serverPart(index, complete = false))
+            }
+            else -> parseMessage(buildJsonArray {
+                data["content_block"]?.jsonObject?.let { add(it) }
+                data["delta"]?.jsonObject?.let { add(it) }
+            }, state.sourceOrNull(), false).parts.map { requireNotNull(index) to it }
+        }
+        val parts = updates.map { (position, part) -> part.withClaudeBlock(state.responseId, position) }
+        val delta = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = parts,
+            annotations = claudeCitations(parts),
+            providerMetadata = if (successful) state.responseMetadata() else null,
+        )
         return MessageChunk(
             id = "", model = "", usage = parseTokenUsage(data),
             choices = listOf(UIMessageChoice(
                 index = 0, delta = delta, message = null, finishReason = reason,
-                toolCallSlots = delta.getTools().map {
-                    ProviderToolCallSlot.Index(requireNotNull(data["index"]?.jsonPrimitive?.intOrNull) {
-                        "Claude Tool delta is missing content index"
-                    })
-                },
-                contentBlockSlots = if (proofs.isNotEmpty()) proofs.map { ProviderContentBlockSlot(state.responseId, it.first) }
-                    else delta.parts.map { ProviderContentBlockSlot(state.responseId, requireNotNull(data["index"]?.jsonPrimitive?.intOrNull)) },
+                toolCallSlots = updates.filter { it.second is UIMessagePart.Tool }.map { ProviderToolCallSlot.Index(it.first) },
+                contentBlockSlots = updates.map { ProviderContentBlockSlot(state.responseId, it.first) },
+                continuation = if (successful && state.requiresContinuation()) ProviderContinuation.CONTINUE_ASSISTANT else null,
             )),
         )
     }
 
-    private fun parseMessage(content: JsonArray): UIMessage {
+    private fun parseMessage(content: JsonArray): UIMessage = parseMessage(content, null, false)
+
+    private fun parseMessage(content: JsonArray, source: ServerToolSource?, complete: Boolean): UIMessage {
         val parts = mutableListOf<UIMessagePart>()
 
         content.forEach { contentBlock ->
@@ -700,7 +726,9 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 "text", "text_delta" -> {
                     val text = block["text"]?.jsonPrimitive?.contentOrNull ?: ""
                     if (text.isNotEmpty() || type == "text") {
-                        parts.add(UIMessagePart.Text(text))
+                        parts.add(UIMessagePart.Text(text, (block["citations"] as? JsonArray)?.let {
+                            ClaudeTextMetadata(it, source).toMetadata()
+                        }))
                     }
                 }
 
@@ -732,6 +760,12 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                         )
                     }
                 }
+
+                "server_tool_use", "web_search_tool_result" -> parts.add(UIMessagePart.ServerTool(
+                    source = requireNotNull(source) { "Claude server block has no response source" },
+                    block = block,
+                    complete = complete,
+                ))
 
                 "tool_use" -> {
                     val id = block["id"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -767,7 +801,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
         return UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = parts
+            parts = parts,
+            annotations = claudeCitations(parts),
         )
     }
 
@@ -840,12 +875,37 @@ internal val CLAUDE_MESSAGES_OWNERSHIP = RequestBodyOwnership(
     ),
 )
 
+private fun claudeCitations(parts: List<UIMessagePart>): List<UIMessageAnnotation> = parts
+    .flatMap { it.metadataAs<ClaudeTextMetadata>()?.claudeCitations.orEmpty() }
+    .mapNotNull { element ->
+        val citation = element as? JsonObject ?: return@mapNotNull null
+        val url = citation["url"]?.jsonPrimitiveOrNull?.contentOrNull ?: return@mapNotNull null
+        UIMessageAnnotation.UrlCitation(citation["title"]?.jsonPrimitiveOrNull?.contentOrNull ?: url, url)
+    }.distinct()
+
+private fun stripClaudeServerState(messages: List<ModelRequestMessage>, endpoint: String): List<ModelRequestMessage> =
+    messages.map { message -> message.copy(parts = message.parts.mapNotNull { part ->
+        when (part) {
+            is UIMessagePart.ServerTool -> part.takeIf {
+                it.complete && it.source == ServerToolSource(ServerToolProtocol.CLAUDE_MESSAGES, endpoint)
+            }
+            is UIMessagePart.Text -> {
+                val source = part.metadataAs<ClaudeTextMetadata>()?.claudeCitationSource
+                if (source != null && source != ServerToolSource(ServerToolProtocol.CLAUDE_MESSAGES, endpoint)) {
+                    part.copy(metadata = JsonObject(part.metadata.orEmpty() - setOf("claudeCitations", "claudeCitationSource")))
+                } else part
+            }
+            else -> part
+        }
+    }) }
+
 private fun UIMessagePart.withClaudeBlock(responseId: String, index: Int): UIMessagePart {
     val metadata = JsonObject(metadata.orEmpty() + ClaudeContentBlockMetadata(ClaudeResponseBlock(responseId, index)).toMetadata())
     return when (this) {
         is UIMessagePart.Text -> copy(metadata = metadata)
         is UIMessagePart.Reasoning -> copy(metadata = metadata)
         is UIMessagePart.Tool -> copy(metadata = metadata)
+        is UIMessagePart.ServerTool -> copy(metadata = metadata)
         else -> error("Unsupported Claude response block")
     }
 }
@@ -860,6 +920,7 @@ internal class ClaudeStreamState(
     val responseId = Uuid.random().toString()
     private val blocks = sortedMapOf<Int, JsonObject>()
     private val inputs = mutableMapOf<Int, StringBuilder>()
+    private val closedBlocks = mutableSetOf<Int>()
     @Volatile private var stopped = false
     @Volatile private var stopReason: String? = null
 
@@ -880,6 +941,7 @@ internal class ClaudeStreamState(
             "content_block_delta" -> {
                 val delta = event["delta"] as? JsonObject ?: return
                 val before = blocks[index] ?: return
+                require(index !in closedBlocks) { "Claude delta after content block stop" }
                 val field = when (delta["type"]?.jsonPrimitive?.contentOrNull) {
                     "text_delta" -> "text"
                     "thinking_delta" -> "thinking"
@@ -888,14 +950,23 @@ internal class ClaudeStreamState(
                         inputs.getOrPut(index) { StringBuilder() }.append(delta["partial_json"]?.jsonPrimitive?.content.orEmpty())
                         return
                     }
+                    "citations_delta" -> {
+                        val citation = requireNotNull(delta["citation"] as? JsonObject) { "Claude citation delta has no citation" }
+                        val previous = (before["citations"] as? JsonArray).orEmpty()
+                        blocks[index] = JsonObject(before + ("citations" to JsonArray(previous + citation)))
+                        return
+                    }
                     else -> return
                 }
                 blocks[index] = JsonObject(before + (field to JsonPrimitive(
                     before[field]?.jsonPrimitive?.content.orEmpty() + delta[field]?.jsonPrimitive?.content.orEmpty())))
             }
-            "content_block_stop" -> inputs.remove(index)?.let { input ->
-                val block = requireNotNull(blocks[index])
-                blocks[index] = JsonObject(block + ("input" to json.parseToJsonElement(input.toString()).jsonObject))
+            "content_block_stop" -> {
+                closedBlocks.add(index)
+                inputs.remove(index)?.let { input ->
+                    val block = requireNotNull(blocks[index])
+                    blocks[index] = JsonObject(block + ("input" to json.parseToJsonElement(input.toString()).jsonObject))
+                }
             }
         }
     }
@@ -919,6 +990,31 @@ internal class ClaudeStreamState(
         ClaudeResponseMetadata(ClaudeReplayState(retiredDigests = retiredDigests)).toMetadata()
     }
 
+    fun sourceOrNull(): ServerToolSource? = responseEndpoint?.let { ServerToolSource(ServerToolProtocol.CLAUDE_MESSAGES, it) }
+
+    fun isServerBlock(index: Int): Boolean = blocks[index]?.get("type")?.jsonPrimitive?.contentOrNull in
+        setOf("server_tool_use", "web_search_tool_result")
+
+    fun serverPart(index: Int, complete: Boolean) = UIMessagePart.ServerTool(
+        source = requireNotNull(sourceOrNull()) { "Claude server block has no response source" },
+        block = requireNotNull(blocks[index]),
+        complete = complete,
+    )
+
+    fun requiresContinuation(): Boolean = stopReason == "pause_turn"
+
+    fun completedContentUpdates(): List<Pair<Int, UIMessagePart>> = blocks.mapNotNull { (index, block) ->
+        when {
+            isServerBlock(index) -> {
+                require(index in closedBlocks && index !in inputs) { "Claude server block did not complete" }
+                index to serverPart(index, complete = true)
+            }
+            block["type"]?.jsonPrimitive?.contentOrNull == "text" && block["citations"] is JsonArray ->
+                index to UIMessagePart.Text("", ClaudeTextMetadata(block["citations"] as JsonArray, sourceOrNull()).toMetadata())
+            else -> null
+        }
+    }
+
     fun completionError(): HttpException? = if (!stopped) {
         HttpException(
             "Claude stream closed before message_stop",
@@ -928,7 +1024,7 @@ internal class ClaudeStreamState(
 }
 
 internal fun claudeStopReasonError(reason: String?): HttpException? = when (reason) {
-    "end_turn", "stop_sequence", "tool_use" -> null
+    "end_turn", "stop_sequence", "tool_use", "pause_turn" -> null
     else -> HttpException(
         message = "Claude generation ended with stop_reason=${reason ?: "missing"}",
         terminalStatus = if (reason == null || reason == "max_tokens" || reason == "pause_turn") {

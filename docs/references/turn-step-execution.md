@@ -88,13 +88,18 @@ Tool batch，Provider 透明重试不创建新 Step。Step 保存在消息 parts
 `StartTurn` 在构造命令时固定首个 Step 身份和时间，单事务建立 Assistant 槽、`Step(ordinal=0)`、
 RUNNING turn fact。应用输入在请求组装校验后以独立 `AdmitRequestContext` 事务接纳，
 无新增内容也保存请求边界；接纳详情见 [请求上下文](request-context.md)。`StepOutputAccumulator` 只更新已预开的未采样 Step。
-`StepModelResult` 保存采样的 finish reason、usage、请求数、时间与 Provider metadata；计量算法见
+`StepModelResult` 保存采样的 finish reason、usage、请求数、时间、Provider metadata 与可空的类型化 continuation；计量算法见
 [Token 用量](token-usage-accounting.md)。
 
 Step ordinal 从 0 连续递增；最多一个 open Step，且只能在尾部。全部工具有 Result 后，最后一个结果
 checkpoint 同时关闭当前 Step 为 `Continue` 并预开下一 Step。无工具最终回答由 `FinalizeTurn` 一次关闭
 Step 为 `Final` 和 Turn 为 COMPLETED。失败、取消、incomplete 或恢复关闭尾部 Step；`AWAITING_USER`
 是暂停。Step 上限按持久化 ordinal 判断，交互继续不会重置上限。
+
+Provider 明确要求续传且没有待执行客户端工具时，`StepRunner` 经原 `ModelResponseCheckpoint` 保存完整响应并关闭为
+`Continue`、预开下一 Step，提交成功才返回 `ContinueSampling`；`TurnRunner` 跳过客户端工具执行，仍经原请求接纳链
+继续同一 Turn。存在客户端工具时先保留原参数校验、审批和执行流程。失败或取消的请求不保存有效续传信号；
+checkpoint 失败不得发起后续请求。continuation 缺字段为 null，旧数据语义不变，进程恢复不自动恢复网络执行。
 
 | 事实 | 身份与状态 |
 | --- | --- |

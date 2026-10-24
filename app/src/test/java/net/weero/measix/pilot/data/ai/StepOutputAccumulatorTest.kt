@@ -11,6 +11,7 @@ import me.rerere.ai.ui.GoogleThoughtMetadata
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.OpenAIReasoningMetadata
 import me.rerere.ai.ui.OpenRouterReasoningMetadata
+import me.rerere.ai.ui.ProviderContentBlockSlot
 import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
@@ -51,6 +52,63 @@ class StepOutputAccumulatorTest {
     )
 
     private fun content(parts: List<UIMessagePart>) = parts.filterNot { it is UIMessagePart.Step }
+
+    @Test
+    fun `late slotted metadata retains text and prior response identity`() {
+        val accumulator = StepOutputAccumulator()
+        var message = newAssistant()
+        fun append(part: UIMessagePart.Text) {
+            val chunk = assistantChunk(part)
+            message = accumulator.accumulate(message, chunk.copy(choices = chunk.choices.map {
+                it.copy(contentBlockSlots = listOf(ProviderContentBlockSlot("response", 0)))
+            }), null)
+        }
+        val identity = me.rerere.ai.ui.ClaudeContentBlockMetadata(
+            me.rerere.ai.ui.ClaudeResponseBlock("response", 0),
+        ).toMetadata()
+        val citations = buildJsonObject {
+            put("citations", buildJsonArray { add(buildJsonObject { put("url", "https://example.com/source") }) })
+        }
+        append(UIMessagePart.Text("answer", identity))
+        append(UIMessagePart.Text("", citations))
+        append(UIMessagePart.Text("", citations))
+        append(UIMessagePart.Text(" complete"))
+        val text = message.parts.filterIsInstance<UIMessagePart.Text>().single()
+        assertEquals("answer complete", text.text)
+        assertEquals(identity["claudeBlock"], text.metadata?.get("claudeBlock"))
+        assertEquals(citations["citations"], text.metadata?.get("citations"))
+    }
+
+    @Test
+    fun `media inserted before pending tool does not retarget later content slots`() {
+        val accumulator = StepOutputAccumulator()
+        var message = newAssistant()
+        fun append(part: UIMessagePart, index: Int? = null) {
+            val chunk = assistantChunk(part)
+            message = accumulator.accumulate(message, chunk.copy(choices = chunk.choices.map {
+                it.copy(contentBlockSlots = index?.let { slot ->
+                    listOf(ProviderContentBlockSlot("response", slot))
+                }.orEmpty())
+            }), null)
+        }
+        append(UIMessagePart.Text("before"), 0)
+        append(UIMessagePart.Tool(Uuid.NIL, Uuid.NIL, "call", "lookup", "{}"))
+        append(UIMessagePart.Text("after"), 2)
+        append(UIMessagePart.Reasoning("thought"), 3)
+        append(UIMessagePart.Image("https://example.com/image.png"))
+        append(UIMessagePart.Document("attachment:document", "source.txt"))
+        append(UIMessagePart.Text(" continued"), 2)
+        append(UIMessagePart.Reasoning(" continued"), 3)
+        append(UIMessagePart.Text(" unchanged"), 0)
+        val parts = content(message.parts)
+        assertEquals("before unchanged", (parts[0] as UIMessagePart.Text).text)
+        assertTrue(parts[1] is UIMessagePart.Image)
+        assertTrue(parts[2] is UIMessagePart.Document)
+        assertEquals("call", (parts[3] as UIMessagePart.Tool).providerCallId)
+        assertEquals("after continued", (parts[4] as UIMessagePart.Text).text)
+        assertEquals("thought continued", (parts[5] as UIMessagePart.Reasoning).reasoning)
+        assertEquals(6, parts.size)
+    }
 
     @Test
     fun `interleaved slots keep repeated and empty provider IDs distinct`() {

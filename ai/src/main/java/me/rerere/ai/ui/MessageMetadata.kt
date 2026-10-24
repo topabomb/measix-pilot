@@ -31,6 +31,19 @@ sealed interface PartMetadata : Metadata
 
 sealed interface MessageMetadata : Metadata
 
+@Serializable
+enum class ServerToolProtocol { CLAUDE_MESSAGES }
+
+@Serializable
+data class ServerToolSource(val protocol: ServerToolProtocol, val endpoint: String)
+
+/** Citations retain their wire fields; the URL list in UIMessage is only a display projection. */
+@Serializable
+data class ClaudeTextMetadata(
+    val claudeCitations: JsonArray? = null,
+    val claudeCitationSource: ServerToolSource? = null,
+) : PartMetadata
+
 /** External images retain supported producer encodings; HEIC/AVIF still use native image conversion. */
 @Serializable
 data class ImageEncodingMetadata(
@@ -242,7 +255,7 @@ fun mergeReasoningPartMetadata(
 }
 
 /** Merge sparse Part metadata without allowing an empty streaming delta to erase prior state. */
-internal fun mergePartMetadata(
+fun mergePartMetadata(
     existing: JsonObject?,
     incoming: JsonObject?,
 ): JsonObject? = when {
@@ -255,6 +268,8 @@ private val OPAQUE_REPLAY_METADATA_KEYS = setOf(
     "signature",
     "claudeReplay",
     "claudeBlock",
+    "claudeCitations",
+    "claudeCitationSource",
     "redactedData",
     "reasoning_id",
     "encrypted_content",

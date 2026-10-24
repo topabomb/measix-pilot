@@ -12,7 +12,7 @@ data class ChatTransportCapabilities(val audioInput: Boolean, val videoInput: Bo
 fun chatTransportCapabilities(provider: ProviderSetting): ChatTransportCapabilities = when (provider) {
     is ProviderSetting.Google -> ChatTransportCapabilities.GOOGLE
     is ProviderSetting.OpenAI -> if (provider.useResponseApi) ChatTransportCapabilities.RESPONSES else ChatTransportCapabilities.BASIC
-    is ProviderSetting.Claude -> ChatTransportCapabilities.BASIC
+    is ProviderSetting.Claude -> ChatTransportCapabilities(false, false, true)
 }
 
 fun supportsBuiltInSearch(provider: ProviderSetting): Boolean = chatTransportCapabilities(provider).builtInSearch

@@ -8,6 +8,25 @@ import kotlin.time.Instant
 import kotlin.uuid.Uuid
 
 class ClaudeContentAccumulatorTest {
+    @Test fun `citations from multiple responses survive later deltas and duplicates`() {
+        val accumulator = StepOutputAccumulator()
+        var message = UIMessage(role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Step(Uuid.random(), 0, Instant.fromEpochMilliseconds(1))))
+        val first = UIMessageAnnotation.UrlCitation("first", "https://example.com/first")
+        val second = UIMessageAnnotation.UrlCitation("second", "https://example.com/second")
+        fun append(response: String, citations: List<UIMessageAnnotation>) {
+            message = accumulator.accumulate(message, MessageChunk("", "", listOf(UIMessageChoice(
+                0, UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("")), annotations = citations), null, null,
+                contentBlockSlots = listOf(ProviderContentBlockSlot(response, 0)),
+            ))), null)
+        }
+        append("first", listOf(first))
+        append("second", listOf(second))
+        append("second", listOf(second))
+        append("second", emptyList())
+        assertEquals(listOf(first, second), message.annotations)
+    }
+
     @Test fun `block deltas preserve interleaved order signatures and new response index identity`() {
         val accumulator = StepOutputAccumulator()
         var message = UIMessage(role = MessageRole.ASSISTANT,

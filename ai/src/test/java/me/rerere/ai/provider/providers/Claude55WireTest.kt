@@ -22,7 +22,7 @@ import org.junit.After
 
 class Claude55WireTest {
     @Test fun `incomplete responses never publish new replay evidence or exclusions`() = runBlocking {
-        for (reason in listOf("max_tokens", "pause_turn", null)) {
+        for (reason in listOf("max_tokens", "unknown_reason", null)) {
             val reasonJson = reason?.let { "\"$it\"" } ?: "null"
             val body = """{"model":"claude-opus-5-5","content":[{"type":"thinking","thinking":"partial","signature":"sig"},{"type":"text","text":"partial"}],"stop_reason":$reasonJson}"""
             val events = listOf(

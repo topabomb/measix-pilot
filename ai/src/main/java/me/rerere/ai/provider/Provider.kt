@@ -119,6 +119,7 @@ data class TextGenerationParams(
      * Derived from the conversation UUID by the turn owner; never enters Settings, Room, backup
      * or is generated from titles/user text. Only OpenRouter Chat Completions and Responses
      * builders write this as a top-level `session_id` (maximum 256 characters).
+     * Official OpenAI Responses derives an opaque `prompt_cache_key` from it.
      * Requests targeting opencode.ai write it as `x-opencode-session`; other hosts ignore it.
      */
     val providerSessionId: String? = null,

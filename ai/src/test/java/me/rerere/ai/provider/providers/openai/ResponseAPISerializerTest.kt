@@ -56,6 +56,39 @@ import org.junit.Test
 class ResponseAPISerializerTest {
 
     @Test
+    fun `official cache key is stable per conversation opaque and absent from auxiliary requests`() {
+        val provider = ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1", useResponseApi = true)
+        fun body(session: String?, stream: Boolean = false) = invokeBuildRequestBody(provider,
+            TextGenerationParams(model = Model(modelId = "gpt-test"), providerSessionId = session,
+                openCodeSessionId = "auxiliary-routing-only"), stream)
+        val key = body("conversation-one")["prompt_cache_key"]!!.jsonPrimitive.content
+        assertEquals(key, body("conversation-one", stream = true)["prompt_cache_key"]!!.jsonPrimitive.content)
+        assertTrue(key.matches(Regex("[a-f0-9]{64}")))
+        assertTrue(key != body("conversation-two")["prompt_cache_key"]!!.jsonPrimitive.content)
+        for (session in listOf(null, "", "   ")) assertFalse(body(session).containsKey("prompt_cache_key"))
+    }
+
+    @Test
+    fun `unverified response endpoints do not receive automatic cache keys`() {
+        for (host in listOf("proxy.example.com", "openrouter.ai", "ark.cn-beijing.volces.com",
+            "api.deepseek.com", "api.xiaomimimo.com", "api.openai.com.example.com")) {
+            val body = invokeBuildRequestBody(ProviderSetting.OpenAI(baseUrl = "https://$host/v1", useResponseApi = true),
+                TextGenerationParams(model = Model(modelId = "gpt-test"), providerSessionId = "conversation-one"))
+            assertFalse(host, body.containsKey("prompt_cache_key"))
+        }
+    }
+
+    @Test
+    fun `custom body cannot replace the conversation cache identity`() {
+        assertThrows(CustomBodyReservedKeyException::class.java) {
+            invokeBuildRequestBody(ProviderSetting.OpenAI(useResponseApi = true), TextGenerationParams(
+                model = Model(modelId = "gpt-test"), providerSessionId = "conversation-one",
+                customBody = listOf(CustomBody(key = "prompt_cache_key", value = JsonPrimitive("shared"))),
+            ))
+        }
+    }
+
+    @Test
     fun `search follows each request model without persisting previous request tools`() {
         for (enabled in listOf(true, false)) {
             val body = invokeBuildRequestBody(ProviderSetting.OpenAI(useResponseApi = true), TextGenerationParams(

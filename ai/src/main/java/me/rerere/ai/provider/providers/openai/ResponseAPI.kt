@@ -83,6 +83,7 @@ import okhttp3.Response
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
+import okio.ByteString.Companion.encodeUtf8
 import kotlin.time.Clock
 
 private const val TAG = "ResponseAPI"
@@ -282,6 +283,14 @@ class ResponseAPI(
             put("stream", stream)
             if (endpointProfile.supportsStore) {
                 put("store", false)
+            }
+
+            // Only the verified OpenAI endpoint owns this field. The key is stable per
+            // conversation without disclosing the application's raw session identifier.
+            if (endpointProfile == ResponseEndpointProfile.OPENAI) {
+                params.providerSessionId?.takeIf { it.isNotBlank() }?.let {
+                    put("prompt_cache_key", "pilot-responses:$it".encodeUtf8().sha256().hex())
+                }
             }
 
             // OpenRouter sticky routing / caching session_id (max 256 chars per contract).
@@ -1239,5 +1248,6 @@ internal val RESPONSES_OWNERSHIP = RequestBodyOwnership(
         "include",
         "previous_response_id",
         "session_id",
+        "prompt_cache_key",
     ),
 )

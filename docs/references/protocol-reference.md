@@ -78,7 +78,7 @@ Fixed 请求带 `PrivateRequest` 网络标记，宿主日志入口不记录其 H
 | 请求线 | builder-owned 保留字段 |
 |---|---|
 | OpenAI Chat Completions | `model`, `messages`, `tools`, `stream`, `stream_options`, `session_id` |
-| OpenAI Responses | `model`, `instructions`, `input`, `tools`, `stream`, `store`, `include`, `previous_response_id`, `session_id` |
+| OpenAI Responses | `model`, `instructions`, `input`, `tools`, `stream`, `store`, `include`, `previous_response_id`, `session_id`, `prompt_cache_key` |
 | Anthropic Messages | `model`, `messages`, `system`, `tools`, `stream` |
 | Gemini Generate Content | `contents`, `systemInstruction`, `tools`；另保留会改变响应形状的 `generationConfig.candidateCount`、`generationConfig.responseModalities`、`toolConfig.functionCallingConfig.streamFunctionCallArguments` |
 
@@ -267,6 +267,12 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 ## Responses API
 
 `ResponseAPI` 始终使用本地无状态完整历史回放，不使用 `previous_response_id`。默认端点显式发送 `store=false`；MiMo 不支持该字段，因此省略 `store`，但仍发送完整历史并保持同一无状态语义。这样 Provider 切换、持久化与离线恢复不依赖服务端会话。
+
+仅实际 host 为 `api.openai.com` 的已验证 OPENAI profile 自动发送 `prompt_cache_key`：以固定协议前缀和
+`providerSessionId` 计算 SHA-256 十六进制值，同一会话稳定、不同会话隔离，不发送原始身份。空身份与辅助请求省略；
+其他兼容端点不自动发送，也不根据模型名推断支持。该字段由请求构造负责，custom body 冲突明确拒绝。
+不新增缓存保留期或设置项。缓存键不保证命中；GPT-5.6 及之后官方将其用于可选的独立缓存归属，
+此前模型还用于路由优化，见 [Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)。
 
 ### Endpoint profile
 

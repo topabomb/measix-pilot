@@ -28,6 +28,29 @@ import kotlin.uuid.Uuid
  * 核心不变量：durable 的 [UIMessagePart.Step] 绝不进入 Provider，其余 parts 顺序与身份逐字保留。
  */
 class RequestAssemblerTest {
+    @Test fun `terminal Responses prefix metadata and tail boundary survive real request assembly`() {
+        fun metadata(id: String) = me.rerere.ai.ui.OpenAIResponseMetadata(
+            me.rerere.ai.ui.OpenAIResponseWireFormat.OPENAI,
+            listOf(listOf(buildJsonObject { put("type", JsonPrimitive("message")); put("id", JsonPrimitive(id)) })),
+            me.rerere.ai.ui.OpenAIResponseSourceProfile.OPENAI,
+        ).toMetadata()
+        fun result(id: String) = StepModelResult("completed", StepUsage(), 1, null, null, UsageCompleteness.NONE, metadata(id))
+        val message = UIMessage(role = MessageRole.ASSISTANT, terminalStatus = MessageTerminalStatus.FAILED,
+            providerMetadata = metadata("unsafe"), parts = listOf(
+                step(0).copy(outcome = StepOutcome.Continue, modelResult = result("safe")),
+                UIMessagePart.Text("complete"),
+                step(1).copy(outcome = StepOutcome.Failed, modelResult = result("unsafe")),
+                UIMessagePart.Text("partial"),
+            ))
+        val request = assembler.assemble(listOf(requireNotNull(message.replaySafeProjection()))).providerMessages.single()
+        assertEquals(metadata("safe"), request.providerMetadata)
+        assertEquals(1, request.providerReplayProjection!!.completePartCount)
+        assertTrue(request.providerReplayProjection!!.hasIncompleteTail)
+        assertTrue(request.toText().contains("partial"))
+        assertTrue(request.toText().contains("Previous assistant response did not complete"))
+        assertEquals(metadata("unsafe"), message.providerMetadata)
+    }
+
     @Test fun `terminal replay retains only exclusions from completed committed steps`() {
         fun metadata(digest: String) = ClaudeResponseMetadata(ClaudeReplayState(retiredDigests = setOf(digest))).toMetadata()
         fun result(digest: String) = StepModelResult("end_turn", StepUsage(), 1, null, null,

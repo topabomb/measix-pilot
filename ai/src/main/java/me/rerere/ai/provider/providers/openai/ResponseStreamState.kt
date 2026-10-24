@@ -16,6 +16,7 @@ internal class ResponseStreamState(
     val sentFunctions: Set<String> = emptySet(),
     var responseEndpoint: String? = null,
 ) {
+    val display = ResponseDisplayState()
     internal class Output(val slot: ProviderToolCallSlot.Index, var item: JsonObject) {
         var itemId: String? = null
         var outputIndex: Int? = null
@@ -102,6 +103,14 @@ internal class ResponseStreamState(
     fun outputItems(terminalItems: List<JsonObject>? = null): List<JsonObject> {
         val tools = outputs.filter { it.started }
         if (terminalItems != null) {
+            outputs.filter { it.item.string("type") in RESPONSE_SERVER_TYPES }.forEach { recorded ->
+                val terminal = recorded.outputIndex?.let { terminalItems.getOrNull(it) }
+                    ?: terminalItems.singleOrNull { it.string("id") == recorded.itemId }
+                check(terminal != null && terminal.string("type") == recorded.item.string("type") &&
+                    (recorded.itemId == null || terminal.string("id") == recorded.itemId)) {
+                    "responses_server_output_conflict: terminal lost or replaced a server item"
+                }
+            }
             outputs.filter { it.item.string("type") == "function_call_output" }.forEach { recorded ->
                 val terminal = if (recorded.itemId != null) terminalItems.singleOrNull { it.string("id") == recorded.itemId }
                     else recorded.outputIndex?.let { terminalItems.getOrNull(it) }

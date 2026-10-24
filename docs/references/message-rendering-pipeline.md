@@ -28,6 +28,10 @@ Assistant 消息的 `MessageModelInfo` 在 START 提交时从捕获模型保存�
 `SubAssistantCallBlock`，正文和媒体使用 `ContentBlock`。普通 `UIMessagePart.Step` 不显示也不切断折叠时间线；
 有已接纳上下文变化的 Step 才结束前组并插入 `ContextUpdateBlock`，分组不改变消息顺序。
 
+`ServerTool` 使用普通内容块承载只读服务端事件，按 ai 的 `ServerToolPresentation` 展示搜索查询、来源链接与错误；
+不进入本地 Tool 卡片的审批、执行或详情授权链。流式正文、推理、图片和服务端片段经 Provider 显示槽关联，
+图片完成帧替换同槽占位，正文跨工具后保留独立片段；具体协议身份与回放规则见[协议参考](protocol-reference.md)。
+
 折叠时，待审批/待回答工具以及 `generate_image` 保留在原时间线位置。工具即使尚未执行或没有结果也属于可见内容，
 空白文本仍为空。子助手卡片只显示目标、任务、阶段、有界回答预览和待回答问题；详情借用父页面授权，
 执行语义见 [子助手架构](sub-assistant-architecture.md)。

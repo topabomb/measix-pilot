@@ -28,6 +28,45 @@ import org.junit.Test
 /** Exercises the public SSE API, app-owned identity assignment and the next wire request together. */
 class ResponseToolIdentityIntegrationTest {
     @Test
+    fun `text tool search and image keep event order when a message item resumes after tools`() = runBlocking {
+        val tool = """{"type":"function_call","id":"fc","call_id":"call","name":"lookup","arguments":"{}"}"""
+        val search = """{"type":"web_search_call","id":"ws","status":"completed","action":{"type":"search","query":"query"}}"""
+        val image = """{"type":"image_generation_call","id":"img","result":"aGVsbG8="}"""
+        val message = """{"type":"message","id":"msg","content":[{"type":"output_text","text":"beforeafter clientafter search","annotations":[{"type":"url_citation","url":"https://example.com","title":"Source"}]}]}"""
+        val events = listOf(
+            """{"type":"response.output_text.delta","item_id":"msg","output_index":0,"content_index":0,"delta":"before"}""",
+            """{"type":"response.output_item.added","output_index":1,"item":$tool}""",
+            """{"type":"response.output_item.done","output_index":1,"item":$tool}""",
+            """{"type":"response.output_text.delta","item_id":"msg","output_index":0,"content_index":0,"delta":"after client"}""",
+            """{"type":"response.output_item.added","output_index":2,"item":{"type":"web_search_call","id":"ws","status":"in_progress"}}""",
+            """{"type":"response.web_search_call.searching","item_id":"ws","output_index":2}""",
+            """{"type":"response.output_text.delta","item_id":"msg","output_index":0,"content_index":0,"delta":"after search"}""",
+            """{"type":"response.output_item.added","output_index":3,"item":{"type":"image_generation_call","id":"img"}}""",
+            """{"type":"response.output_item.done","output_index":3,"item":$image}""",
+            """{"type":"response.completed","response":{"status":"completed","output":[$message,$tool,$search,$image]}}""",
+        )
+        withServer(events) { api, setting, bodies ->
+            val accumulator = StepOutputAccumulator()
+            var active = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(TurnTransition.openStep(0)))
+            val params = TextGenerationParams(Model(modelId = "test"))
+            api.streamText(setting, listOf(ModelRequestMessage.user("go")), params).collect {
+                active = accumulator.accumulate(active, it, null)
+            }
+            assertEquals(listOf("before", "after client", "after search"), active.parts.filterIsInstance<UIMessagePart.Text>().map { it.text })
+            assertEquals(listOf("Text", "Tool", "Text", "ServerTool", "Text", "Image"), active.parts.drop(1).map { it.javaClass.simpleName })
+            assertTrue(active.parts.filterIsInstance<UIMessagePart.ServerTool>().single().complete)
+            assertEquals("data:image/png;base64,aGVsbG8=", active.parts.filterIsInstance<UIMessagePart.Image>().single().url)
+            assertEquals(1, active.annotations.size)
+            val replay = ModelRequestMessage(active.role, active.parts.drop(1).map {
+                if (it is UIMessagePart.Tool) it.copy(resultStatus = ToolResultStatus.COMPLETED, output = listOf(UIMessagePart.Text("local"))) else it
+            }, providerMetadata = active.providerMetadata)
+            api.generateText(setting, listOf(replay), params)
+            val input = Json.parseToJsonElement(bodies.last()).jsonObject["input"]!!.jsonArray
+            assertEquals(listOf("message", "function_call", "web_search_call", "image_generation_call", "function_call_output"), input.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+        }
+    }
+
+    @Test
     fun `missing item ids survive accumulation and lossless next request for each success terminal`() = runBlocking {
         for (terminal in listOf("[DONE]", """{"type":"response.completed","response":{"status":"completed"}}""",
             """{"type":"response.completed","response":{"output":[{"type":"function_call","call_id":"same","name":"first","arguments":"{\"a\":1}"},{"type":"function_call","call_id":"same","name":"second","arguments":"{\"b\":2}"}]}}""")) {

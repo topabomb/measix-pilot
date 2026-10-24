@@ -77,6 +77,22 @@ sealed class UIMessagePart {
             get() {
                 fun JsonObject.string(key: String) = (get(key) as? JsonPrimitive)?.contentOrNull
                 val type = block.string("type")
+                if (source.protocol == ServerToolProtocol.OPENAI_RESPONSES && type == "web_search_call") {
+                    val action = block["action"] as? JsonObject
+                    val queries = (action?.get("queries") as? JsonArray).orEmpty()
+                        .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                    val sources = (action?.get("sources") as? JsonArray).orEmpty().mapNotNull {
+                        val entry = it as? JsonObject ?: return@mapNotNull null
+                        val url = entry.string("url") ?: return@mapNotNull null
+                        ServerToolLink(entry.string("title") ?: url, url)
+                    }
+                    val page = action?.string("url")?.let { ServerToolLink(it, it) }
+                    return ServerToolPresentation.WebSearch(
+                        query = queries.joinToString("\n").ifEmpty { action?.string("query") ?: action?.string("pattern") },
+                        links = (sources + listOfNotNull(page)).distinct(),
+                        errorCode = block.string("status")?.takeIf { it == "failed" || it == "incomplete" },
+                    )
+                }
                 if (source.protocol != ServerToolProtocol.CLAUDE_MESSAGES ||
                     (type != "web_search_tool_result" && !(type == "server_tool_use" && block.string("name") == "web_search"))) {
                     return ServerToolPresentation.Unsupported(type ?: "unknown_server_tool")

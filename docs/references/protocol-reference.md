@@ -286,6 +286,20 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 实际响应端点（去除凭据、query 和 fragment）及来源 profile；`ToolResultStatus` 表示有可回放结果，不创建本地执行记录。
 原 Step 索引据此排除已返回结果的调用，同名本地工具不会再次审批或执行。raw output 已回放该结果时不再追加一份。
 
+### 响应显示顺序
+
+`ResponseDisplayState` 只管理当前响应的显示槽，不保存第二份协议回放。item_id 与 output_index 在同一响应内
+绑定且不可改换；元数据事件也接纳晚到别名。正文按内容索引与 text/refusal 类型区分，跨工具或其他显示片段后，
+即使同一 message item 再次输出正文，也开始新显示段。推理、服务端事件和图片沿自身稳定槽更新。
+完整非流式响应按解析后的原 Part 顺序赋槽。槽只经 `UIMessageChoice.contentBlockSlots` 进入合并器，不持久化。
+
+`web_search_call`、`file_search_call`、`code_interpreter_call` 保存为只读 `ServerTool`，不据此启用新工具或创建本地执行。
+服务端状态事件更新原片段，成功响应终态必须保留已见项身份且其状态已终止；只有这时标记完整。
+搜索查询、来源和错误状态使用 ai 的类型化显示投影，URL 引用从原 message annotations 进入已有可点击引用列表。
+图片结果替换原槽的占位图，不再前插第二张；聊天附件归属仍沿原 Artifact 链。
+可见段按事件次序保存，raw output 仍按服务端原数组和批次回放，不用显示列表重建不透明状态。
+依据：[Web search output](https://developers.openai.com/api/docs/guides/tools-web-search)。
+
 ### Endpoint profile
 
 | Profile | Wire format | Reasoning 表示 | 加密状态 | Function output |
@@ -311,6 +325,12 @@ OpenRouter `reasoning_details` 继续 source-isolated：存在 details 时不降
 ```
 
 `outputItemGroups` 保留每次 response 的批次边界。回放时先追加某一 response 的完整 output，再追加该批函数调用的本地 `function_call_output`；不能把多次工具续轮压平成一个无边界列表。
+
+后续 Step 失败时，`completedProviderReplayMetadata` 从完整前缀各 Step 的 `modelResult.providerMetadata` 恢复批次，
+不复用整消息可能含失败尾部的聚合 metadata。只有前缀全部 Step 有一致 wire/profile 的证据才使用完整 raw 回放；
+旧记录缺证据时保留原可见内容回放。`providerReplayProjection.completePartCount` 经 RequestAssembler 去掉 Step 后调整，
+Responses 在完整 raw 前缀后另加安全尾部正文/图片及中断标记，不能因 raw 回放提前返回而丢掉可读尾部。
+服务端片段记录的 endpoint 只说明来源；Responses 原始批次兼容仍按 wireFormat/sourceProfile 判断，不承诺同 profile 的不同 URL 隔离。
 
 `AttachmentProjectionTransformer` 生成的附件事实遵循来源容器：USER 图片仍在 user input，工具图片仍在 `function_call_output`，ASSISTANT 顶层图片及其事实仍使用 assistant role。Responses 命中原始 `outputItemGroups` 回放时不能修改不透明 output，也不能从可见 UI parts 重建整个消息；`ResponseAPI.addAssistantItems()` 因此在完整原始批次和本地函数结果之后，只选择带 `AttachmentProjectionTextMetadata` 的 request-only 文本追加为 assistant message。普通可见回答不会重复，前置 system/developer 内容也不变化。
 

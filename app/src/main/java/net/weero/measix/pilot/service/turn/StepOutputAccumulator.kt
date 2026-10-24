@@ -64,12 +64,16 @@ internal class StepOutputAccumulator {
     private fun mergeContentBlock(acc: List<UIMessagePart>, delta: UIMessagePart, slot: ProviderContentBlockSlot): List<UIMessagePart> {
         val index = contentIndices[slot]
         if (index == null) {
-            require(delta is UIMessagePart.Text || delta is UIMessagePart.Reasoning || delta is UIMessagePart.ServerTool) { "Unsupported slotted content type" }
+            require(delta is UIMessagePart.Text || delta is UIMessagePart.Reasoning || delta is UIMessagePart.ServerTool || delta is UIMessagePart.Image) { "Unsupported slotted content type" }
             contentIndices[slot] = acc.size
-            return acc + delta
+            return acc + if (delta is UIMessagePart.Image) delta.copy(url = renderableImageUrl(delta.url)) else delta
         }
         val previous = acc[index]
         val merged = when {
+            previous is UIMessagePart.Image && delta is UIMessagePart.Image -> delta.copy(
+                url = if (delta.url.isEmpty()) previous.url else renderableImageUrl(delta.url),
+                metadata = mergePartMetadata(previous.metadata, delta.metadata),
+            )
             previous is UIMessagePart.ServerTool && delta is UIMessagePart.ServerTool -> {
                 require(previous.source == delta.source) { "Provider content block changed source" }
                 require(!previous.complete || previous == delta) { "Completed server block changed" }

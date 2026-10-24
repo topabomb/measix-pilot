@@ -58,6 +58,10 @@ import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.ui.ResponseFunctionResultMetadata
 import me.rerere.ai.ui.ToolResultStatus
+import me.rerere.ai.ui.ServerToolSource
+import me.rerere.ai.ui.ServerToolProtocol
+import me.rerere.ai.ui.ProviderContentBlockSlot
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.util.HttpException
 import me.rerere.ai.util.ProviderTerminalStatus
 import me.rerere.ai.util.KeyRoulette
@@ -438,8 +442,10 @@ class ResponseAPI(
                     responseMetadata.sourceProfile == endpointProfile.sourceProfile) &&
             responseMetadata.outputItemGroups.any { it.isNotEmpty() }
         ) {
-            addPreservedResponseItems(message, responseMetadata.outputItemGroups, endpointProfile, mediaCapabilities)
-            val projectionTexts = message.parts
+            val completeCount = message.providerReplayProjection?.completePartCount ?: message.parts.size
+            val completeParts = message.parts.take(completeCount)
+            addPreservedResponseItems(message.copy(parts = completeParts), responseMetadata.outputItemGroups, endpointProfile, mediaCapabilities)
+            val projectionTexts = completeParts
                 .filterIsInstance<UIMessagePart.Text>()
                 .filter { part ->
                     part.metadataAs<AttachmentProjectionTextMetadata>()?.attachmentProjectionText == true
@@ -447,6 +453,8 @@ class ResponseAPI(
             if (projectionTexts.isNotEmpty()) {
                 addContentItem(MessageRole.ASSISTANT, projectionTexts, mediaCapabilities)
             }
+            val safeTail = message.parts.drop(completeCount).filter { it is UIMessagePart.Text || it is UIMessagePart.Image }
+            if (safeTail.isNotEmpty()) addContentItem(MessageRole.ASSISTANT, safeTail, mediaCapabilities)
             return
         }
 
@@ -682,18 +690,21 @@ class ResponseAPI(
         jsonObject: JsonObject,
         streamState: ResponseStreamState = ResponseStreamState(),
         endpointProfile: ResponseEndpointProfile = ResponseEndpointProfile.OPENAI,
-    ): MessageChunk? = parseResponseDeltaParts(jsonObject, streamState, endpointProfile)?.let { chunk ->
-        val terminalReason = jsonObject["type"]?.jsonPrimitive?.contentOrNull
-            ?.takeIf { it in setOf("response.completed", "response.incomplete", "response.failed") }
-            ?.removePrefix("response.")
-        val choices = chunk.choices.ifEmpty {
-            if (terminalReason == null) emptyList() else listOf(UIMessageChoice(
-                index = 0, delta = null, message = null, finishReason = terminalReason,
-            ))
+    ): MessageChunk? {
+        streamState.display.observe(jsonObject)
+        return parseResponseDeltaParts(jsonObject, streamState, endpointProfile)?.let { chunk ->
+            val terminalReason = jsonObject["type"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it in setOf("response.completed", "response.incomplete", "response.failed") }
+                ?.removePrefix("response.")
+            val choices = chunk.choices.ifEmpty {
+                if (terminalReason == null) emptyList() else listOf(UIMessageChoice(
+                    index = 0, delta = null, message = null, finishReason = terminalReason,
+                ))
+            }
+            chunk.copy(choices = choices.map { choice ->
+                streamState.display.decorate(jsonObject, choice.copy(finishReason = terminalReason ?: choice.finishReason))
+            })
         }
-        chunk.copy(choices = choices.map { choice ->
-            choice.copy(finishReason = terminalReason ?: choice.finishReason)
-        })
     }
 
     private fun parseResponseDeltaParts(
@@ -704,6 +715,12 @@ class ResponseAPI(
         val chunkType = jsonObject["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
 
         val item = jsonObject["item"]?.jsonObjectOrNull
+        if (RESPONSE_SERVER_TYPES.any { chunkType.startsWith("response.$it.") }) {
+            val output = streamState.output(jsonObject, allowNew = false)
+            val updated = JsonObject(output.item + ("status" to JsonPrimitive(chunkType.substringAfterLast('.'))))
+            streamState.recordOutputItem(JsonObject(jsonObject + ("item" to updated)))
+            return responseServerChunk(updated, streamState)
+        }
         if (chunkType in setOf("response.function_call_arguments.delta", "response.function_call_arguments.done") ||
             (chunkType in setOf("response.output_item.added", "response.output_item.done") &&
                 item?.get("type")?.jsonPrimitive?.contentOrNull == "function_call")
@@ -759,6 +776,7 @@ class ResponseAPI(
                 streamState.recordOutputItem(jsonObject)
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 if (type == "function_call_output") return null
+                if (type in RESPONSE_SERVER_TYPES) return responseServerChunk(item, streamState)
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "image_generation_call") {
                     return MessageChunk(
@@ -812,6 +830,7 @@ class ResponseAPI(
                 streamState.recordOutputItem(jsonObject)
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 if (type == "function_call_output") return null
+                if (type in RESPONSE_SERVER_TYPES) return responseServerChunk(item, streamState)
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "reasoning") {
                     val encryptedContent = item["encrypted_content"]?.jsonPrimitive?.content
@@ -972,6 +991,8 @@ class ResponseAPI(
             resultStatus = ToolResultStatus.COMPLETED,
             metadata = ResponseFunctionResultMetadata(result).toMetadata(),
         ) }
+        val serverParts = outputItems.filter { it["type"]?.jsonPrimitive?.contentOrNull in RESPONSE_SERVER_TYPES }
+            .map { responseServerPart(it, streamState.responseEndpoint, complete = true) }
         return MessageChunk(
             id = responseId,
             model = "",
@@ -980,7 +1001,8 @@ class ResponseAPI(
                     index = 0,
                     delta = UIMessage(
                         role = MessageRole.ASSISTANT,
-                        parts = updates,
+                        parts = updates + serverParts,
+                        annotations = responseAnnotations(outputItems),
                         providerMetadata = outputItems.takeIf { it.isNotEmpty() }?.let {
                             OpenAIResponseMetadata(
                                 wireFormat = endpointProfile.wireFormat,
@@ -995,7 +1017,7 @@ class ResponseAPI(
                 )
             ),
             usage = usage,
-        )
+        ).let { chunk -> chunk.copy(choices = chunk.choices.map { streamState.display.decorate(buildJsonObject {}, it) }) }
     }
 
     private fun reasoningTextChunk(itemId: String, text: String): MessageChunk {
@@ -1044,6 +1066,10 @@ class ResponseAPI(
             val output = outputItem.jsonObject
             val type = output["type"]?.jsonPrimitive?.content ?: error("output type not found")
             when (type) {
+                in RESPONSE_SERVER_TYPES -> parts.add(responseServerPart(output, responseEndpoint,
+                    complete = jsonObject["status"]?.jsonPrimitive?.contentOrNull == "completed"))
+                "image_generation_call" -> output["result"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }
+                    ?.let { parts.add(UIMessagePart.Image(it)) }
                 "reasoning" -> {
                     // DeepSeek 返回完整 reasoning_text，OpenAI 通常返回 summary_text。
                     // content 优先可避免 DeepSeek 同时携带空 summary 时丢失正文；最终合并成一个 part，
@@ -1142,6 +1168,7 @@ class ResponseAPI(
                     message = UIMessage(
                         role = MessageRole.ASSISTANT,
                         parts = parts,
+                        annotations = responseAnnotations(outputs.map { it.jsonObject }),
                         providerMetadata = OpenAIResponseMetadata(
                             wireFormat = endpointProfile.wireFormat,
                             outputItemGroups = listOf(outputs.map { it.jsonObject }),
@@ -1149,6 +1176,7 @@ class ResponseAPI(
                         ).toMetadata(),
                     ),
                     finishReason = jsonObject["status"]?.jsonPrimitive?.contentOrNull,
+                    contentBlockSlots = Uuid.random().toString().let { id -> parts.indices.map { ProviderContentBlockSlot(id, it) } },
                     delta = null
                 )
             ),
@@ -1236,6 +1264,34 @@ class ResponseAPI(
         }
     }
 }
+
+internal val RESPONSE_SERVER_TYPES = setOf("web_search_call", "file_search_call", "code_interpreter_call")
+
+private fun responseAnnotations(items: List<JsonObject>): List<UIMessageAnnotation> = items
+    .filter { it["type"]?.jsonPrimitiveOrNull?.contentOrNull == "message" }
+    .flatMap { it["content"]?.jsonArrayOrNull.orEmpty() }
+    .flatMap { it.jsonObjectOrNull?.get("annotations")?.jsonArrayOrNull.orEmpty() }
+    .mapNotNull { entry ->
+        val citation = entry.jsonObjectOrNull ?: return@mapNotNull null
+        if (citation["type"]?.jsonPrimitiveOrNull?.contentOrNull != "url_citation") return@mapNotNull null
+        val url = citation["url"]?.jsonPrimitiveOrNull?.contentOrNull ?: return@mapNotNull null
+        UIMessageAnnotation.UrlCitation(citation["title"]?.jsonPrimitiveOrNull?.contentOrNull ?: url, url)
+    }.distinct()
+
+private fun responseServerPart(item: JsonObject, endpoint: String?, complete: Boolean): UIMessagePart.ServerTool {
+    check(!item["id"]?.jsonPrimitiveOrNull?.contentOrNull.isNullOrBlank()) { "responses_server_identity_missing" }
+    if (complete) check(item["status"]?.jsonPrimitiveOrNull?.contentOrNull in setOf("completed", "failed", "incomplete")) {
+        "responses_server_item_unfinished: successful response contains a nonterminal server item"
+    }
+    return UIMessagePart.ServerTool(ServerToolSource(ServerToolProtocol.OPENAI_RESPONSES, endpoint.orEmpty()), item, complete)
+}
+
+private fun responseServerChunk(item: JsonObject, state: ResponseStreamState) = MessageChunk(
+    id = item["id"]?.jsonPrimitive?.contentOrNull.orEmpty(), model = "",
+    choices = listOf(UIMessageChoice(0,
+        delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(responseServerPart(item, state.responseEndpoint, false))),
+        message = null, finishReason = null)),
+)
 
 private fun okhttp3.HttpUrl.resultSource(): String = newBuilder()
     .username("").password("").query(null).fragment(null).build().toString()

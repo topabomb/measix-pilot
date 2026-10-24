@@ -47,7 +47,7 @@ data class ResponseFunctionResult(
 )
 
 @Serializable
-enum class ServerToolProtocol { CLAUDE_MESSAGES }
+enum class ServerToolProtocol { CLAUDE_MESSAGES, OPENAI_RESPONSES }
 
 @Serializable
 data class ServerToolSource(val protocol: ServerToolProtocol, val endpoint: String)
@@ -403,6 +403,24 @@ fun mergeMessageMetadata(current: JsonObject?, incoming: JsonObject?): JsonObjec
     } else {
         incoming
     }
+}
+
+/** Recover only the closed prefix's response batches, never the message-wide unfinished tail. */
+internal fun completedProviderReplayMetadata(parts: List<UIMessagePart>): JsonObject? {
+    val claude = completedClaudeReplayMetadata(parts)
+    val steps = parts.filterIsInstance<UIMessagePart.Step>()
+    val responses = steps.map { step -> step.modelResult?.providerMetadata?.let { metadata ->
+        runCatching { json.decodeFromJsonElement<OpenAIResponseMetadata>(metadata) }.getOrNull()
+    } }
+    val known = responses.filterNotNull()
+    // Partial legacy evidence must not make the serializer omit other visible completed Steps.
+    if (known.isEmpty() || known.size != steps.size || known.map { it.wireFormat }.distinct().size != 1 ||
+        known.mapNotNull { it.sourceProfile }.distinct().size > 1) return claude
+    val recovered = known.first().copy(
+        outputItemGroups = known.flatMap { it.outputItemGroups },
+        sourceProfile = known.firstNotNullOfOrNull { it.sourceProfile },
+    ).toMetadata()
+    return JsonObject(claude.orEmpty() + recovered)
 }
 
 /** Only committed replay exclusions survive a terminal projection; opaque draft state does not. */

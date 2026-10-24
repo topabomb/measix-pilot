@@ -9,6 +9,9 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.*
 import me.rerere.ai.core.FrozenToolDefinition
 import me.rerere.ai.core.ModelRequestMessage
+import me.rerere.ai.core.MessageRole
+import me.rerere.ai.core.UsageCompleteness
+import me.rerere.ai.testsupport.toModelRequest
 import me.rerere.ai.provider.*
 import me.rerere.ai.ui.*
 import okhttp3.OkHttpClient
@@ -139,5 +142,35 @@ class ResponseFunctionResultsTest {
         }, state)!!
         assertTrue(failed.choices.all { it.delta?.getTools().orEmpty().none { it.hasReplayResult } })
         assertNotNull(state.prematureCloseError())
+    }
+
+    @Test fun `failed later Step preserves complete raw search and structured results with readable tail only`() {
+        for (value in listOf(obj("""{"rows":[1]}"""), JsonArray(listOf(JsonPrimitive("row"))))) {
+            val search = obj("""{"type":"web_search_call","id":"safe_search","status":"completed","action":{"type":"search","query":"safe"}}""")
+            val complete = parse(listOf(search, call, result(value)))
+            val completeId = kotlin.uuid.Uuid.random()
+            val unsafe = OpenAIResponseMetadata(OpenAIResponseWireFormat.OPENAI,
+                listOf(listOf(obj("""{"type":"reasoning","id":"unsafe_tail","encrypted_content":"never_replay"}"""))),
+                OpenAIResponseSourceProfile.OPENAI_COMPATIBLE).toMetadata()
+            fun sampled(metadata: JsonObject?) = StepModelResult("completed", StepUsage(), 1, null, null, UsageCompleteness.NONE, metadata)
+            val original = UIMessage(role = MessageRole.ASSISTANT, terminalStatus = MessageTerminalStatus.FAILED,
+                providerMetadata = mergeMessageMetadata(complete.providerMetadata, unsafe), parts = listOf(
+                    UIMessagePart.Step(completeId, 0, kotlin.time.Clock.System.now(), sampled(complete.providerMetadata), StepOutcome.Continue),
+                ) + complete.parts.map { if (it is UIMessagePart.Tool) it.copy(stepId = completeId) else it } + listOf(
+                    UIMessagePart.Step(kotlin.uuid.Uuid.random(), 1, kotlin.time.Clock.System.now(), sampled(unsafe), StepOutcome.Failed),
+                    UIMessagePart.Text("readable partial answer"),
+                    UIMessagePart.Reasoning("unsafe_tail"),
+                    UIMessagePart.ServerTool(ServerToolSource(ServerToolProtocol.OPENAI_RESPONSES, endpoint),
+                        obj("""{"type":"web_search_call","id":"unsafe_search","status":"in_progress"}""")),
+                ))
+            val persisted = Json.decodeFromString(UIMessage.serializer(), Json.encodeToString(UIMessage.serializer(), original))
+            val wire = api.buildMessages(listOf(persisted.replaySafeProjection()!!.toModelRequest()), ResponseEndpointProfile.OPENAI_COMPATIBLE)
+            assertEquals(listOf(search, call, result(value)), wire.take(3))
+            assertEquals(4, wire.size)
+            assertTrue(wire.last().toString().contains("readable partial answer"))
+            assertTrue(wire.last().toString().contains("Previous assistant response did not complete"))
+            assertFalse(wire.toString().contains("unsafe_"))
+            assertFalse(wire.toString().contains("never_replay"))
+        }
     }
 }

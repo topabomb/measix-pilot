@@ -367,7 +367,7 @@ fun UIMessage.replaySafeProjection(): UIMessage? {
     val completePartCount = projectedComplete.size
     val projected = copy(
         parts = projectedParts,
-        providerMetadata = completedClaudeReplayMetadata(projectedComplete),
+        providerMetadata = completedProviderReplayMetadata(projectedComplete),
         terminalStatus = null,
         terminalReason = null,
         terminalDetail = null,

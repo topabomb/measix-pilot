@@ -29,13 +29,14 @@ internal class RequestAssembler {
         }
         return AssembledRequest(
             providerVisibleMessages = providerVisible,
-            providerMessages = providerVisible.map {
+            providerMessages = providerVisible.mapIndexed { index, it ->
                 ModelRequestMessage(
                     role = it.role,
                     parts = it.parts,
                     modelId = it.modelId,
                     providerMetadata = it.providerMetadata,
                     providerReplayProjection = it.providerReplayProjection,
+                    samplingPartCounts = projectedMessages[index].parts.samplingPartCounts(),
                 )
             },
         )
@@ -46,6 +47,22 @@ internal class RequestAssembler {
         is UIMessagePart.Tool -> part.copy(clientDiagnostic = null, output = part.output.map(::modelPart))
         else -> part
     }
+}
+
+private fun List<UIMessagePart>.samplingPartCounts(): List<Int> {
+    if (none { it is UIMessagePart.Step }) return emptyList()
+    val counts = mutableListOf<Int>()
+    var count = 0
+    var seenStep = false
+    forEach { part ->
+        if (part is UIMessagePart.Step) {
+            if (seenStep || count > 0) counts += count
+            seenStep = true
+            count = 0
+        } else count++
+    }
+    counts += count
+    return counts
 }
 
 /**

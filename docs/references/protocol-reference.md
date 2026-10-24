@@ -497,13 +497,21 @@ Claude 的 `BuiltInTools.Search` 编码为 `web_search_20250305`，与客户端�
   不进入新的有来源请求。
 - 带签名 Part 不能与相邻 Part 合并；空文本 Part 上的签名也必须保留。
 - function call 的 API ID 保存并回填到对应 `functionResponse.id`。
-- function calls 按 durable `Tool.stepId` 分批；Step 身份由 app Turn 协议分配。旧 transcript 通过统一迁移器
-  升级，Adapter 不读取 `providerStepId` 或推测历史批次。
+- RequestAssembler 移除 durable Step 标记时，将每个 Step 的 Part 数保存在请求专用 `samplingPartCounts`。
+  Gemini 按该边界先回放完整 model Parts，再附本批客户端 functionResponse；服务端 Part 穿插在 functionCall 后也不提前拆开。
+  无 Step 的既有请求继续按 `Tool.stepId` 分批。Adapter 不读取 `providerStepId` 或推测历史批次，不新增持久化格式。
 - thought image 的原始 `inlineData` 保存在 metadata 中，UI 可以显示占位而续轮仍能原样回放。
 
 所有 SYSTEM 文本按消息和 Part 顺序用换行合入一个 text-only `systemInstruction`，包括图片输出模型。
 函数声明与模型内置工具合并到同一个 `tools` 数组。Schema 清理只移除当前适配明确不使用的兼容字段，保留
 Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCitation`。
+同时使用客户端函数与 Search／UrlContext 时，构造器开启 `includeServerSideToolInvocations`，该字段归请求结构 owner。
+此时省略 function calling mode 使用服务端 VALIDATED 默认；拒绝官方明确不支持的 AUTO，其余显式模式不擅自重写。
+`toolCall`／`toolResponse` 逐 Part 保存为只读 ServerTool，保留原始 JSON、签名和顺序；重复 ID 不合并，不产生本地执行。
+Google Search 查询词通过既有 WebSearch 类型投影显示，grounding 引用仍归消息引用列表；不执行服务端 search suggestions HTML。
+流式 Part 使用候选内有序槽，只有 STOP 才把已见服务端片段标为完整；失败、取消或断流尾部不进入成功回放。
+回放要求原模型与 Google source profile 一致，跨模型／来源排除不兼容的服务端 Part。
+依据：[Google 工具组合](https://ai.google.dev/gemini-api/docs/generate-content/tool-combination)。
 
 ### 响应终态与流关闭
 
@@ -518,13 +526,13 @@ Gemini 支持的 `enum`。grounding metadata 转为 `UIMessageAnnotation.UrlCita
 - 请求体、原始 SSE body、opaque signature 和 base64 媒体不得写入日志。
 
 `GoogleProvider.parseMessagePart()` 只接受 `text`（含空 text + signature、`thought=true` 的 Reasoning）、
-完整 object `functionCall`（`name` 非空），以及 `mimeType` 以 `image/` 开头的 `inlineData`。其他 Part 字段
+完整 object `functionCall`（`name` 非空）、服务端 `toolCall`／`toolResponse`，以及 `mimeType` 以 `image/` 开头的 `inlineData`。其他 Part 字段
 显式失败并只报告排序后的字段名，不写入原始 payload。当前客户端 function-call 增量仍只接受完整 `args` object；
 会启用 partial args、多候选或新输出模态的 custom body path 被 ownership 拒绝，直到对应 decoder 明确实现。
 
 ### 支持边界
 
-未知模型省略显式 thinking 控制。decoder 不支持 server-side tool、code execution、partial function args
+未知模型省略显式 thinking 控制。decoder 不支持 code execution、partial function args
 和未知 Part union，收到这些内容时明确失败。公共 `RequestMediaCapabilities` 只声明原生图片；
 音频、视频和文档由应用层附件投影处理，不由 Google adapter 私自编码媒体或猜测 MIME。
 

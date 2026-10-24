@@ -445,7 +445,7 @@ class ResponseAPI(
         ) {
             val completeCount = message.providerReplayProjection?.completePartCount ?: message.parts.size
             val completeParts = message.parts.take(completeCount)
-            addPreservedResponseItems(message.copy(parts = completeParts), responseMetadata.outputItemGroups, endpointProfile, mediaCapabilities)
+            addPreservedResponseItems(message.copy(parts = completeParts, samplingPartCounts = emptyList()), responseMetadata.outputItemGroups, endpointProfile, mediaCapabilities)
             val projectionTexts = completeParts
                 .filterIsInstance<UIMessagePart.Text>()
                 .filter { part ->

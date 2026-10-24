@@ -96,6 +96,7 @@ application command
 每个 Turn 在 START 冻结 Assistant、Model、Provider wire、prompt 与工具 definitions/bindings。Step 从冻结上下文和已提交 transcript 派生请求；工具执行仍由原 owner 实时复核权限、资源与撤销状态。Provider 凭据通过精确 owner lease 刷新，不重新选择模型或 endpoint。
 
 `RequestAssembler` 是 UIMessage 到 ModelRequestMessage 的唯一转换边界；Provider 不直接消费 durable 会话聚合。请求预算优先于 prompt-cache 前缀稳定：只有成功请求实际消费的历史 inline Tool Result 才可滚动压缩，规划与落盘职责分开。会话级自动摘要尚未实现。
+移除 Step 标记时，Assembler 将原采样边界投影为请求专用 `samplingPartCounts`；这是原事实的只读分组信息，不是第二份持久化状态。协议 Adapter 可据此保全同次模型响应的 Part 顺序，具体回放规则归协议参考维护。
 
 Turn 累计 usage 与逐 Step 计量由同一请求事实派生、同事务保存，不互相反推。请求窗口与披露见 [请求上下文](request-context.md)，wire 见 [Provider 协议](protocol-reference.md)，计量见 [Token usage](token-usage-accounting.md)。
 

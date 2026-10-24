@@ -51,6 +51,8 @@ import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.vertex.ServiceAccountTokenProvider
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.GoogleThoughtMetadata
+import me.rerere.ai.ui.ServerToolProtocol
+import me.rerere.ai.ui.ServerToolSource
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.ui.UIMessage
@@ -251,12 +253,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             choices = candidates.mapIndexed { index, candidate ->
                 val candidateObject = candidate.jsonObject
                 val finishReason = candidateObject["finishReason"]?.jsonPrimitive?.contentOrNull
-                UIMessageChoice(
+                GoogleContentState().decorate(UIMessageChoice(
                     message = if (candidateObject["content"] is JsonObject) {
                         parseMessage(
                             message = candidateObject,
                             sourceModelId = params.model.modelId,
                             sourceProfile = replaySourceProfile,
+                            complete = terminalError == null,
                         )
                     } else {
                         check(terminalError != null) { "Gemini returned no content" }
@@ -265,7 +268,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     index = candidateObject["index"]?.jsonPrimitive?.intOrNull ?: index,
                     finishReason = finishReason,
                     delta = null
-                )
+                ))
             },
             usage = parseUsageMeta(usage)
         )
@@ -282,6 +285,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val replaySourceProfile = googleReplaySourceProfile(providerSetting)
         val requestBody = buildCompletionRequestBody(messages, params, replaySourceProfile)
         val nextToolSlots = mutableMapOf<Int, Int>()
+        val displays = mutableMapOf<Int, GoogleContentState>()
         var terminalObserved = false
 
         val url = buildUrl(
@@ -360,7 +364,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                 }, params.model.modelId, replaySourceProfile)
                             }
 
-                            UIMessageChoice(
+                            displays.getOrPut(candidateIndex) { GoogleContentState() }.decorate(UIMessageChoice(
                                 index = candidateIndex,
                                 delta = message,
                                 toolCallSlots = message?.getTools().orEmpty().map {
@@ -370,7 +374,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                                 },
                                 message = null,
                                 finishReason = finishReason
-                            )
+                            ))
                         },
                         usage = usage
                     )
@@ -528,7 +532,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         // Function declarations and model built-in tools share one tools array. Writing this key
         // twice silently replaces the first value and makes mixed tool requests incomplete.
         val useFunctionTools = params.tools.isNotEmpty() && params.model.abilities.contains(ModelAbility.TOOL)
-        if (useFunctionTools || params.model.tools.isNotEmpty()) {
+        val useBuiltInTools = params.model.tools.any { it == BuiltInTools.Search || it == BuiltInTools.UrlContext }
+        if (useFunctionTools && useBuiltInTools) {
+            put("toolConfig", buildJsonObject { put("includeServerSideToolInvocations", true) })
+        }
+        if (useFunctionTools || useBuiltInTools) {
             put("tools", buildJsonArray {
                 if (useFunctionTools) {
                     add(buildJsonObject {
@@ -595,6 +603,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         params.customBody,
         GEMINI_OWNERSHIP,
     ).also { body ->
+        val toolConfig = body["toolConfig"] as? JsonObject
+        if ((toolConfig?.get("includeServerSideToolInvocations") as? JsonPrimitive)?.booleanOrNull == true) {
+            val mode = ((toolConfig["functionCallingConfig"] as? JsonObject)?.get("mode") as? JsonPrimitive)?.contentOrNull
+            require(mode != "AUTO") {
+                "gemini_mixed_tool_mode_invalid: AUTO is unsupported with server tool circulation; omit mode for VALIDATED default"
+            }
+        }
         if (ModelRegistry.GEMINI_4_ARGON.match(params.model.modelId)) {
             val config = body["generationConfig"] as? JsonObject
             require(config != null) { "gemini_argon_config_invalid: generationConfig must be an object for ${params.model.modelId}" }
@@ -634,13 +649,16 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         message: JsonObject,
         sourceModelId: String,
         sourceProfile: String,
+        complete: Boolean = false,
     ): UIMessage {
         val role = googleRoleToCommonRole(
             message["role"]?.jsonPrimitive?.contentOrNull ?: "model"
         )
         val content = message["content"]?.jsonObject ?: error("No content")
         val parts = content["parts"]?.jsonArray?.map { part ->
-            parseMessagePart(part.jsonObject, sourceModelId, sourceProfile)
+            parseMessagePart(part.jsonObject, sourceModelId, sourceProfile).let {
+                if (it is UIMessagePart.ServerTool) it.copy(complete = complete) else it
+            }
         } ?: emptyList()
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
@@ -674,6 +692,20 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         sourceProfile: String,
     ): UIMessagePart {
         return when {
+            jsonObject.containsKey("toolCall") || jsonObject.containsKey("toolResponse") -> {
+                val key = if ("toolCall" in jsonObject) "toolCall" else "toolResponse"
+                require(!("toolCall" in jsonObject && "toolResponse" in jsonObject)) { "gemini_server_part_ambiguous" }
+                val value = jsonObject[key] as? JsonObject ?: error("gemini_server_part_invalid: $key must be an object")
+                require((value["toolType"] as? JsonPrimitive)?.contentOrNull?.isNotBlank() == true) {
+                    "gemini_server_part_invalid: $key.toolType missing"
+                }
+                UIMessagePart.ServerTool(
+                    source = ServerToolSource(ServerToolProtocol.GOOGLE_GENERATE_CONTENT, sourceProfile),
+                    block = jsonObject,
+                    metadata = GoogleThoughtMetadata(sourceModelId = sourceModelId, sourceProfile = sourceProfile).toMetadata(),
+                )
+            }
+
             jsonObject.containsKey("text") -> {
                 val thought = jsonObject["thought"]?.jsonPrimitive?.booleanOrNull ?: false
                 val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
@@ -789,6 +821,27 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         modelId: String,
         sourceProfile: String,
     ) {
+        if (message.samplingPartCounts.isNotEmpty()) {
+            var offset = 0
+            message.samplingPartCounts.forEach { count ->
+                val sampling = message.parts.subList(offset, offset + count)
+                offset += count
+                val parts = sampling.mapNotNull {
+                    if (it is UIMessagePart.Tool && it.hasReplayResult) it.toFunctionCallPart(modelId, sourceProfile)
+                    else it.toGooglePart(mediaCapabilities.assistantImages, modelId, sourceProfile)
+                }
+                if (parts.isNotEmpty()) add(buildJsonObject {
+                    put("role", "model")
+                    put("parts", JsonArray(parts))
+                })
+                val tools = sampling.filterIsInstance<UIMessagePart.Tool>().filter { it.hasReplayResult }
+                if (tools.isNotEmpty()) add(buildJsonObject {
+                    put("role", "user")
+                    put("parts", JsonArray(tools.map { it.toFunctionResponsePart(mediaCapabilities, modelId, sourceProfile) }))
+                })
+            }
+            return
+        }
         val groups = groupPartsByToolBoundary(message.parts)
         val partsBuffer = mutableListOf<JsonObject>()
 
@@ -885,6 +938,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         modelId: String,
         sourceProfile: String,
     ): JsonObject? = when (this) {
+        is UIMessagePart.ServerTool -> block.takeIf {
+            complete && source == ServerToolSource(ServerToolProtocol.GOOGLE_GENERATE_CONTENT, sourceProfile) &&
+                metadataAs<GoogleThoughtMetadata>()?.sourceModelId == modelId
+        }
+
         is UIMessagePart.Text -> buildJsonObject {
             put("text", text)
             metadataAs<GoogleThoughtMetadata>()
@@ -1125,5 +1183,6 @@ internal val GEMINI_OWNERSHIP = RequestBodyOwnership(
         listOf("generationConfig", "candidateCount"),
         listOf("generationConfig", "responseModalities"),
         listOf("toolConfig", "functionCallingConfig", "streamFunctionCallArguments"),
+        listOf("toolConfig", "includeServerSideToolInvocations"),
     ),
 )

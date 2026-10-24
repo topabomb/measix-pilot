@@ -23,8 +23,14 @@ data class ModelRequestMessage(
     val modelId: ConfigurationReference? = null,
     val providerMetadata: JsonObject? = null,
     val providerReplayProjection: ProviderReplayProjection? = null,
+    /** Counts from durable Step boundaries, supplied by RequestAssembler before stripping markers. */
+    val samplingPartCounts: List<Int> = emptyList(),
 ) {
     init {
+        require(samplingPartCounts.isEmpty() ||
+            (samplingPartCounts.all { it >= 0 } && samplingPartCounts.sum() == parts.size)) {
+            "Sampling boundaries must cover request parts exactly"
+        }
         // Durable transcript boundaries never reach the Provider; the assembler drops them before construction.
         require(parts.none { it is UIMessagePart.Step }) {
             "ModelRequestMessage must not carry UIMessagePart.Step"

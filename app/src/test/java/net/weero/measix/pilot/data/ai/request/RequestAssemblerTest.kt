@@ -28,6 +28,17 @@ import kotlin.uuid.Uuid
  * 核心不变量：durable 的 [UIMessagePart.Step] 绝不进入 Provider，其余 parts 顺序与身份逐字保留。
  */
 class RequestAssemblerTest {
+    @Test fun `sampling part counts preserve empty and interleaved durable steps without leaking markers`() {
+        val message = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(
+            step(0), UIMessagePart.Text("first"), UIMessagePart.Text("second"),
+            step(1), step(2), UIMessagePart.Text("third"),
+        ))
+        val request = assembler.assemble(listOf(message)).providerMessages.single()
+        assertEquals(listOf(2, 0, 1), request.samplingPartCounts)
+        assertEquals(listOf("first", "second", "third"), request.parts.filterIsInstance<UIMessagePart.Text>().map { it.text })
+        assertTrue(request.parts.none { it is UIMessagePart.Step })
+    }
+
     @Test fun `terminal Responses prefix metadata and tail boundary survive real request assembly`() {
         fun metadata(id: String) = me.rerere.ai.ui.OpenAIResponseMetadata(
             me.rerere.ai.ui.OpenAIResponseWireFormat.OPENAI,

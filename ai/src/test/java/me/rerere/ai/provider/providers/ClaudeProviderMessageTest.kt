@@ -440,8 +440,9 @@ class ClaudeProviderMessageTest {
             ),
         )
 
-        val stripped = stripClaudeThinkingFromOtherModels(listOf(message.toModelRequest()), activeModelId).single()
+        val stripped = stripClaudeThinkingFromOtherModels(listOf(message.toModelRequest().copy(samplingPartCounts = listOf(2))), activeModelId).single()
         assertTrue(stripped.parts.none { it is UIMessagePart.Reasoning })
+        assertTrue(stripped.samplingPartCounts.isEmpty())
         assertEquals("visible answer", (stripped.parts.single() as UIMessagePart.Text).text)
 
         val unchanged = stripClaudeThinkingFromOtherModels(listOf(message.toModelRequest()), oldModelId).single()

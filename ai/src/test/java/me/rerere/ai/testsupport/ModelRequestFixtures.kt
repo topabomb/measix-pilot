@@ -17,6 +17,11 @@ fun UIMessage.toModelRequest(): ModelRequestMessage = ModelRequestMessage(
     providerReplayProjection = providerReplayProjection?.let { replay ->
         replay.copy(completePartCount = parts.take(replay.completePartCount).count { it !is UIMessagePart.Step })
     },
+    samplingPartCounts = if (parts.none { it is UIMessagePart.Step }) emptyList() else buildList {
+        val starts = parts.indices.filter { parts[it] is UIMessagePart.Step }
+        if (starts.first() > 0) add(starts.first())
+        starts.forEachIndexed { index, start -> add((starts.getOrNull(index + 1) ?: parts.size) - start - 1) }
+    },
 )
 
 fun List<UIMessage>.toModelRequests(): List<ModelRequestMessage> = map { it.toModelRequest() }

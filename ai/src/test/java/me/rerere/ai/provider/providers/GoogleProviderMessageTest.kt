@@ -429,6 +429,7 @@ class GoogleProviderMessageTest {
         assertEquals("#/\$defs/mode", schema["properties"]!!.jsonObject["mode"]!!.jsonObject["\$ref"]!!.jsonPrimitive.content)
         assertFalse(schema.containsKey("\$schema"))
         assertTrue(tools.any { it.jsonObject.containsKey("googleSearch") })
+        assertEquals(JsonPrimitive(true), body["toolConfig"]!!.jsonObject["includeServerSideToolInvocations"])
     }
 
     @Test

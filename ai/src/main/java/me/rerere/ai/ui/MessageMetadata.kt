@@ -47,7 +47,7 @@ data class ResponseFunctionResult(
 )
 
 @Serializable
-enum class ServerToolProtocol { CLAUDE_MESSAGES, OPENAI_RESPONSES }
+enum class ServerToolProtocol { CLAUDE_MESSAGES, OPENAI_RESPONSES, GOOGLE_GENERATE_CONTENT }
 
 @Serializable
 data class ServerToolSource(val protocol: ServerToolProtocol, val endpoint: String)

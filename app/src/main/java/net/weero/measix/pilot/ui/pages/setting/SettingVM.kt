@@ -25,7 +25,6 @@ class SettingVM internal constructor(
 ) :
     ViewModel() {
     val settings: StateFlow<Settings> = settingsStore.userSettings
-        .stateIn(viewModelScope, SharingStarted.Lazily, Settings(init = true, providers = emptyList()))
     internal val modelCatalog = configurationQueryService.observeModelCatalog()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), net.weero.measix.pilot.service.ModelCatalogReadState.Loading)
     private val _lockedChange = MutableStateFlow<SettingsLockedException?>(null)

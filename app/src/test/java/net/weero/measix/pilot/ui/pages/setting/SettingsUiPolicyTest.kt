@@ -1,5 +1,8 @@
 package net.weero.measix.pilot.ui.pages.setting
 
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.test.resetMain
+
 import net.weero.measix.pilot.data.datastore.DisplaySetting
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -9,6 +12,26 @@ import org.junit.Test
  * delta merge that applies only edited fields without clobbering concurrent updates.
  */
 class SettingsUiPolicyTest {
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `settings view model exposes loaded owner snapshot immediately without a default frame`() {
+        val dispatcher = kotlinx.coroutines.test.StandardTestDispatcher()
+        kotlinx.coroutines.Dispatchers.setMain(dispatcher)
+        try {
+            val loaded = net.weero.measix.pilot.data.datastore.Settings(dynamicColor = false, enableSuggestion = false)
+            val state = kotlinx.coroutines.flow.MutableStateFlow(loaded)
+            val store = io.mockk.mockk<net.weero.measix.pilot.data.datastore.SettingsStore>()
+            io.mockk.every { store.userSettings } returns state
+            val query = io.mockk.mockk<net.weero.measix.pilot.service.ConfigurationQueryService>()
+            io.mockk.every { query.observeModelCatalog() } returns kotlinx.coroutines.flow.flowOf(net.weero.measix.pilot.service.ModelCatalogReadState.Loading)
+            val vm = SettingVM(store, io.mockk.mockk(), io.mockk.mockk(), query)
+            assertEquals(loaded, vm.settings.value)
+            org.junit.Assert.assertFalse(vm.settings.value.init)
+            state.value = loaded.copy(enableSuggestion = true)
+            assertEquals(state.value, vm.settings.value)
+        } finally { kotlinx.coroutines.Dispatchers.resetMain() }
+    }
+
     @Test
     fun `header removal preserves visibility of surviving headers`() {
         listOf(

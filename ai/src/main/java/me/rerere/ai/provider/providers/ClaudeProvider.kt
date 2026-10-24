@@ -851,7 +851,7 @@ internal fun stripClaudeThinkingFromOtherModels(
         message.modelId != null &&
         message.modelId != activeModelId
     ) {
-        message.copy(parts = message.parts.filterNot { it is UIMessagePart.Reasoning })
+        message.copy(parts = message.parts.filterNot { it is UIMessagePart.Reasoning }, samplingPartCounts = emptyList())
     } else {
         message
     }
@@ -897,7 +897,7 @@ private fun stripClaudeServerState(messages: List<ModelRequestMessage>, endpoint
             }
             else -> part
         }
-    }) }
+    }, samplingPartCounts = emptyList()) }
 
 private fun UIMessagePart.withClaudeBlock(responseId: String, index: Int): UIMessagePart {
     val metadata = JsonObject(metadata.orEmpty() + ClaudeContentBlockMetadata(ClaudeResponseBlock(responseId, index)).toMetadata())

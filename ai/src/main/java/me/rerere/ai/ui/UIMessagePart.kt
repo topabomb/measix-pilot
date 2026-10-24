@@ -77,6 +77,15 @@ sealed class UIMessagePart {
             get() {
                 fun JsonObject.string(key: String) = (get(key) as? JsonPrimitive)?.contentOrNull
                 val type = block.string("type")
+                if (source.protocol == ServerToolProtocol.GOOGLE_GENERATE_CONTENT) {
+                    val invocation = (block["toolCall"] ?: block["toolResponse"]) as? JsonObject
+                    if (invocation?.string("toolType") in setOf("GOOGLE_SEARCH", "GOOGLE_SEARCH_WEB")) {
+                        val queries = ((invocation?.get("args") as? JsonObject)?.get("queries") as? JsonArray).orEmpty()
+                            .mapNotNull { (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.contentOrNull }
+                        return ServerToolPresentation.WebSearch(query = queries.joinToString("\n").ifEmpty { null }, links = emptyList(), errorCode = null)
+                    }
+                    return ServerToolPresentation.Unsupported(invocation?.string("toolType") ?: "unknown_server_tool")
+                }
                 if (source.protocol == ServerToolProtocol.OPENAI_RESPONSES && type == "web_search_call") {
                     val action = block["action"] as? JsonObject
                     val queries = (action?.get("queries") as? JsonArray).orEmpty()

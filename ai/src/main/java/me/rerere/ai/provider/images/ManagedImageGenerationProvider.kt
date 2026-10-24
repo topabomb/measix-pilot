@@ -42,7 +42,7 @@ internal class ManagedImageGenerationProvider(
                 put("prompt", params.prompt)
                 put("n", params.numOfImages)
                 put("size", params.size)
-            }
+            }.also { validateOpenAIImageRequest(params.model.modelId, it) }
             ImageGenerationClientProtocol.DASHSCOPE_MULTIMODAL_GENERATION -> buildJsonObject {
                 put("model", params.model.modelId)
                 put("input", buildJsonObject {

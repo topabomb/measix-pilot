@@ -16,6 +16,63 @@ import org.junit.rules.TemporaryFolder
 class ImageEndpointRequestTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `new image model parameters are validated after overrides before any request`() = runBlocking {
+        val requests = mutableListOf<Request>()
+        val client = client(requests)
+        try {
+            val provider = OpenAIProvider(client)
+            val setting = ProviderSetting.OpenAI(apiKey = "fixture")
+            for (model in listOf("gpt-image-2.5-sunburst", "gpt-image-2.5-flare-2026-09-08")) {
+                for (custom in listOf(
+                    listOf(CustomBody("quality", JsonPrimitive("hd"))),
+                    listOf(CustomBody("background", JsonPrimitive("transparent")), CustomBody("output_format", JsonPrimitive("jpeg"))),
+                    listOf(CustomBody("output_compression", JsonPrimitive(50))),
+                    listOf(CustomBody("response_format", JsonPrimitive("url"))),
+                )) {
+                    try {
+                        provider.generateImage(setting, ImageGenerationParams(Model(modelId = model), "draw", customBody = custom)).toList()
+                        fail("invalid generation accepted")
+                    } catch (error: IllegalArgumentException) { assertTrue(error.message!!.contains("openai_image_parameter_invalid")) }
+                    try {
+                        provider.editImage(setting, ImageEditParams(Model(modelId = model), "edit", listOf("missing.png"), customBody = custom)).toList()
+                        fail("invalid edit accepted")
+                    } catch (error: IllegalArgumentException) { assertTrue(error.message!!.contains("openai_image_parameter_invalid")) }
+                }
+            }
+            for (routed in listOf(false, true)) {
+                for (size in listOf("1025x1024", "4096x1024", "0x1024", "99999999999999x1024")) {
+                    val params = ImageGenerationParams(Model(modelId = "gpt-image-2.5-flare"), "draw", size = size)
+                    try {
+                        if (routed) me.rerere.ai.provider.images.ManagedImageGenerationProvider(client).generate(
+                            me.rerere.ai.provider.images.ImageGenerationClientProtocol.OPENAI_IMAGES_GENERATIONS,
+                            params, emptyList(), RequestCredentials.Routed("https://relay.test/images", "fixture"),
+                        ).toList() else provider.generateImage(setting, params).toList()
+                        fail("invalid size accepted")
+                    } catch (error: IllegalArgumentException) { assertTrue(error.message!!.contains("field=size")) }
+                }
+            }
+            assertTrue(requests.isEmpty())
+            for (quality in listOf("auto", "low", "medium", "high", "xhigh", "max")) {
+                provider.generateImage(setting, ImageGenerationParams(Model(modelId = "gpt-image-2.5-sunburst"), "draw", size = "1536x864",
+                    customBody = listOf(CustomBody("quality", JsonPrimitive(quality)), CustomBody("background", JsonPrimitive("transparent")),
+                        CustomBody("output_format", JsonPrimitive("webp")), CustomBody("output_compression", JsonPrimitive(90))))).toList()
+                assertEquals(quality, requests.last().bodyJson()["quality"]!!.jsonPrimitive.content)
+                assertEquals("1536x864", requests.last().bodyJson()["size"]!!.jsonPrimitive.content)
+            }
+            provider.generateImage(setting, ImageGenerationParams(Model(modelId = "unknown-image-model"), "draw", size = "1025x1",
+                customBody = listOf(CustomBody("quality", JsonPrimitive("custom"))))).toList()
+            assertEquals(7, requests.size)
+            val source = temporary.newFile("policy.png").apply { writeBytes(byteArrayOf(1)) }
+            provider.editImage(setting, ImageEditParams(Model(modelId = "gpt-image-2.5-flare"), "edit", listOf(source.path),
+                customBody = listOf(CustomBody("quality", JsonPrimitive("hd")), CustomBody("quality", JsonPrimitive("max")),
+                    CustomBody("background", JsonPrimitive("transparent"))))).toList()
+            val multipart = requests.last().body as MultipartBody
+            val qualities = multipart.parts.filter { it.headers?.get("Content-Disposition")?.contains("name=\"quality\"") == true }
+            assertEquals(1, qualities.size)
+            assertEquals("max", Buffer().also { qualities.single().body.writeTo(it) }.readUtf8())
+        } finally { client.closeFixture() }
+    }
+
     @Test fun `empty successful image response fails on both user and routed provider paths`() = runBlocking {
         for (routed in listOf(false, true)) {
             val requests = mutableListOf<Request>()

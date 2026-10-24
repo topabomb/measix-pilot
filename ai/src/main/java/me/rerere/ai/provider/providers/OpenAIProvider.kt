@@ -42,11 +42,11 @@ import me.rerere.ai.provider.providers.openai.openAIRequestMediaCapabilities
 import me.rerere.ai.provider.images.ImageGenerationResponseParse
 import me.rerere.ai.provider.images.ParsedImageGenerationItem
 import me.rerere.ai.provider.images.requireUsableImages
+import me.rerere.ai.provider.images.validateOpenAIImageRequest
 import me.rerere.ai.provider.images.parseImageGenerationResponseBody
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.core.ModelRequestMessage
-import me.rerere.ai.util.CustomBodyReservedKeyException
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
@@ -253,6 +253,8 @@ class OpenAIProvider(
             }
                 .mergeCustomBody(params.customBody, if (resolveOpenAIEndpointVendor(providerSetting.baseUrl.toHttpUrl().host) == OpenAIEndpointVendor.OPENROUTER)
                     OPENROUTER_IMAGE_OWNERSHIP else OPENAI_IMAGE_GENERATION_OWNERSHIP)
+                .also { if (resolveOpenAIEndpointVendor(providerSetting.baseUrl.toHttpUrl().host) != OpenAIEndpointVendor.OPENROUTER)
+                    validateOpenAIImageRequest(params.model.modelId, it) }
         )
 
         val request = Request.Builder()
@@ -316,12 +318,22 @@ class OpenAIProvider(
             }.mergeCustomBody(params.customBody, OPENROUTER_IMAGE_OWNERSHIP))
                 .toRequestBody("application/json".toMediaType())
         } else {
+            val fields = buildJsonObject {
+                put("model", params.model.modelId)
+                put("prompt", params.prompt)
+                put("n", params.numOfImages)
+                imageRequestSize(providerSetting, params.size)?.let { put("size", it) }
+            }.mergeCustomBody(params.customBody, OPENAI_IMAGE_EDIT_OWNERSHIP)
+            validateOpenAIImageRequest(params.model.modelId, fields)
             val bodyBuilder = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart("model", params.model.modelId)
-                .addFormDataPart("prompt", params.prompt)
-                .addFormDataPart("n", params.numOfImages.toString())
-            imageRequestSize(providerSetting, params.size)?.let { bodyBuilder.addFormDataPart("size", it) }
+            fields.forEach { (key, element) ->
+                val value = when (element) {
+                    is JsonPrimitive -> element.contentOrNull ?: element.toString()
+                    else -> element.toString()
+                }
+                bodyBuilder.addFormDataPart(key, value)
+            }
 
             val imageFieldName = if (params.images.size == 1) "image" else "image[]"
             params.images.forEach { path ->
@@ -333,24 +345,6 @@ class OpenAIProvider(
                 )
             }
 
-            params.customBody.let { bodies ->
-                val conflicts = bodies.map { it.key }
-                    .filter { it.isNotBlank() && it in OPENAI_IMAGE_EDIT_OWNERSHIP.reservedKeys }
-                    .distinct()
-                if (conflicts.isNotEmpty()) {
-                    throw CustomBodyReservedKeyException(
-                        protocol = OPENAI_IMAGE_EDIT_OWNERSHIP.protocol,
-                        conflictingKeys = conflicts,
-                    )
-                }
-                bodies.forEach { customBody ->
-                    val value = when (val element = customBody.value) {
-                        is JsonPrimitive -> element.contentOrNull ?: element.toString()
-                        else -> element.toString()
-                    }
-                    bodyBuilder.addFormDataPart(customBody.key, value)
-                }
-            }
             bodyBuilder.build()
         }
         currentCoroutineContext().ensureActive()

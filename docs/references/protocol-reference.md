@@ -186,6 +186,13 @@ xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响�
 个人与受管 Images 请求在消费解析结果前统一要求至少一个非空图片数据或 URL；HTTP 200 的空结果以
 `image_generation_empty_result` 明确失败，全量审核拒绝仍保留 `moderation_blocked`，不改走其他端点。
 这一步只检查响应内容是否存在，实际图片解码及持久化仍由原资源链负责。
+`validateOpenAIImageRequest` 对精确 GPT Image 2／2.5 Sunburst／Flare 及已核实快照检查 Images 参数：
+生成 JSON 在 custom body 合并后校验，编辑表单从同一合并结果编码，每个字段只发送一次；受管 OpenAI Images
+沿同一校验入口，不开放受管 custom body。检查尺寸整除与比例、质量档位、背景与格式组合、压缩值及数量；
+未知型号和独立 OpenRouter 图片协议不套用这些约束，不改写旧模型设置。动态像素／边长上限仍由服务端判定并保留错误。
+Responses 工具没有开放上述 Images 参数，继续使用该工具自身缺省值；不能以 Images 参数校验推断 Responses 支持。
+依据：[Images 生成参数](https://developers.openai.com/api/reference/resources/images/methods/generate)、
+[Images 编辑参数](https://developers.openai.com/api/reference/resources/images/methods/edit)。
 分类与工具回传见 [`turn-step-execution.md`](turn-step-execution.md) 与 [`prompts-and-tools.md`](prompts-and-tools.md)。
 
 ## Chat Completions

@@ -41,7 +41,7 @@ import me.rerere.ai.provider.providers.openai.ResponseAPI
 import me.rerere.ai.provider.providers.openai.openAIRequestMediaCapabilities
 import me.rerere.ai.provider.images.ImageGenerationResponseParse
 import me.rerere.ai.provider.images.ParsedImageGenerationItem
-import me.rerere.ai.provider.images.moderationBlockedImageException
+import me.rerere.ai.provider.images.requireUsableImages
 import me.rerere.ai.provider.images.parseImageGenerationResponseBody
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
@@ -383,9 +383,7 @@ class OpenAIProvider(
         parsed: ImageGenerationResponseParse,
         privateRequest: Boolean,
     ): List<ImageGenerationItem> {
-        if (parsed.allBlockedByModeration && parsed.items.isEmpty()) {
-            throw moderationBlockedImageException()
-        }
+        parsed.requireUsableImages()
         return parsed.items.map { item ->
             when (item) {
                 is ParsedImageGenerationItem.Base64Json -> ImageGenerationItem(

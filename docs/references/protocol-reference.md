@@ -183,6 +183,9 @@ host
 HTTP 失败通过 `formatProviderHttpError()` 变成带 `statusCode` / `errorCode` / `errorType` 的 `HttpException`。
 OpenAI Images 使用 `error.code`（如 `moderation_blocked`、`content_policy_violation`、`rate_limit_exceeded`、`credit_balance_exhausted`、`invalid_api_key`）；
 xAI Imagine 使用相同信封或顶层 `code`/`message`，并可能在 200 响应里用 `respect_moderation=false` 标记审核未通过。
+个人与受管 Images 请求在消费解析结果前统一要求至少一个非空图片数据或 URL；HTTP 200 的空结果以
+`image_generation_empty_result` 明确失败，全量审核拒绝仍保留 `moderation_blocked`，不改走其他端点。
+这一步只检查响应内容是否存在，实际图片解码及持久化仍由原资源链负责。
 分类与工具回传见 [`turn-step-execution.md`](turn-step-execution.md) 与 [`prompts-and-tools.md`](prompts-and-tools.md)。
 
 ## Chat Completions
@@ -327,6 +330,8 @@ Responses 内置 `image_generation` 的 model 取自 `Model.responsesImageModel`
 服务端状态事件更新原片段，成功响应终态必须保留已见项身份且其状态已终止；只有这时标记完整。
 搜索查询、来源和错误状态使用 ai 的类型化显示投影，URL 引用从原 message annotations 进入已有可点击引用列表。
 图片结果替换原槽的占位图，不再前插第二张；聊天附件归属仍沿原 Artifact 链。
+成功终态也发布图片结果，因此只在最终 output 返回图片时仍会进入附件处理；已发布占位/完成帧按同槽更新，不重复新增。
+终态必须保留已见图片身份和已完成结果；空白/缺失结果、未结束状态、终态丢项或改图均明确失败。
 可见段按事件次序保存，raw output 仍按服务端原数组和批次回放，不用显示列表重建不透明状态。
 依据：[Web search output](https://developers.openai.com/api/docs/guides/tools-web-search)。
 

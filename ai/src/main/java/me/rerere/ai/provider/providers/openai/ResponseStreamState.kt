@@ -81,6 +81,12 @@ internal class ResponseStreamState(
             if (item.string("type") == "function_call_output" && "output" in found.item && "output" in item) {
                 check(found.item["output"] == item["output"]) { "responses_result_conflict: result changed" }
             }
+            if (item.string("type") == "image_generation_call" &&
+                !found.item.string("result").isNullOrBlank() && "result" in item) {
+                check(found.item["result"] == item["result"]) {
+                    "responses_image_output_conflict: completed image result changed"
+                }
+            }
             found.item = JsonObject(found.item + item)
             if (found.argumentsComplete) {
                 found.item = JsonObject(found.item + ("arguments" to JsonPrimitive(found.arguments)))
@@ -109,6 +115,15 @@ internal class ResponseStreamState(
                 check(terminal != null && terminal.string("type") == recorded.item.string("type") &&
                     (recorded.itemId == null || terminal.string("id") == recorded.itemId)) {
                     "responses_server_output_conflict: terminal lost or replaced a server item"
+                }
+            }
+            outputs.filter { it.item.string("type") == "image_generation_call" }.forEach { recorded ->
+                val terminal = recorded.outputIndex?.let { terminalItems.getOrNull(it) }
+                    ?: terminalItems.singleOrNull { it.string("id") == recorded.itemId }
+                check(terminal != null && terminal.string("type") == "image_generation_call" &&
+                    (recorded.itemId == null || terminal.string("id") == recorded.itemId) &&
+                    (recorded.item.string("result").isNullOrBlank() || terminal["result"] == recorded.item["result"])) {
+                    "responses_image_output_conflict: terminal lost or changed a streamed image"
                 }
             }
             outputs.filter { it.item.string("type") == "function_call_output" }.forEach { recorded ->

@@ -8,6 +8,52 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ResponseDisplayStateTest {
+    @Test fun `repeated completed image preserves its result and display slot`() {
+        val api = ResponseAPI(OkHttpClient())
+        val state = ResponseStreamState()
+        fun done(result: String) = Json.parseToJsonElement("""{"type":"response.output_item.done","output_index":0,"item":{"type":"image_generation_call","id":"img","result":"$result"}}""").jsonObject
+        val first = api.parseResponseDelta(done("QUJD"), state)!!.choices.single()
+        val repeated = api.parseResponseDelta(done("QUJD"), state)!!.choices.single()
+        assertEquals(first.contentBlockSlots, repeated.contentBlockSlots)
+        assertEquals(first.delta!!.parts, repeated.delta!!.parts)
+        for (replacement in listOf("changed", "", " ")) {
+            assertThrows(IllegalStateException::class.java) { api.parseResponseDelta(done(replacement), state) }
+        }
+        assertEquals("QUJD", state.outputItems().single()["result"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun `terminal only image is emitted and an announced image retains its display slot`() {
+        val api = ResponseAPI(OkHttpClient())
+        for (announce in listOf(false, true)) {
+            val state = ResponseStreamState()
+            val added = if (announce) api.parseResponseDelta(Json.parseToJsonElement("""{"type":"response.output_item.added","output_index":0,"item":{"type":"image_generation_call","id":"img"}}""").jsonObject, state) else null
+            val terminal = api.parseResponseDelta(Json.parseToJsonElement("""{"type":"response.completed","response":{"output":[{"type":"image_generation_call","id":"img","status":"completed","result":"QUJD"}]}}""").jsonObject, state)!!.choices.single()
+            assertEquals("QUJD", (terminal.delta!!.parts.single() as UIMessagePart.Image).url)
+            if (announce) assertEquals(added!!.choices.single().contentBlockSlots, terminal.contentBlockSlots)
+        }
+    }
+
+    @Test fun `successful image terminal rejects absent blank changed and unfinished results`() {
+        val api = ResponseAPI(OkHttpClient())
+        for (result in listOf("null", "\"\"", "\" \"", "42")) {
+            val output = """{"type":"image_generation_call","id":"img","result":$result}"""
+            assertThrows(IllegalStateException::class.java) {
+                api.parseResponseOutput(Json.parseToJsonElement("""{"status":"completed","output":[$output]}""").jsonObject)
+            }
+            assertThrows(IllegalStateException::class.java) {
+                api.parseResponseDelta(Json.parseToJsonElement("""{"type":"response.completed","response":{"output":[$output]}}""").jsonObject)
+            }
+        }
+        for (output in listOf("[]", """[{"type":"image_generation_call","id":"img","result":"changed"}]""",
+            """[{"type":"image_generation_call","id":"img","result":"QUJD","status":"in_progress"}]""")) {
+            val state = ResponseStreamState()
+            api.parseResponseDelta(Json.parseToJsonElement("""{"type":"response.output_item.done","output_index":0,"item":{"type":"image_generation_call","id":"img","result":"QUJD"}}""").jsonObject, state)
+            assertThrows(IllegalStateException::class.java) {
+                api.parseResponseDelta(Json.parseToJsonElement("""{"type":"response.completed","response":{"output":$output}}""").jsonObject, state)
+            }
+        }
+    }
+
     private fun event(id: String?, index: Int?, content: Int = 0) = buildJsonObject {
         put("type", "response.output_text.delta")
         id?.let { put("item_id", it) }; index?.let { put("output_index", it) }; put("content_index", content)

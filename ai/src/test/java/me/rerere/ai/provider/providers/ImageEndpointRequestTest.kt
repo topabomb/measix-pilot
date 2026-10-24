@@ -16,6 +16,27 @@ import org.junit.rules.TemporaryFolder
 class ImageEndpointRequestTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `empty successful image response fails on both user and routed provider paths`() = runBlocking {
+        for (routed in listOf(false, true)) {
+            val requests = mutableListOf<Request>()
+            val client = client(requests, response = """{"data":[]}""")
+            try {
+                val params = ImageGenerationParams(Model(modelId = "gpt-image-2.5-sunburst"), "draw")
+                try {
+                    if (routed) me.rerere.ai.provider.images.ManagedImageGenerationProvider(client).generate(
+                        me.rerere.ai.provider.images.ImageGenerationClientProtocol.OPENAI_IMAGES_GENERATIONS, params,
+                        emptyList(), RequestCredentials.Routed("https://relay.test/images", "fixture"),
+                    ).toList()
+                    else OpenAIProvider(client).generateImage(ProviderSetting.OpenAI(apiKey = "fixture"), params).toList()
+                    fail("empty image response completed successfully")
+                } catch (error: HttpException) {
+                    assertEquals("image_generation_empty_result", error.errorCode)
+                }
+                assertEquals(1, requests.size)
+            } finally { client.closeFixture() }
+        }
+    }
+
     @Test fun `OpenRouter generation and reference edits use one endpoint and preserve response MIME`() = runBlocking {
         val requests = mutableListOf<Request>()
         val client = client(requests)
@@ -78,10 +99,10 @@ class ImageEndpointRequestTest {
         } finally { client.closeFixture() }
     }
 
-    private fun client(requests: MutableList<Request>, status: Int = 200) = OkHttpClient.Builder().addInterceptor { chain ->
+    private fun client(requests: MutableList<Request>, status: Int = 200, response: String? = null) = OkHttpClient.Builder().addInterceptor { chain ->
         requests += chain.request()
         Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(status).message("fixture")
-            .body((if (status == 200) """{"data":[{"b64_json":"AA==","media_type":"image/webp"}]}"""
+            .body((response ?: if (status == 200) """{"data":[{"b64_json":"AA==","media_type":"image/webp"}]}"""
                 else """{"error":{"code":"rate_limit_exceeded","message":"fixture quota exhausted"}}""").toResponseBody()).build()
     }.build()
 

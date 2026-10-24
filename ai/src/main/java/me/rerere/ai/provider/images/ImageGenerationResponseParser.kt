@@ -155,6 +155,17 @@ fun moderationBlockedImageException(): HttpException = HttpException(
     errorType = "image_generation_user_error",
 )
 
+internal fun ImageGenerationResponseParse.requireUsableImages() {
+    if (items.isNotEmpty()) return
+    if (allBlockedByModeration) throw moderationBlockedImageException()
+    throw HttpException(
+        message = "Image generation response contains no image data or URL",
+        statusCode = 200,
+        errorCode = "image_generation_empty_result",
+        errorType = "image_generation_response_error",
+    )
+}
+
 private fun ImageGenerationItemWire.toParsed(defaultFormat: String?): ParsedImageGenerationItem? {
     if (!b64Json.isNullOrBlank()) {
         return ParsedImageGenerationItem.Base64Json(

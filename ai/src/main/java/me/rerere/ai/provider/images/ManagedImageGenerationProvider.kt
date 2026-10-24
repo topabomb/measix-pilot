@@ -81,9 +81,7 @@ internal class ManagedImageGenerationProvider(
                 }
             }
         }
-        if (parsed.allBlockedByModeration && parsed.items.isEmpty()) {
-            throw moderationBlockedImageException()
-        }
+        parsed.requireUsableImages()
         parsed.items.forEach { item ->
             emit(when (item) {
                 is ParsedImageGenerationItem.Base64Json -> ImageGenerationItem(item.data, item.mimeType)

@@ -869,7 +869,7 @@ class ResponseAPI(
                         )
                     )
                 } else if (type == "image_generation_call") {
-                    val result = item["result"]?.jsonPrimitive?.content ?: error("result not found")
+                    val result = responseImageResult(item)
                     return MessageChunk(
                         id = item["id"]?.jsonPrimitive?.content ?: error("item_id not found"),
                         model = "",
@@ -992,8 +992,21 @@ class ResponseAPI(
             resultStatus = ToolResultStatus.COMPLETED,
             metadata = ResponseFunctionResultMetadata(result).toMetadata(),
         ) }
-        val serverParts = outputItems.filter { it["type"]?.jsonPrimitive?.contentOrNull in RESPONSE_SERVER_TYPES }
-            .map { responseServerPart(it, streamState.responseEndpoint, complete = true) }
+        val contents = outputItems.mapNotNull { item ->
+            val part = when (item["type"]?.jsonPrimitive?.contentOrNull) {
+                in RESPONSE_SERVER_TYPES -> responseServerPart(item, streamState.responseEndpoint, complete = true)
+                "image_generation_call" -> UIMessagePart.Image(responseImageResult(item))
+                else -> return@mapNotNull null
+            }
+            val choice = streamState.display.decorate(buildJsonObject { put("item", item) }, UIMessageChoice(
+                index = 0, delta = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(part)), message = null, finishReason = null,
+            ))
+            part to choice.contentBlockSlots.single()
+        }
+        val toolSlots = results.keys.map(streamState::resultTargetSlot)
+        val toolContentSlots = streamState.display.decorate(buildJsonObject {}, UIMessageChoice(
+            index = 0, delta = UIMessage(role = MessageRole.ASSISTANT, parts = updates), message = null, finishReason = null, toolCallSlots = toolSlots,
+        )).contentBlockSlots
         return MessageChunk(
             id = responseId,
             model = "",
@@ -1002,7 +1015,7 @@ class ResponseAPI(
                     index = 0,
                     delta = UIMessage(
                         role = MessageRole.ASSISTANT,
-                        parts = updates + serverParts,
+                        parts = updates + contents.map { it.first },
                         annotations = responseAnnotations(outputItems),
                         providerMetadata = outputItems.takeIf { it.isNotEmpty() }?.let {
                             OpenAIResponseMetadata(
@@ -1014,11 +1027,12 @@ class ResponseAPI(
                     ),
                     message = null,
                     finishReason = finishReason,
-                    toolCallSlots = results.keys.map(streamState::resultTargetSlot),
+                    toolCallSlots = toolSlots,
+                    contentBlockSlots = toolContentSlots + contents.map { it.second },
                 )
             ),
             usage = usage,
-        ).let { chunk -> chunk.copy(choices = chunk.choices.map { streamState.display.decorate(buildJsonObject {}, it) }) }
+        )
     }
 
     private fun reasoningTextChunk(itemId: String, text: String): MessageChunk {
@@ -1069,8 +1083,12 @@ class ResponseAPI(
             when (type) {
                 in RESPONSE_SERVER_TYPES -> parts.add(responseServerPart(output, responseEndpoint,
                     complete = jsonObject["status"]?.jsonPrimitive?.contentOrNull == "completed"))
-                "image_generation_call" -> output["result"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }
-                    ?.let { parts.add(UIMessagePart.Image(it)) }
+                "image_generation_call" -> {
+                    if (jsonObject["status"]?.jsonPrimitive?.contentOrNull == "completed") {
+                        parts.add(UIMessagePart.Image(responseImageResult(output)))
+                    } else output["result"]?.jsonPrimitiveOrNull?.contentOrNull?.takeIf { it.isNotBlank() }
+                        ?.let { parts.add(UIMessagePart.Image(it)) }
+                }
                 "reasoning" -> {
                     // DeepSeek 返回完整 reasoning_text，OpenAI 通常返回 summary_text。
                     // content 优先可避免 DeepSeek 同时携带空 summary 时丢失正文；最终合并成一个 part，
@@ -1267,6 +1285,14 @@ class ResponseAPI(
 }
 
 internal val RESPONSE_SERVER_TYPES = setOf("web_search_call", "file_search_call", "code_interpreter_call")
+
+private fun responseImageResult(item: JsonObject): String {
+    val result = (item["result"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    check(!result.isNullOrBlank()) { "responses_image_result_missing: completed image generation item has no image result" }
+    val status = item["status"]?.jsonPrimitiveOrNull?.contentOrNull
+    check(status == null || status == "completed") { "responses_image_unfinished: image generation status=$status" }
+    return result
+}
 
 private fun responseAnnotations(items: List<JsonObject>): List<UIMessageAnnotation> = items
     .filter { it["type"]?.jsonPrimitiveOrNull?.contentOrNull == "message" }

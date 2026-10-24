@@ -9,6 +9,19 @@ import org.junit.Test
 
 class ImageGenerationResponseParserTest {
     @Test
+    fun `empty image responses fail distinctly from moderation and valid results remain usable`() {
+        for (body in listOf("{}", """{"data":[]}""", """{"data":[{"b64_json":" ","url":""}]}""")) {
+            val error = assertThrows(HttpException::class.java) { parseImageGenerationResponseBody(body).requireUsableImages() }
+            assertEquals("image_generation_empty_result", error.errorCode)
+        }
+        val moderated = assertThrows(HttpException::class.java) {
+            parseImageGenerationResponseBody("""{"data":[{"moderation_blocked":true}]}""").requireUsableImages()
+        }
+        assertEquals("moderation_blocked", moderated.errorCode)
+        parseImageGenerationResponseBody("""{"data":[{"b64_json":"QUJD"}]}""").requireUsableImages()
+    }
+
+    @Test
     fun `parses b64 items and default mime`() {
         val parsed = parseImageGenerationResponseBody(
             """{"data":[{"b64_json":"QUJD"}],"output_format":"webp"}""",

@@ -469,7 +469,16 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     add(JsonPrimitive("IMAGE"))
                 })
             }
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (ModelRegistry.GEMINI_4_ARGON.match(params.model.modelId)) {
+                require(params.reasoningLevel in setOf(ReasoningLevel.AUTO, ReasoningLevel.LOW, ReasoningLevel.MEDIUM, ReasoningLevel.HIGH)) {
+                    "gemini_argon_reasoning_unsupported: ${params.model.modelId} supports AUTO, LOW, MEDIUM or HIGH; selected ${params.reasoningLevel}"
+                }
+                put("thinkingConfig", buildJsonObject {
+                    put("includeThoughts", true)
+                    // AUTO leaves the model's medium default intact; no numeric budget or silent clamp.
+                    if (params.reasoningLevel != ReasoningLevel.AUTO) put("thinkingLevel", params.reasoningLevel.effort)
+                })
+            } else if (params.model.abilities.contains(ModelAbility.REASONING)) {
                 put("thinkingConfig", buildJsonObject {
                     put("includeThoughts", true)
 
@@ -585,7 +594,23 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     }.mergeCustomBody(
         params.customBody,
         GEMINI_OWNERSHIP,
-    )
+    ).also { body ->
+        if (ModelRegistry.GEMINI_4_ARGON.match(params.model.modelId)) {
+            val config = body["generationConfig"] as? JsonObject
+            require(config != null) { "gemini_argon_config_invalid: generationConfig must be an object for ${params.model.modelId}" }
+            val thinking = config["thinkingConfig"] as? JsonObject
+            require(thinking != null && "thinkingBudget" !in thinking &&
+                ("thinkingLevel" !in thinking || (thinking["thinkingLevel"] as? JsonPrimitive)?.content in setOf("low", "medium", "high"))) {
+                "gemini_argon_reasoning_unsupported: ${params.model.modelId} requires thinkingLevel low/medium/high or omitted; thinkingBudget is unsupported"
+            }
+            if ("maxOutputTokens" in config) {
+                val limit = (config["maxOutputTokens"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
+                require(limit != null && limit in 1..65_536) {
+                    "gemini_argon_output_limit_invalid: ${params.model.modelId} GenerateContent supports maxOutputTokens 1..65536 without long-decode continuation"
+                }
+            }
+        }
+    }
 
     private fun commonRoleToGoogleRole(role: MessageRole): String {
         return when (role) {

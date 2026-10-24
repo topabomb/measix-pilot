@@ -544,6 +544,57 @@ class GoogleProviderMessageTest {
     }
 
     @Test
+    fun `argon uses level thinking and preserves explicit model configuration`() {
+        val model = Model(modelId = "gemini-4-argon", abilities = emptyList())
+        for (level in listOf(ReasoningLevel.AUTO, ReasoningLevel.LOW, ReasoningLevel.MEDIUM, ReasoningLevel.HIGH)) {
+            val params = TextGenerationParams(model = model, reasoningLevel = level, maxTokens = 65_536)
+            val body = invokeBuildRequest(listOf(UIMessage.user("hello")), params)
+            val config = body["generationConfig"]!!.jsonObject
+            val thinking = config["thinkingConfig"]!!.jsonObject
+            assertFalse(thinking.containsKey("thinkingBudget"))
+            if (level == ReasoningLevel.AUTO) assertFalse(thinking.containsKey("thinkingLevel"))
+            else assertEquals(level.effort, thinking["thinkingLevel"]!!.jsonPrimitive.content)
+            assertEquals("65536", config["maxOutputTokens"]!!.jsonPrimitive.content)
+            assertTrue(model.abilities.isEmpty())
+            assertFalse(body.containsKey("background"))
+        }
+        val defaultBody = invokeBuildRequest(listOf(UIMessage.user("hello")), TextGenerationParams(model = model, reasoningLevel = ReasoningLevel.AUTO))
+        assertFalse(defaultBody["generationConfig"]!!.jsonObject.containsKey("maxOutputTokens"))
+    }
+
+    @Test
+    fun `argon rejects unsupported levels limits and custom body bypasses`() {
+        val model = Model(modelId = "gemini-4-argon", abilities = listOf(ModelAbility.REASONING))
+        fun reject(params: TextGenerationParams, reason: String) {
+            val error = org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+                invokeBuildRequest(listOf(UIMessage.user("hello")), params)
+            }
+            assertTrue(error.message.orEmpty(), error.message.orEmpty().contains(reason))
+        }
+        for (level in listOf(ReasoningLevel.OFF, ReasoningLevel.XHIGH, ReasoningLevel.MAX)) {
+            reject(TextGenerationParams(model = model, reasoningLevel = level), "gemini_argon_reasoning_unsupported")
+        }
+        for (limit in listOf(0, -1, 65_537)) {
+            reject(TextGenerationParams(model = model, reasoningLevel = ReasoningLevel.AUTO, maxTokens = limit), "gemini_argon_output_limit_invalid")
+        }
+        for (thinking in listOf(
+            buildJsonObject { put("thinkingBudget", 1000) },
+            buildJsonObject { put("thinkingLevel", "minimal") },
+            buildJsonObject { put("thinkingLevel", "max") },
+        )) {
+            reject(TextGenerationParams(model = model, reasoningLevel = ReasoningLevel.AUTO, customBody = listOf(me.rerere.ai.provider.CustomBody(
+                "generationConfig", buildJsonObject { put("thinkingConfig", thinking) },
+            ))), "gemini_argon_reasoning_unsupported")
+        }
+        reject(TextGenerationParams(model = model, reasoningLevel = ReasoningLevel.AUTO, customBody = listOf(me.rerere.ai.provider.CustomBody(
+            "generationConfig", buildJsonObject { put("maxOutputTokens", 65_537) },
+        ))), "gemini_argon_output_limit_invalid")
+        reject(TextGenerationParams(model = model, reasoningLevel = ReasoningLevel.AUTO, customBody = listOf(me.rerere.ai.provider.CustomBody(
+            "generationConfig", buildJsonObject { put("maxOutputTokens", "65536") },
+        ))), "gemini_argon_output_limit_invalid")
+    }
+
+    @Test
     fun `gemini function call id and thought signature should round trip exactly`() {
         val parsed = invokeParsePart(buildJsonObject {
             put("functionCall", buildJsonObject {

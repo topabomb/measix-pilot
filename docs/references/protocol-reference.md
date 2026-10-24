@@ -443,6 +443,12 @@ Claude 的 `BuiltInTools.Search` 编码为 `web_search_20250305`，与客户端�
 - `ModelRegistry.GEMINI_3_SERIES` 使用 `thinkingLevel`，项目 XHIGH / MAX 收敛为 HIGH。
 - `GEMINI_3_NO_MINIMAL_THINKING` 组的 OFF 映射为 `low`，其他已登记 Gemini 3 型号映射为 `minimal`。
   分组和相邻版本匹配由 `ModelRegistry` 维护，不在 serializer 复制型号名单。
+- `GEMINI_4_ARGON` 只匹配 `gemini-4-argon`，登记图片输入、文本输出、工具与推理能力；不推断未知后缀或其他 Gemini 4 型号。
+  Google 请求仅接受 AUTO/LOW/MEDIUM/HIGH，AUTO 省略 level，使用模型 medium 默认；OFF/XHIGH/MAX 明确拒绝，不沿用旧版静默降档。
+  这一型号使用 `thinkingLevel`，不发送 `thinkingBudget`；普通 GenerateContent 的 `maxOutputTokens` 可省略或为 1..65536 的整数。
+  自定义 body 合并后再次校验思考配置及输出上限，不能绕过约束。不新增 Interactions、background 或长输出自动续写。
+  型号约束不改写用户或企业已存能力配置；能力勾选也不能关闭模型本身强制的思考行为。
+  依据：[Argon 型号](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon)、[默认值与迁移](https://ai.google.dev/gemini-api/docs/latest-model)。
 - `GoogleThoughtMetadata` 在 Text、Reasoning、Image 和 FunctionCall 等 Part 上保留 `thoughtSignature`，并绑定
   产生它的 model ID 与 transport + 实际请求 endpoint host source profile；Vertex 使用
   实际固定的 `aiplatform.googleapis.com`。旧的无来源 opaque state

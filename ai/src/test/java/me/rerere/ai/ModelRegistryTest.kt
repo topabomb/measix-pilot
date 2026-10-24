@@ -10,6 +10,17 @@ import org.junit.Test
 
 class ModelRegistryTest {
     @Test
+    fun geminiArgonRegistrationIsExactAndDoesNotInventOutputModalities() {
+        assertTrue(ModelRegistry.GEMINI_4_ARGON.match("gemini-4-argon"))
+        assertEquals(listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData("gemini-4-argon"))
+        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_OUTPUT_MODALITIES.getData("gemini-4-argon"))
+        assertEquals(listOf(ModelAbility.TOOL, ModelAbility.REASONING), ModelRegistry.MODEL_ABILITIES.getData("gemini-4-argon"))
+        for (id in listOf("gemini-4", "gemini-4-argon-preview", "gemini-4-argon-image", "gemini-4.1-argon", "vendor/gemini-4-argon")) {
+            assertFalse(id, ModelRegistry.GEMINI_4_ARGON.match(id))
+        }
+    }
+
+    @Test
     fun qwenVlEditionsKeepTheirOwnCapabilitiesAcrossSizesAndChannels() {
         for (size in listOf("2B", "4B", "8B", "32B", "30B-A3B", "235B-A22B")) {
             for (prefix in listOf("", "Qwen/", "vendor/")) {

@@ -191,6 +191,12 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    val GEMINI_4_ARGON = defineModel {
+        exact("gemini-4-argon")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     val GEMINI_FLASH_LATEST = defineModel {
         exact("gemini-flash-latest")
         visionInput()
@@ -222,7 +228,7 @@ object ModelRegistry {
     }
 
     val GEMINI_SERIES = defineGroup {
-        add(GEMINI_20_FLASH, GEMINI_2_5_FLASH, GEMINI_2_5_PRO, GEMINI_3_SERIES, GEMINI_LATEST)
+        add(GEMINI_20_FLASH, GEMINI_2_5_FLASH, GEMINI_2_5_PRO, GEMINI_3_SERIES, GEMINI_4_ARGON, GEMINI_LATEST)
     }
 
     private val CLAUDE_SONNET_3_5 = defineModel {
@@ -715,6 +721,7 @@ object ModelRegistry {
         GEMINI_3_1_FLASH_IMAGE,
         GEMINI_3_5,
         GEMINI_3_7_FLASH,
+        GEMINI_4_ARGON,
         GEMINI_FLASH_LATEST,
         GEMINI_PRO_LATEST,
         CLAUDE_SONNET_3_5,

@@ -37,6 +37,55 @@ import kotlin.uuid.Uuid
 @RunWith(AndroidJUnit4::class)
 class UserSettingsMigrationAndroidTest {
     @Test
+    fun historyWindowSchemaUpgradeRollsBackRetriesAndKeepsNewSmallValuesAfterReopen() = runBlocking {
+        val file = testFile()
+        val assistant = net.weero.measix.pilot.data.model.Assistant(contextMessageLimit = 7)
+        val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_example"), "usr_one")
+        val original = UserSettingsDocument.empty().withPersonalSettings(Settings(assistants = listOf(assistant))).let {
+            it.copy(preferences = it.preferences.copy(scopes = it.preferences.scopes + ScopedUserPreferences(
+                enterprise, assistantUsage = listOf(net.weero.measix.pilot.data.configuration.AssistantUsagePreferences(
+                    assistant.id, contextMessageLimit = net.weero.measix.pilot.data.configuration.UsageValue(9),
+                )),
+            )))
+        }
+        val tree = JsonInstant.parseToJsonElement(JsonInstant.encodeToString(original)).jsonObject
+        val legacy = JsonObject(tree + ("schemaVersion" to kotlinx.serialization.json.JsonPrimitive(1))).toString()
+        val reject = object : DataMigration<Preferences> {
+            override suspend fun shouldMigrate(currentData: Preferences) = true
+            override suspend fun migrate(currentData: Preferences): Preferences = error("reject history upgrade")
+            override suspend fun cleanUp() = Unit
+        }
+        try {
+            withStore(file, false) { store -> store.edit {
+                it[SettingsStore.USER_SETTINGS] = legacy
+                it[SettingsStore.ASSISTANTS] = "invalid stale legacy key"
+            } }
+            val before = file.readBytes()
+            withStore(file, true, listOf(reject)) { store ->
+                try { store.data.first(); error("Expected failed upgrade") }
+                catch (expected: IllegalStateException) { assertEquals("reject history upgrade", expected.message) }
+            }
+            assertTrue(before.contentEquals(file.readBytes()))
+            withStore(file, true) { store ->
+                val migrated = JsonInstant.decodeFromString<UserSettingsDocument>(store.data.first()[SettingsStore.USER_SETTINGS]!!)
+                assertEquals(2, migrated.schemaVersion)
+                assertEquals(40, migrated.configuration.assistants.single().contextMessageLimit)
+                assertEquals(40, migrated.preferences.assistantUsage(enterprise, assistant.id)?.contextMessageLimit?.value)
+                val updated = migrated.withPersonalSettings(migrated.personalSettings().copy(assistants = listOf(assistant)))
+                store.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(updated) }
+            }
+            val upgradedBytes = file.readBytes()
+            withStore(file, true) { store ->
+                val restored = JsonInstant.decodeFromString<UserSettingsDocument>(store.data.first()[SettingsStore.USER_SETTINGS]!!)
+                assertEquals(7, restored.configuration.assistants.single().contextMessageLimit)
+                assertEquals(40, restored.preferences.assistantUsage(enterprise, assistant.id)?.contextMessageLimit?.value)
+                assertEquals("invalid stale legacy key", store.data.first()[SettingsStore.ASSISTANTS])
+            }
+            assertTrue(upgradedBytes.contentEquals(file.readBytes()))
+        } finally { file.delete() }
+    }
+
+    @Test
     fun principalMigrationRollsBackThenPreservesRetiredIdentityAndOpaqueBodiesAfterReopen() = runBlocking {
         val file = testFile()
         val original = UserSettingsDocument.empty()

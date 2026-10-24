@@ -36,7 +36,7 @@ class SettingsPersistenceContractTest {
 
         assertEquals(
             listOf(
-                "dynamicColor", "themeId", "customThemes", "displaySetting",
+                "settingsFormatVersion", "dynamicColor", "themeId", "customThemes", "displaySetting",
                 "favoriteModels", "collapsedModelGroupIds", "chatModelId", "fastModelId", "titleModelId",
                 "imageGenerationModelId", "titlePrompt", "enableSuggestion", "suggestionModelId",
                 "suggestionPrompt", "attachmentInspectionModelId", "compressModelId", "compressPrompt",
@@ -66,6 +66,8 @@ class SettingsPersistenceContractTest {
 
         val encoded = JsonInstant.encodeToString(goldenFixture())
         assertEquals(golden, encoded)
+        val beforeFormatVersion = golden.replaceFirst("\"settingsFormatVersion\":2,", "")
+        assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(migrateLegacySettingsJson(beforeFormatVersion))))
         val beforeProviderHeaders = golden.replace("\"balanceOption\":{\"enabled\":false,\"apiPath\":\"/credits\",\"resultPath\":\"data.total_usage\"},\"customHeaders\":[]", "\"balanceOption\":{\"enabled\":false,\"apiPath\":\"/credits\",\"resultPath\":\"data.total_usage\"}")
         assertEquals(encoded, JsonInstant.encodeToString(JsonInstant.decodeFromString<Settings>(beforeProviderHeaders)))
         val beforeResponsesPath = golden.replace("\"responsesPath\":\"/responses\",", "")

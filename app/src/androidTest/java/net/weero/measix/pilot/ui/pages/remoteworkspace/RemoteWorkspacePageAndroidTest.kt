@@ -65,6 +65,45 @@ class RemoteWorkspacePageAndroidTest {
     private val file = BrowserFile("notes.txt", false, 8, null, "\"v1\"")
     private val document = BrowserTextDocument(file, WorkspaceText("original", false, "\n"))
 
+    @Test fun delayedDirectoryReturnKeepsThePreviousListPosition() {
+        val f = Fixture()
+        val files = listOf(BrowserFile("child", true, null, null, null)) +
+            (1..80).map { file.copy(path = "file-${it.toString().padStart(3, '0')}.txt") }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var delayRoot = false
+        coEvery { f.service.list(f.handle, "") } coAnswers {
+            if (delayRoot) { entered.complete(Unit); release.await() }
+            BrowserDirectory("", files, null, null)
+        }
+        coEvery { f.service.list(f.handle, "child") } returns BrowserDirectory("child", emptyList(), null, null)
+        f.show()
+        compose.waitUntil(5_000) { f.vm.state.value.directory?.files?.size == files.size }
+        fun scrollPosition() = compose.onNodeWithTag("remote-file-list").fetchSemanticsNode()
+            .config[androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange].value()
+        compose.onNodeWithTag("remote-file-list").performScrollToIndex(40)
+        val previous = scrollPosition()
+        assertTrue(previous > 20f)
+        try {
+            compose.runOnUiThread { f.vm.browse("child") }
+            compose.waitUntil(5_000) { f.vm.state.value.directory?.path == "child" && !f.vm.state.value.loading }
+            val invalidated = CompletableDeferred<Unit>()
+            compose.runOnUiThread { compose.activity.lifecycleScope.launch {
+                requireNotNull(f.vm.state.value.handle).refresh()
+                invalidated.complete(Unit)
+            } }
+            compose.waitUntil(5_000) { invalidated.isCompleted }
+            delayRoot = true
+            compose.runOnUiThread { f.vm.browse("") }
+            compose.waitUntil(5_000) { entered.isCompleted }
+            compose.waitForIdle()
+            release.complete(Unit)
+            compose.waitUntil(5_000) { f.vm.state.value.directory?.path == "" }
+            compose.waitForIdle()
+            assertEquals(previous, scrollPosition(), .01f)
+        } finally { release.complete(Unit) }
+    }
+
     @Test fun resumeRefreshesOwnerAdmissionBeforeReadingDirectory() {
         val f = Fixture()
         f.show()

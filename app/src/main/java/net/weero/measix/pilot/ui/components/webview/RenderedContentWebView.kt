@@ -116,8 +116,9 @@ private suspend fun renderedContentWebViewState(
     val origin = android.net.Uri.parse(fileSource?.resourceOrigin ?: "https://measix-preview-${java.util.UUID.randomUUID()}.invalid")
     val messageSource = (document.source as? RenderedContentSource.Conversation)?.message
     val baseUrl = origin.toString() + (fileSource?.documentUrlPath ?: messageSource?.documentUrlPath).orEmpty()
+    val imageSizes = scrollPosition?.imageSizes().orEmpty()
     val html = withContext(kotlinx.coroutines.Dispatchers.Default) {
-        if (fileSource != null && !document.offlineDiagram) prepareStaticFileHtml(document.html, origin.toString(), scrollPosition?.imageSizes().orEmpty())
+        if (fileSource != null && !document.offlineDiagram) prepareStaticFileHtml(document.html, origin.toString(), imageSizes)
         else prepareRenderedHtml(document.html, origin.toString(), fileSource != null)
     }
     return WebViewState(
@@ -144,6 +145,7 @@ private suspend fun renderedContentWebViewState(
         },
         allowSameDocumentAnchors = fileSource != null,
         scrollPosition = scrollPosition,
+        restoreScrollAfterLoad = fileSource != null && !document.offlineDiagram && imageSizes.isNotEmpty(),
         interceptRequest = { uri ->
             fun denied() = WebResourceResponse("text/plain", "UTF-8", 403, "Unavailable", emptyMap(), java.io.ByteArrayInputStream(byteArrayOf()))
             try {

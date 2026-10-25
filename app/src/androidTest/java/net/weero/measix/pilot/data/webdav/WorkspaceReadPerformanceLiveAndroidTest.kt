@@ -17,6 +17,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.koin.core.context.GlobalContext
+import okio.buffer
 
 /** Opt-in production read-only comparison. The input is consumed once; credentials never enter evidence. */
 @RunWith(AndroidJUnit4::class)
@@ -31,11 +32,18 @@ class WorkspaceReadPerformanceLiveAndroidTest {
         val report = JSONObject().put("readOnly", true)
         val samples = JSONArray().also { report.put("samples", it) }
         val reportFile = File(context.cacheDir, "workspace-read-performance.json")
+        val evidenceLock = Any()
+        val probeOperation = java.util.concurrent.atomic.AtomicReference("")
+        val httpEvents = JSONArray().also { report.put("rawTransportEvents", it) }
+        val bodyReads = JSONArray().also { report.put("rawBodyReads", it) }
+        fun saveReport() = synchronized(evidenceLock) { reportFile.writeText(report.toString(2)) }
         var davBrowser: FileBrowserSession? = null
         var filesBrowser: FileBrowserSession? = null
         var rawHandle: WebDavHandle? = null
         var dav: WebDavApplicationService? = null
+        var probeHttp: okhttp3.OkHttpClient? = null
         suspend fun <T> measure(name: String, path: String = "", action: suspend () -> T): T {
+            probeOperation.set(name)
             val start = SystemClock.elapsedRealtime()
             val sample = JSONObject().put("operation", name).put("path", path)
             try { return withTimeout(60_000) { action() } }
@@ -43,7 +51,7 @@ class WorkspaceReadPerformanceLiveAndroidTest {
             finally {
                 sample.put("elapsedMs", SystemClock.elapsedRealtime() - start)
                 samples.put(sample)
-                reportFile.writeText(report.toString(2))
+                saveReport()
             }
         }
         try {
@@ -80,16 +88,101 @@ class WorkspaceReadPerformanceLiveAndroidTest {
                 val handle = davService.open(selection).also { rawHandle = it }
                 val target = handle.target as WebDavTarget.Enterprise
                 val token = platform.accessToken(access.sessionId, target.connection)
-                val transport = WebDavClient()
+                val probeClient = okhttp3.OkHttpClient.Builder()
+                    .followRedirects(false).followSslRedirects(false)
+                    .authenticator(okhttp3.Authenticator.NONE).proxyAuthenticator(okhttp3.Authenticator.NONE)
+                    .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                    .addNetworkInterceptor { chain ->
+                        val operation = probeOperation.get()
+                        val response = chain.proceed(chain.request())
+                        val originalBody = response.body
+                        val started = SystemClock.elapsedRealtime()
+                        val lastData = java.util.concurrent.atomic.AtomicLong(-1)
+                        val eof = java.util.concurrent.atomic.AtomicLong(-1)
+                        val readCalls = java.util.concurrent.atomic.AtomicInteger()
+                        val completed = java.util.concurrent.atomic.AtomicBoolean()
+                        val source = object : okio.ForwardingSource(originalBody.source()) {
+                            override fun read(sink: okio.Buffer, byteCount: Long): Long {
+                                val count = super.read(sink, byteCount)
+                                if (count > 0) { lastData.set(SystemClock.elapsedRealtime() - started); readCalls.incrementAndGet() }
+                                if (count == -1L) eof.set(SystemClock.elapsedRealtime() - started)
+                                return count
+                            }
+                            override fun close() {
+                                try { super.close() } finally {
+                                    if (completed.compareAndSet(false, true)) synchronized(evidenceLock) {
+                                        bodyReads.put(JSONObject().put("operation", operation)
+                                            .put("lastPositiveReadMs", lastData.get()).put("eofReadMs", eof.get())
+                                            .put("positiveReads", readCalls.get()).put("closeMs", SystemClock.elapsedRealtime() - started))
+                                    }
+                                }
+                            }
+                        }.buffer()
+                        response.newBuilder().body(object : okhttp3.ResponseBody() {
+                            override fun contentType() = originalBody.contentType()
+                            override fun contentLength() = originalBody.contentLength()
+                            override fun source() = source
+                        }).build()
+                    }
+                    .eventListenerFactory { call ->
+                        val started = SystemClock.elapsedRealtime()
+                        val event = JSONObject().put("operation", probeOperation.get())
+                            .put("epochMs", System.currentTimeMillis()).put("method", call.request().method)
+                            .put("path", call.request().url.encodedPath)
+                        object : okhttp3.EventListener() {
+                            override fun responseHeadersEnd(call: okhttp3.Call, response: okhttp3.Response) {
+                                event.put("headersMs", SystemClock.elapsedRealtime() - started)
+                                    .put("status", response.code).put("protocol", response.protocol.toString())
+                                    .put("contentLength", response.header("Content-Length") ?: "unknown")
+                                    .put("encoding", response.header("Content-Encoding") ?: "identity")
+                                    .put("requestId", response.header("X-Request-Id") ?: JSONObject.NULL)
+                                    .put("coreRequestId", response.header("X-Measix-Request-Id") ?: JSONObject.NULL)
+                            }
+                            override fun responseBodyStart(call: okhttp3.Call) {
+                                event.put("bodyReadStartMs", SystemClock.elapsedRealtime() - started)
+                            }
+                            override fun responseBodyEnd(call: okhttp3.Call, byteCount: Long) {
+                                event.put("bodyEndMs", SystemClock.elapsedRealtime() - started).put("bytes", byteCount)
+                            }
+                            override fun callEnd(call: okhttp3.Call) {
+                                event.put("callMs", SystemClock.elapsedRealtime() - started)
+                                synchronized(evidenceLock) { httpEvents.put(event) }
+                            }
+                            override fun callFailed(call: okhttp3.Call, ioe: java.io.IOException) {
+                                event.put("callMs", SystemClock.elapsedRealtime() - started).put("failureType", ioe.javaClass.simpleName)
+                                synchronized(evidenceLock) { httpEvents.put(event) }
+                            }
+                        }
+                    }.build().also { probeHttp = it }
+                val transport = WebDavClient(probeClient)
+                val filesTransport = PlatformWorkspaceClient(probeClient)
                 val auth = "Bearer ${token.value}"
                 report.put("resourceId", target.id).put("agentSpaceId", target.space)
                 val path = input.optString("directory", "")
-                repeat(3) {
+                val consistency = JSONArray().also { report.put("directoryComparisons", it) }
+                repeat(input.optInt("rounds", 5).coerceIn(3, 8)) {
+                    measure("workspace.status", path) { remote.readDavProjection(access) }
                     measure("files.refresh", path) { files.refresh() }
-                    measure("files.list", path) { files.list(path) }
+                    val fileList = measure("files.list", path) { files.list(path) }
                     measure("dav.refresh", path) { webdav.refresh() }
-                    measure("dav.list", path) { webdav.list(path) }
-                    measure("dav.transport.list", path) { transport.list(target.root, auth, path) }
+                    val davList = measure("dav.list", path) { webdav.list(path) }
+                    val rawFiles = measure("files.transport.list", path) {
+                        filesTransport.list(target.connection, token.value, requireNotNull(target.space), path)
+                    }
+                    val rawDav = measure("dav.transport.list", path) { transport.list(target.root, auth, path) }
+                    measure("workspace.transport.status", path) { filesTransport.state(target.connection, token.value) }
+                    val paths = fileList.files.map { entry -> entry.path }.toSet()
+                    val davPaths = davList.files.map { entry -> entry.path }.toSet()
+                    val rawFilePaths = rawFiles.entries.map { entry -> entry.path }.toSet()
+                    val rawDavPaths = rawDav.files.map { entry -> entry.path }.toSet()
+                    fun visible(values: Set<String>) = values.filterNot { path.isEmpty() && it == ".agent-space" }.toSet()
+                    consistency.put(JSONObject().put("entries", paths.size).put("samePaths",
+                        paths == davPaths && paths == rawFilePaths && paths == rawDavPaths)
+                        .put("sameVisiblePaths", paths == visible(davPaths) && paths == rawFilePaths && paths == visible(rawDavPaths))
+                        .put("davEntries", davPaths.size).put("rawDavEntries", rawDavPaths.size)
+                        .put("filesOnly", JSONArray((paths - davPaths).sorted()))
+                        .put("davOnly", JSONArray((davPaths - paths).sorted())))
                 }
                 measure("files.browse.cold", path) { files.browse(path) }
                 measure("dav.browse.cold", path) { webdav.browse(path) }
@@ -131,7 +224,9 @@ class WorkspaceReadPerformanceLiveAndroidTest {
             withContext(NonCancellable) {
                 filesBrowser?.close(); davBrowser?.close()
                 rawHandle?.let { dav?.close(it) }
-                reportFile.writeText(report.toString(2))
+                probeHttp?.connectionPool?.evictAll()
+                probeHttp?.dispatcher?.executorService?.shutdown()
+                saveReport()
             }
         }
     }

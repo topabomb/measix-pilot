@@ -209,6 +209,8 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 `MediaPreviewAndroidTest` 使用项目内的短 MP4 验证解码、原生控制条、拖动、全屏返回、后台停止及撤权；
 4 GiB 稀疏 MP4 将真实媒体数据放到超过 2 GiB 的偏移，验证 Long 寻址与有界读取，不代表 4 GiB 网络吞吐或持续播放测试。
 图片查看器、静态 SVG 验证和 `EditorInputConnectionAndroidTest` 分别覆盖图片操作、解析边界与原生惯性/查找/跳行。
+`EditorDraftAndroidTest` 验证离页解除原生 watcher/filter、保留草稿监听与注解，以及新绑定先接管时的迟到释放隔离；
+`RemoteWorkspacePageAndroidTest` 验证目录缓存失效后，延迟返回的空加载列表不覆盖历史滚动位置。
 编辑器的键盘缩放断言显式使用停靠键盘，并在 finally 恢复原手写模式；浮动手写 IME 可见但底部 inset 为零，不代表正文应缩短。
 这些设备证据不能代替真实 DAV 服务的 HEAD/206/If-Match、代理转发和中断响应验证；真实服务必须单独记录部署身份。
 
@@ -223,6 +225,8 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 `WorkspaceReadPerformanceLiveAndroidTest` 使用 `workspaceReadPerformanceInput` 指向 app cache 内一次性 JSON，
 包含 `platformUrl` 与 `enrollment`，或已接入专用设备的 `resumeEnrolled: true` 和原 `deploymentId`；可指定 `directory` 与 `video`。
 它只读比较同一目录的 Files/DAV 完整调用、原始 DAV 请求和缓存命中；未指定视频时最多检查八个目录寻找候选。
+`rounds` 限制为 3–8（默认 5），额外对照原始 Files、独立状态请求及响应头、正文读完与 EOF 时序；
+记录原始目录差异及排除根 `.agent-space` 管理项后的可见集合一致性，不记录凭据或文件正文。
 证据位于 `workspace-read-performance.json`，不写凭据。设备接入后用保留数据安装及直接 instrumentation，不能再运行会卸载应用的设备门禁。
 `ImagePreviewDialogTest` 另验证反复打开信息面板复用元信息，以及权限失效后不展示缓存信息。
 

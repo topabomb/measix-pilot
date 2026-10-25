@@ -89,6 +89,25 @@ class EnterpriseWebDavServiceTest {
         val service = WebDavApplicationService(queries, WebDavClient(), scope, sessions, platform, remote)
     }
 
+    @Test fun `fresh target capture reuses one observation but retained targets revalidate remotely`() = runTest {
+        val f = Fixture(backgroundScope)
+        val handle = f.service.open(selection)
+        coVerify(exactly = 1) { f.remote.readDavProjection(access) }
+        f.service.close(handle)
+        f.projection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+        try { f.service.captureExpected(access, handle.target, selection); fail("Old binding must not be recaptured") }
+        catch (failure: IllegalStateException) { assertEquals("webdav_binding_changed", failure.message) }
+        coVerify(exactly = 2) { f.remote.readDavProjection(access) }
+    }
+
+    @Test fun `fresh capture cannot replace a newer published binding with its observation`() = runTest {
+        val f = Fixture(backgroundScope)
+        f.publishedProjection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+        try { f.service.open(selection); fail("Older observation must not authorize the captured target") }
+        catch (failure: IllegalStateException) { assertEquals("webdav_binding_changed", failure.message) }
+        coVerify(exactly = 1) { f.remote.readDavProjection(access) }
+    }
+
     @Test fun `optional absent DAV never queries workspace and designation never falls back to first resource`() = runTest {
         val f = Fixture(backgroundScope)
         f.definitions = emptyList()

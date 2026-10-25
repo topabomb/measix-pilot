@@ -5,6 +5,15 @@ import org.junit.Test
 import org.jsoup.Jsoup
 
 class StaticFileHtmlTest {
+    @Test fun `stylesheet relation is a case insensitive token set`() {
+        val doc = Jsoup.parse(prepareStaticFileHtml("""
+            <link rel="preload StyleSheet" href="theme.css">
+            <link rel="alternate\tstylesheet" href="alternate.css" title="Alternate">
+            <link rel="icon preload" href="favicon.ico">
+        """.replace("\\t", "\t")))
+        assertEquals(listOf("theme.css", "alternate.css"), doc.select("link").map { it.attr("href") })
+    }
+
     @Test fun `static preview keeps styling images and anchors but cannot execute page actions`() {
         val html = """<base href="https://elsewhere/"><meta http-equiv="refresh" content="0;url=https://elsewhere/">
             <link rel="icon" href="missing.ico"><link rel="stylesheet" href="theme.css">

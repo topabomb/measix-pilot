@@ -65,7 +65,7 @@ internal class MyWebViewClient(private val state: WebViewState) : WebViewClient(
     }
 
     override fun onPageCommitVisible(view: WebView, url: String?) {
-        restoreScroll(view, finalLayout = false)
+        if (!state.restoreScrollAfterLoad) restoreScroll(view, finalLayout = false)
     }
     override fun shouldInterceptRequest(
         view: WebView,
@@ -288,6 +288,7 @@ class WebViewState(
     internal val onNavigate: ((String) -> Unit)? = null,
     internal val allowSameDocumentAnchors: Boolean = false,
     internal val scrollPosition: WebViewScrollPosition? = null,
+    internal val restoreScrollAfterLoad: Boolean = false,
 ) {
     internal var scrollRestored = false
     // --- Content State ---

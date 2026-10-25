@@ -9,6 +9,7 @@ import android.text.Editable
 import android.text.NoCopySpan
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.SpanWatcher
 import android.text.TextWatcher
 import android.text.InputType
 import android.text.style.ForegroundColorSpan
@@ -71,15 +72,20 @@ import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import net.weero.measix.pilot.ui.theme.AtomOneDarkPalette
 import net.weero.measix.pilot.ui.theme.AtomOneLightPalette
 
+/** One native binding borrows the draft until it closes. */
+internal interface FileEditorBinding : AutoCloseable {
+    fun beforeReplace(start: Int, end: Int, source: CharSequence, sourceStart: Int, sourceEnd: Int)
+}
+
 /** In-memory draft; the native editor and this state share the same editable buffer. */
 @Stable
 class FileEditorState(initialText: String = "") {
     internal var scrollX = 0
     internal var scrollY = 0
-    internal var beforeReplace: ((Int, Int, CharSequence, Int, Int) -> Unit)? = null
+    internal var binding: FileEditorBinding? = null
     internal val editable = object : SpannableStringBuilder(initialText) {
         override fun replace(start: Int, end: Int, source: CharSequence, sourceStart: Int, sourceEnd: Int): SpannableStringBuilder {
-            beforeReplace?.invoke(start, end, source, sourceStart, sourceEnd)
+            binding?.beforeReplace(start, end, source, sourceStart, sourceEnd)
             return super.replace(start, end, source, sourceStart, sourceEnd)
         }
     }
@@ -188,14 +194,15 @@ fun FileTextEditor(
                         nativeView = view
                         val restoredX = state.scrollX
                         val restoredY = state.scrollY
-                        view.doOnLayout { view.post { view.scrollTo(restoredX, restoredY) } }
-                        view.setOnScrollChangeListener { _, x, y, _, _ -> state.scrollX = x; state.scrollY = y }
+                        view.doOnLayout { view.post {
+                            if (state.binding === view) view.scrollTo(restoredX, restoredY)
+                        } }
+                        view.setOnScrollChangeListener { _, x, y, _, _ ->
+                            if (state.binding === view) { state.scrollX = x; state.scrollY = y }
+                        }
                     } },
                     onRelease = { view ->
-                        state.scrollX = view.scrollX; state.scrollY = view.scrollY
-                        state.beforeReplace = null
-                        view.stopScrolling()
-                        view.clearSyntaxHighlight()
+                        view.close()
                         if (nativeView === view) nativeView = null
                     },
                     modifier = Modifier.fillMaxWidth().then(
@@ -357,7 +364,7 @@ internal fun fileLineStarts(text: CharSequence): IntArray {
 // Compose owns styling; file editing keeps the platform buffer and input protocol without
 // AppCompat's emoji/content adapters. FileEditorInputConnection bounds the platform IME queries.
 @SuppressLint("AppCompatCustomView")
-internal class FileEditText(context: Context, state: FileEditorState) : EditText(context) {
+internal class FileEditText(context: Context, state: FileEditorState) : EditText(context), FileEditorBinding {
     private val editingKeyListener: android.text.method.KeyListener
     private val flingScroller = OverScroller(context)
     private val touchConfiguration = ViewConfiguration.get(context)
@@ -367,6 +374,9 @@ internal class FileEditText(context: Context, state: FileEditorState) : EditText
     private var selecting = false
     private var touchRevision = 0
     private val draft = state
+    private val originalWatchers: Set<Any>
+    private val originalFilters: Array<android.text.InputFilter>
+    private var closed = false
     private var currentReadOnly = false
     private var syntaxHighlight: FileSyntaxHighlight? = null
     private var syntaxPalette: HighlightTextColorPalette? = null
@@ -412,6 +422,12 @@ internal class FileEditText(context: Context, state: FileEditorState) : EditText
     }
 
     init {
+        // A draft has one native binding. Finish an older binding before recording the baseline;
+        // a later onRelease for that View must not clear the new View's callbacks or position.
+        state.binding?.close()
+        originalWatchers = state.editable.getSpans(0, state.editable.length, Any::class.java)
+            .filter { it is TextWatcher || it is SpanWatcher }.toSet()
+        originalFilters = state.editable.filters
         isSaveEnabled = false
         isSaveFromParentEnabled = false
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
@@ -432,18 +448,41 @@ internal class FileEditText(context: Context, state: FileEditorState) : EditText
             }
         })
         binding = false
-        state.beforeReplace = { start, end, source, sourceStart, sourceEnd ->
-            if (!horizontalLayout && replacementHasLongFileLine(text, start, end, source, sourceStart, sourceEnd)) {
-                // Rebuild the old layout before Editable captures its change
-                // watchers. Switching in Compose is too late for a large paste's reflow.
-                updateWrapping(true)
-                if (width > 0 && height > 0) {
-                    measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
-                        MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
-                    layout(left, top, right, bottom)
-                }
+        state.binding = this
+    }
+
+    override fun beforeReplace(start: Int, end: Int, source: CharSequence, sourceStart: Int, sourceEnd: Int) {
+        if (!horizontalLayout && replacementHasLongFileLine(text, start, end, source, sourceStart, sourceEnd)) {
+            // Rebuild before Editable captures its watchers, including for a large paste's reflow.
+            updateWrapping(true)
+            if (width > 0 && height > 0) {
+                measure(MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY))
+                layout(left, top, right, bottom)
             }
         }
+    }
+
+    override fun close() {
+        if (closed) return
+        closed = true
+        stopScrolling()
+        setOnScrollChangeListener(null)
+        if (draft.binding === this) {
+            draft.scrollX = scrollX; draft.scrollY = scrollY
+            clearSyntaxHighlight()
+            draft.binding = null
+            // TextView/Editor install watchers and undo filters in the shared buffer. History
+            // owns the draft, so retaining these callbacks would also retain the old native View.
+            draft.editable.getSpans(0, draft.editable.length, Any::class.java)
+                .filter { (it is TextWatcher || it is SpanWatcher) && it !in originalWatchers }
+                .forEach(draft.editable::removeSpan)
+            draft.editable.filters = originalFilters
+        }
+        // Detach without copying or replacing the retained draft body.
+        setEditableFactory(object : Editable.Factory() {
+            override fun newEditable(source: CharSequence): Editable = SpannableStringBuilder()
+        })
     }
 
     private var horizontalLayout = false

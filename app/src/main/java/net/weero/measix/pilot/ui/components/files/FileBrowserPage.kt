@@ -126,6 +126,7 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
             while (positions.size > 32) positions.remove(positions.keys.first())
         }
     }
+    val loadingListState = rememberLazyListState()
     LaunchedEffect(filter, hidden, sort) { if (filter.isNotEmpty()) fileListState.scrollToItem(0) }
     LaunchedEffect(state.results, state.running) {
         if (!state.running && state.results.isNotEmpty()) fileListState.scrollToItem(0)
@@ -348,7 +349,9 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                     title = stringResource(R.string.remote_workspace_operation_failed), onRetry = { vm.retry() },
                     onDismiss = vm::dismissError) }
                 PullToRefreshBox(isRefreshing = state.loading, onRefresh = { if (!state.running) vm.retry() }, modifier = Modifier.weight(1f)) {
-                    LazyColumn(Modifier.fillMaxSize().testTag("remote-file-list"), state = fileListState, contentPadding = PaddingValues(bottom = 8.dp)) {
+                    LazyColumn(Modifier.fillMaxSize().testTag("remote-file-list"),
+                        state = if (state.directory == null) loadingListState else fileListState,
+                        contentPadding = PaddingValues(bottom = 8.dp)) {
                         if (state.directory != null) item {
                             state.directory?.let { directory ->
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(horizontal = 8.dp)) {

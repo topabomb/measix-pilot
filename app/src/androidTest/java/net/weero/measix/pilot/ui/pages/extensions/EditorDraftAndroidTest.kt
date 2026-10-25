@@ -75,6 +75,73 @@ class EditorDraftAndroidTest {
     // Real repository IO must resume through queued composition work, not the legacy unconfined dispatcher.
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun leavingSourceReleasesNativeBufferCallbacksAndKeepsDraft() {
+        val state = net.weero.measix.pilot.ui.components.files.FileEditorState("retained draft")
+        val ownWatchers = state.editable.getSpans(0, state.editable.length, Any::class.java).toSet()
+        val annotation = android.text.style.ForegroundColorSpan(android.graphics.Color.RED)
+        state.editable.setSpan(annotation, 0, 4, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val originalFilters = state.editable.filters
+        var visible by mutableStateOf(true)
+        compose.setContent { host {
+            if (visible) net.weero.measix.pilot.ui.components.files.FileTextEditor(state, fillViewport = true)
+        } }
+        compose.waitForIdle()
+        var oldView: EditText? = null
+        onView(isAssignableFrom(EditText::class.java)).check { view, missing ->
+            if (missing != null) throw missing
+            oldView = view as EditText
+        }
+        var nativeWatchers = emptyList<Any>()
+        compose.runOnIdle {
+            nativeWatchers = state.editable.getSpans(0, state.editable.length, Any::class.java)
+                .filter { (it is android.text.TextWatcher || it is android.text.SpanWatcher) && it !in ownWatchers }
+            assertTrue("The native editor must have installed its buffer callbacks", nativeWatchers.isNotEmpty())
+            visible = false
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertTrue("History must not retain native editor callbacks", nativeWatchers.all { state.editable.getSpanStart(it) < 0 })
+            assertArrayEquals(originalFilters, state.editable.filters)
+            assertEquals("retained draft", state.snapshot())
+            assertEquals(0, state.editable.getSpanStart(annotation))
+            ownWatchers.forEach { assertTrue(state.editable.getSpanStart(it) >= 0) }
+            val position = state.scrollX to state.scrollY
+            requireNotNull(oldView).scrollTo(42, 84)
+            assertEquals("A released editor must not publish late scrolling", position, state.scrollX to state.scrollY)
+            val revision = state.revision
+            state.replaceText("updated draft")
+            assertTrue("The draft owner must keep observing edits", state.revision > revision)
+        }
+    }
+
+    @Test fun newNativeBindingClosesThePreviousOneBeforeTakingTheDraft() {
+        val state = net.weero.measix.pilot.ui.components.files.FileEditorState("retained draft")
+        val originalWatchers = state.editable.getSpans(0, state.editable.length, Any::class.java).toSet()
+        val originalFilters = state.editable.filters
+        compose.runOnIdle {
+            val first = net.weero.measix.pilot.ui.components.files.FileEditText(compose.activity, state)
+            try {
+                val second = net.weero.measix.pilot.ui.components.files.FileEditText(compose.activity, state)
+                try {
+                    assertTrue(first.text.isEmpty())
+                    assertSame(second, state.binding)
+                    assertSame(state.editable, second.text)
+                    val colour = net.weero.measix.pilot.ui.components.files.FileSyntaxColorSpan(android.graphics.Color.RED)
+                    state.editable.setSpan(colour, 0, 4, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    first.close()
+                    assertSame(second, state.binding)
+                    assertEquals(0, state.editable.getSpanStart(colour))
+                } finally { second.close() }
+            } finally { first.close() }
+            assertNull(state.binding)
+            assertEquals("retained draft", state.snapshot())
+            assertArrayEquals(originalFilters, state.editable.filters)
+            val retainedWatchers = state.editable.getSpans(0, state.editable.length, Any::class.java)
+                .filter { it is android.text.TextWatcher || it is android.text.SpanWatcher }.toSet()
+            assertEquals(originalWatchers, retainedWatchers)
+        }
+    }
+
     @Test fun sourceViewportRestoresWithoutSavingDocumentBody() {
         val body = (1..500).joinToString("\n") { "Source line $it" }
         val restoration = StateRestorationTester(compose)

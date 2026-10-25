@@ -11,7 +11,9 @@ internal fun prepareStaticFileHtml(html: String, origin: String = "https://previ
     val nonce = java.util.UUID.randomUUID().toString()
     document.select("script,base,iframe,frame,frameset,object,embed,portal").remove()
     document.select("meta[http-equiv]").remove()
-    document.select("link").filter { !it.attr("rel").equals("stylesheet", true) }.forEach { it.remove() }
+    document.select("link").filter { link ->
+        link.attr("rel").split(Regex("\\s+")).none { it.equals("stylesheet", true) }
+    }.forEach { it.remove() }
     document.select("form").forEach { it.tagName("div"); it.removeAttr("action") }
     document.select("*").forEach { element ->
         element.attributes().asList().filter { it.key.startsWith("on", true) || it.key.startsWith("data-preview-", true) || it.key == "nonce" || it.key in setOf("srcdoc", "autofocus", "autoplay", "formaction") }
@@ -81,10 +83,13 @@ private const val FILE_PREVIEW_CONTROLLER = """
   const release = img => {
     if (img.dataset.previewActive !== '1') return;
     delete img.dataset.previewActive;
-    sources(img).forEach(node => { node.removeAttribute('src'); node.removeAttribute('srcset'); });
     // Keep a replaced image box and its intrinsic dimensions without retaining the decoded resource.
     const placeholder = placeholders.get(img);
-    if (placeholder) img.src = placeholder;
+    sources(img).forEach(node => {
+      node.removeAttribute('srcset');
+      if (node === img && placeholder) node.src = placeholder;
+      else node.removeAttribute('src');
+    });
   };
   images.forEach((img, index) => {
     if (img.src.startsWith('PREVIEW_PLACEHOLDER_URL?')) placeholders.set(img, img.src);
@@ -96,7 +101,11 @@ private const val FILE_PREVIEW_CONTROLLER = """
     });
   });
   let observer;
+  // Restored intrinsic sizes must be decoded before real requests replace their placeholders.
+  // Native scroll restoration then sees the settled boxes, including images without width/height.
+  let waitingForLayout = images.some(img => placeholders.has(img)) && document.readyState !== 'complete';
   const watch = () => {
+    if (waitingForLayout) return;
     if (observer) observer.disconnect();
     observer = new IntersectionObserver(entries => entries.forEach(entry => {
       if (entry.isIntersecting) activate(entry.target);
@@ -104,7 +113,8 @@ private const val FILE_PREVIEW_CONTROLLER = """
     }), { rootMargin: Math.min(innerHeight, 900) + 'px 0px' });
     images.forEach(img => observer.observe(img));
   };
-  watch();
+  if (waitingForLayout) addEventListener('load', () => { waitingForLayout = false; watch(); }, { once: true });
+  else watch();
   addEventListener('resize', watch);
 })();
 """

@@ -67,16 +67,19 @@ class FileDocumentPreviewAndroidTest {
     }
 
     @Test fun htmlImageGeometryKeepsDeepPositionWhileReturningImagesAreStillLoading() {
-        val bitmap = android.graphics.Bitmap.createBitmap(40, 400, android.graphics.Bitmap.Config.ARGB_8888)
+        val bitmap = android.graphics.Bitmap.createBitmap(120, 1200, android.graphics.Bitmap.Config.ARGB_8888)
         val bytes = java.io.ByteArrayOutputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it); it.toByteArray() }
         bitmap.recycle()
-        val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val pendingImages = java.util.concurrent.atomic.AtomicInteger()
         var delayImages = false
         val file = RenderedFileSource("gallery.html", MutableStateFlow(Unit), {}, { it }, { _, _ ->
-            if (delayImages) resume.await()
+            if (delayImages) { pendingImages.incrementAndGet(); resume.await() }
             bytes
         })
-        val html = (0..7).joinToString("") { "<img src='image$it.png' width='120' style='display:block'>" }
+        val html = (0..7).joinToString("") {
+            "<img src='image$it.png' ${if (it < 4) "width='120'" else ""} style='display:block'>"
+        }
         var state = FilePreviewState()
         val restoration = androidx.compose.ui.test.junit4.StateRestorationTester(compose)
         restoration.setContent { Host {
@@ -89,21 +92,35 @@ class FileDocumentPreviewAndroidTest {
                 awaitScript("document.images[$index].scrollIntoView(); 'scrolled'") { state.webScroll.imageSizes().containsKey(index) }
             }
             awaitScript("document.readyState") { it.contains("complete") }
-            awaitScript("window.scrollTo(0,7000); window.scrollY.toString()") { it.contains("7000") && state.webScroll.y > 0 }
+            awaitScript("window.scrollTo(0,7000); window.scrollY.toString()") { result ->
+                result.contains("7000") && compose.runOnIdle {
+                    val view = requireNotNull(webView(compose.activity.window.decorView))
+                    @Suppress("DEPRECATION")
+                    state.webScroll.y == view.scrollY && kotlin.math.abs(state.webScroll.y / view.scale - 7000f) < 1f
+                }
+            }
             compose.runOnIdle {
                 val view = requireNotNull(webView(compose.activity.window.decorView))
                 assertEquals(view.scrollY, state.webScroll.y)
                 @Suppress("DEPRECATION")
                 assertEquals(7000f, state.webScroll.y / view.scale, 1f)
             }
-            delayImages = true
-            val previous = state
-            restoration.emulateSavedInstanceStateRestore()
-            compose.waitUntil(5_000) { state !== previous }
-            awaitScript("JSON.stringify({y:scrollY,height:document.documentElement.scrollHeight,ready:document.readyState})") { it.contains("7000") }
-            assertFalse(resume.isCompleted)
-            resume.complete(Unit)
-            awaitScript("document.readyState + '|' + window.scrollY") { it.contains("complete|7000") }
+            repeat(3) {
+                resume = kotlinx.coroutines.CompletableDeferred()
+                delayImages = true
+                val previous = state
+                val readsBefore = pendingImages.get()
+                restoration.emulateSavedInstanceStateRestore()
+                compose.waitUntil(5_000) { state !== previous }
+                awaitScript("JSON.stringify({y:scrollY,height:document.documentElement.scrollHeight,ready:document.readyState})") { it.contains("7000") }
+                compose.waitUntil(5_000) { pendingImages.get() > readsBefore }
+                assertFalse(resume.isCompleted)
+                resume.complete(Unit)
+                awaitScript("""(() => {
+                    const active = Array.from(document.images).filter(i => i.dataset.previewActive === '1');
+                    return document.readyState + '|' + (active.length > 0 && active.every(i => i.complete && !i.currentSrc.includes('.measix-preview-placeholder.svg'))) + '|' + scrollY;
+                })()""") { it.contains("complete|true|7000") }
+            }
         } finally { resume.complete(Unit) }
     }
 

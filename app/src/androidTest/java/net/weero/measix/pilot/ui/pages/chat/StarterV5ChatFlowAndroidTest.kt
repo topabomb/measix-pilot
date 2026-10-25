@@ -264,7 +264,7 @@ class StarterV5ChatFlowAndroidTest {
             }
             compose.onNodeWithTag("chat_input").assertTextEquals(prompt)
             compose.onNodeWithText(title).assertIsSelected()
-            assertTrue(runBlocking { query.recentConversations(access, assistant.id, 10) }.isEmpty())
+            assertTrue(awaitUi(30_000) { query.recentConversations(access, assistant.id, 10) }.isEmpty())
             server?.let { assertTrue(it.modelRequests.isEmpty()) }
             capture(evidence, "01-card-prefill.png")
             closeSoftKeyboard()
@@ -274,7 +274,7 @@ class StarterV5ChatFlowAndroidTest {
             compose.onNodeWithTag("chat_send_button").performClick()
             val row = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }.first { it.isNotEmpty() }.single() }
             createdId = row.id
-            val lease = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, access)) }
+            val lease = awaitUi(30_000) { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, access)) }
             view = lease
             val completed = awaitUi(60_000) { query.conversationUiModel(lease).first { model ->
                 val last = model?.snapshot?.currentMessages()?.lastOrNull()
@@ -291,7 +291,7 @@ class StarterV5ChatFlowAndroidTest {
             File(evidence, "provider-answer.txt").writeText(actualAnswer)
             assertEquals(listOf(prompt), transcript.filter { it.role == MessageRole.USER }.map { it.toText() })
             assertTrue(completed.snapshot.context.messages.values.none { it.updates.isNotEmpty() })
-            val durable = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
+            val durable = awaitUi(30_000) { requireNotNull(repository.getConversationSnapshotById(row.id)) }
             val saved = requireNotNull(durable.opening)
             assertEquals(definition, saved.definition)
             assertEquals(snapshot.getValue("releaseId").jsonPrimitive.content, saved.releaseId)
@@ -316,14 +316,14 @@ class StarterV5ChatFlowAndroidTest {
                 File(evidence, "provider-request.json").writeText(request.toString())
             }
             capture(evidence, "02-first-send.png")
-            val details = runBlocking { query.contextDetails(lease, row.id, answer.id) }.requests.single()
+            val details = awaitUi(30_000) { query.contextDetails(lease, row.id, answer.id) }.requests.single()
             val item = details.items.single { ConversationContextCategory.OPENING in it.categories }
-            val original = runBlocking { query.contextContent(lease, row.id, answer.id, details.id, item.key).text }
+            val original = awaitUi(30_000) { query.contextContent(lease, row.id, answer.id, details.id, item.key).text }
             val originalBlocks = Json.parseToJsonElement(original).jsonObject.getValue("blocks").jsonArray
             assertEquals(backgrounds.map { it.getValue("content").jsonPrimitive.content }, originalBlocks.map { it.jsonPrimitive.content })
             assertEquals(setOf("type", "blocks"), Json.parseToJsonElement(original).jsonObject.keys)
             val systemItem = details.items.single { ConversationContextCategory.SYSTEM in it.categories }
-            val admittedSystem = runBlocking { query.contextContent(lease, row.id, answer.id, details.id, systemItem.key).text }
+            val admittedSystem = awaitUi(30_000) { query.contextContent(lease, row.id, answer.id, details.id, systemItem.key).text }
             assertTrue(admittedSystem.contains(system))
             compose.onNodeWithText(original).assertDoesNotExist()
             compose.onNodeWithText(admittedSystem).assertDoesNotExist()
@@ -332,7 +332,7 @@ class StarterV5ChatFlowAndroidTest {
             view.close(); view = null
             activity.close(); activity = null
             // A direct repository read proves Room, independently of whether the runtime has been evicted.
-            val reopened = runBlocking { requireNotNull(repository.getConversationSnapshotById(row.id)) }
+            val reopened = awaitUi(30_000) { requireNotNull(repository.getConversationSnapshotById(row.id)) }
             assertEquals(saved, reopened.opening)
             assertEquals(durable.modelContextEntries, reopened.modelContextEntries)
             assertEquals(durable.contextAdmissions, reopened.contextAdmissions)
@@ -340,12 +340,12 @@ class StarterV5ChatFlowAndroidTest {
             activity = ActivityScenario.launch(Intent(context, RouteActivity::class.java).putExtra("conversationId", row.id.toString()))
             activity.onActivity { uiContext = it }
             compose.waitUntil(30_000) { compose.onAllNodesWithText(expectedAnswer).fetchSemanticsNodes().isNotEmpty() }
-            val reopenedView = runBlocking { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, access)) }
+            val reopenedView = awaitUi(30_000) { conversations.initialize(ConversationOpenRequest.OpenExisting(row.id, access)) }
             view = reopenedView
-            val reopenedDetails = runBlocking { query.contextDetails(reopenedView, row.id, answer.id) }.requests.single()
+            val reopenedDetails = awaitUi(30_000) { query.contextDetails(reopenedView, row.id, answer.id) }.requests.single()
             assertEquals(details, reopenedDetails)
-            assertEquals(original, runBlocking { query.contextContent(reopenedView, row.id, answer.id, details.id, item.key).text })
-            assertEquals(admittedSystem, runBlocking { query.contextContent(reopenedView, row.id, answer.id, details.id, systemItem.key).text })
+            assertEquals(original, awaitUi(30_000) { query.contextContent(reopenedView, row.id, answer.id, details.id, item.key).text })
+            assertEquals(admittedSystem, awaitUi(30_000) { query.contextContent(reopenedView, row.id, answer.id, details.id, systemItem.key).text })
             compose.onNodeWithText(original).assertDoesNotExist()
             compose.onNodeWithText(admittedSystem).assertDoesNotExist()
             compose.onAllNodesWithContentDescription(uiContext.getString(R.string.context_updated_accessibility)).assertCountEquals(0)
@@ -430,7 +430,9 @@ class StarterV5ChatFlowAndroidTest {
                 val forkId = awaitUi(30_000) { query.conversationsOfAssistant(assistant.id).map { it.getOrThrow() }
                     .first { rows -> rows.any { it.id !in beforeForkIds } }.single { it.id !in beforeForkIds }.id }
                 forkedId = forkId
-                compose.waitUntil(30_000) { runBlocking { settings.lastConversation(access.scope) } == forkId }
+                awaitUi(30_000) {
+                    while (settings.lastConversation(access.scope) != forkId) delay(10)
+                }
                 val fork = awaitUi(30_000) { requireNotNull(repository.getConversationSnapshotById(forkId)) }
                 assertEquals(access.scope, fork.header.scope)
                 assertEquals(assistant.id, fork.header.assistantId)
@@ -1239,6 +1241,7 @@ class StarterV5ChatFlowAndroidTest {
         error("enterprise_message_action_hidden_by_composer: $messageText")
     }
 
+    // Keep Compose effects advancing while suspend reads wait on the same Session/Settings locks.
     private fun <T> awaitUi(timeout: Long, action: suspend () -> T): T {
         val scope = CoroutineScope(Dispatchers.Default)
         val pending = scope.async { withTimeout(timeout) { action() } }

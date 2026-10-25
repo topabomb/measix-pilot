@@ -120,10 +120,15 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
     var filtering by remember { mutableStateOf(false) }
     var hidden by remember { mutableStateOf(false) }
     var sort by remember { mutableIntStateOf(0) }
-    val fileListState = rememberLazyListState()
-    LaunchedEffect(filter, hidden, sort, state.path) { fileListState.scrollToItem(0) }
-    LaunchedEffect(state.results, state.error, state.running) {
-        if (state.error != null || (!state.running && state.results.isNotEmpty())) fileListState.scrollToItem(0)
+    val positions = remember(state.handle) { linkedMapOf<String, androidx.compose.foundation.lazy.LazyListState>() }
+    val fileListState = remember(state.handle, state.path) {
+        positions.getOrPut(state.path) { androidx.compose.foundation.lazy.LazyListState() }.also {
+            while (positions.size > 32) positions.remove(positions.keys.first())
+        }
+    }
+    LaunchedEffect(filter, hidden, sort) { if (filter.isNotEmpty()) fileListState.scrollToItem(0) }
+    LaunchedEffect(state.results, state.running) {
+        if (!state.running && state.results.isNotEmpty()) fileListState.scrollToItem(0)
     }
     var menu by remember { mutableStateOf(false) }
     var add by remember { mutableStateOf(false) }
@@ -176,7 +181,7 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
     DisposableEffect(lifecycle, vm) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) scope.launch {
-                try { vm.source.refresh() }
+                try { vm.resume() }
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) { vm.report(error) }
             }
@@ -339,6 +344,9 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                     }
                 }
                 if (state.running) TransferStatus(state, vm::cancel)
+                state.error?.let { net.weero.measix.pilot.ui.components.ui.ErrorNotice(it,
+                    title = stringResource(R.string.remote_workspace_operation_failed), onRetry = { vm.retry() },
+                    onDismiss = vm::dismissError) }
                 PullToRefreshBox(isRefreshing = state.loading, onRefresh = { if (!state.running) vm.retry() }, modifier = Modifier.weight(1f)) {
                     LazyColumn(Modifier.fillMaxSize().testTag("remote-file-list"), state = fileListState, contentPadding = PaddingValues(bottom = 8.dp)) {
                         if (state.directory != null) item {
@@ -350,9 +358,6 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                                     directory.availableBytes?.let { Text(stringResource(R.string.remote_workspace_free, it.fileSizeToString()), style = MaterialTheme.typography.labelSmall) }
                                 }
                             }
-                        }
-                        if (state.error != null) item {
-                            state.error?.let { Text(stringResource(R.string.remote_workspace_operation_failed), color = MaterialTheme.colorScheme.error); Diagnostic(it) }
                         }
                         if ((state.results.isNotEmpty() && !state.running) || (wide && entries.isNotEmpty())) item {
                             if (state.results.isNotEmpty() && !state.running) {
@@ -612,9 +617,10 @@ private fun FolderDialog(handle: FileBrowserSession, prompt: FolderPrompt,
     dismiss: () -> Unit, choose: (String, List<BrowserFile>) -> Unit,
 ) {
     var path by remember { mutableStateOf("") }
+    var revision by remember { mutableIntStateOf(0) }
     var directory by remember { mutableStateOf<BrowserDirectory?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(path) {
+    LaunchedEffect(path, revision) {
         directory = null; error = null
         try { directory = handle.list(path) }
         catch (cancelled: CancellationException) { throw cancelled }
@@ -624,7 +630,7 @@ private fun FolderDialog(handle: FileBrowserSession, prompt: FolderPrompt,
         Column {
             Text(prompt.files.joinToString(", ") { it.name }, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             RemotePathBar(path) { path = it }
-            error?.let { Diagnostic(it) }
+            error?.let { net.weero.measix.pilot.ui.components.ui.ErrorNotice(it, onRetry = { revision++ }) }
             if (directory == null && error == null) CircularProgressIndicator()
             val folders = directory?.files.orEmpty().filter { it.directory && prompt.files.none { source -> source.directory && source.path == it.path } }.sortedBy { it.name.lowercase() }
             if (directory != null && folders.isEmpty()) Text(stringResource(R.string.remote_workspace_no_subfolders), style = MaterialTheme.typography.bodySmall)
@@ -694,7 +700,7 @@ private fun VerifyResultDialog(handle: FileBrowserSession, path: String,
                 }
                 Text(stringResource(R.string.remote_workspace_verify_explanation))
             }
-            error?.let { Text(stringResource(R.string.remote_workspace_operation_failed)); Diagnostic(it) }
+            error?.let { net.weero.measix.pilot.ui.components.ui.ErrorNotice(it, onDismiss = { error = null }) }
         }
     }, confirmButton = { TextButton({
         loading = true
@@ -803,7 +809,7 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
                     finally { source.close() }
                 }
                 fileTextFormat(file.name) != null -> {
-                    val fresh = handle.readText(file)
+                    val fresh = if (reload > 0) handle.readText(file) else handle.previewText(file)
                     editorSession.accept(fresh)
                 }
             }
@@ -887,8 +893,8 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
             if (state.running) TransferStatus(state, vm::cancel)
             val unavailable = !loading && document == null && pdf == null
             if (!unavailable) {
-                error?.let { Text(stringResource(R.string.remote_workspace_operation_failed)); Diagnostic(it) }
-                state.error?.let { Text(stringResource(R.string.remote_workspace_operation_failed)); Diagnostic(it) }
+                error?.let { net.weero.measix.pilot.ui.components.ui.ErrorNotice(it, onDismiss = { error = null }) }
+                state.error?.let { net.weero.measix.pilot.ui.components.ui.ErrorNotice(it, onDismiss = vm::dismissError) }
             }
             result?.takeIf { it.outcome != BrowserOutcome.SUCCEEDED }?.let {
                 Text(stringResource(when (it.outcome) {
@@ -902,7 +908,8 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
             if (editing && document?.file?.versioned == false) Text(stringResource(R.string.remote_workspace_no_version))
             when {
                 document != null && isRenderedFile(file.name) && !editing && !sourceView -> FileDocumentPreview(
-                    requireNotNull(renderedFile), document.content.text, file.name, Modifier.weight(1f).fillMaxWidth())
+                    requireNotNull(renderedFile), document.content.text, file.name, Modifier.weight(1f).fillMaxWidth(),
+                    onFileLink = { path, before -> vm.openLinkedFile(handle, path, before) })
                 document != null -> FileTextEditor(
                     state = editor,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -918,8 +925,8 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
                 }
                 !loading -> Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    error?.let { Text(stringResource(R.string.remote_workspace_operation_failed)); Diagnostic(it) }
-                    state.error?.let { Text(stringResource(R.string.remote_workspace_operation_failed)); Diagnostic(it) }
+                    error?.let { net.weero.measix.pilot.ui.components.ui.ErrorNotice(it, onRetry = { reload++ }) }
+                    state.error?.let { net.weero.measix.pilot.ui.components.ui.ErrorNotice(it, onDismiss = vm::dismissError) }
                     if (error == null) Text(stringResource(R.string.remote_workspace_preview_unsupported))
                     FlowRow {
                         if (error != null) TextButton({ reload++ }, enabled = !state.running) { Text(stringResource(R.string.enterprise_budget_refresh)) }

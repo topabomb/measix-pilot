@@ -306,7 +306,7 @@ fun ChatMessage(
                         markdown = textContent,
                         colorScheme = colorScheme
                     )
-                    richTextActions?.preview?.invoke(htmlContent)
+                    richTextActions?.preview?.invoke(htmlContent, false)
                 }
             },
             onDismissRequest = {

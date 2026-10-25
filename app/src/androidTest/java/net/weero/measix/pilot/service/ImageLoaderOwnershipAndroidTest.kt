@@ -17,6 +17,26 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class ImageLoaderOwnershipAndroidTest {
+    @Test fun previewPolicyAlsoAppliesToDefaultFullscreenImageRequests() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val loader = SingletonImageLoader.get(context)
+        val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+        val bytes = try {
+            ByteArrayOutputStream().use { output -> bitmap.compress(Bitmap.CompressFormat.PNG, 100, output); output.toByteArray() }
+        } finally { bitmap.recycle() }
+        var reads = 0
+        val source = ImageSource("preview-${UUID.randomUUID()}", ImageOrigin.LOCAL,
+            verifyAccess = {}, readPayload = { reads++; bytes }, memoryCacheEnabled = false)
+        // Like the fullscreen painter, the caller does not set a request cache policy.
+        val request = ImageRequest.Builder(context).data(source).size(8, 8).build()
+        repeat(2) {
+            val result = loader.execute(request)
+            assertTrue(result is SuccessResult)
+            assertNull((result as SuccessResult).memoryCacheKey)
+        }
+        assertEquals(2, reads)
+    }
+
     @Test fun applicationLoaderAuthorizesBeforeCacheAndAfterReadWithoutAnActivity() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val loader = SingletonImageLoader.get(context)

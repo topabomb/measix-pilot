@@ -365,7 +365,7 @@ private fun HtmlHeading(element: Element, onClickCitation: (String) -> Unit) {
     )
     val verticalPadding = HeaderStyle.verticalPadding(level)
     ProvideTextStyle(LocalTextStyle.current.merge(headingStyle)) {
-        Box(modifier = Modifier.padding(vertical = verticalPadding)) {
+        Box(modifier = Modifier.markdownAnchor(element.text(), element.id()).padding(vertical = verticalPadding)) {
             HtmlParagraph(element = element, onClickCitation = onClickCitation)
         }
     }

@@ -152,9 +152,11 @@ Markdown 全文预览只提取消息顶层 Text，经 `buildMarkdownPreviewHtml`
 三者不能视为同一套来源校验或浏览器状态策略。
 
 通用预览每次读取尝试分配随机 `.invalid` origin，并关闭 DOM Storage，使文档不沿用另一来源的 origin。
-这不等于禁用网络或建立独立 WebView profile：HTTP(S) 子资源仍可加载，也不会清理 Portal 的全局浏览器状态。
+这不等于建立独立 WebView profile，也不会清理 Portal 的全局浏览器状态；聊天/配置的 HTTP(S) 子资源仍可加载，
+工作区文档则禁用 WebView 网络回退并采用下述静态资源入口。
 来源未授权或已撤销时不创建/继续展示预览；`RenderedContentReadState` 区分 Loading、Unavailable、Failed 与 Ready。
-异常初始化、刷新或资源读取显示诊断，重试沿用原 `RenderedContent` 和来源，不能重建失效权限。
+异常初始化、刷新或资源读取显示诊断，重试沿用原来源，不能重建失效权限。工作区子资源失败保留正文，
+统一由文件预览宿主显示局部诊断，不再将缺失图片、样式或 favicon 提升为整页失败。
 旧回调只更新原读取尝试，不覆盖新文档；预览关闭或失败不主动关闭借用的父 lease，撤权按原查询门禁处理。
 每次读取尝试持有独立 Job，WebView 同步资源回调通过该 Job 运行底层挂起读取。关闭、重试、失败或撤权
 立即取消旧 Job 并拒绝迟到请求；原组合协程在清理阶段挂起等待读取退出，不在 Main 阻塞等待。
@@ -166,7 +168,11 @@ Markdown 全文预览只提取消息顶层 Text，经 `buildMarkdownPreviewHtml`
 HTML/SVG 不获得 Portal Bridge，也不注入业务 JavaScript 接口。
 
 工作区文件来源为 `RenderedContentSource.WorkspaceFile`，借用 `RenderedFileSource` 的原文档身份和目录；
-虚拟 origin 下的相对 URL 经 `readRenderedResource` 交回原服务，按 MIME 返回 CSS/JS/图片等有界字节。
+虚拟 origin 下的相对 URL 经 `readRenderedResource` 交回原服务，按 MIME 返回 CSS/字体/图片的有界字节。
+文件文档移除自带脚本、事件属性和活动标签，CSP 仅允许随机 nonce 对应的应用内置图片视口控制器；
+不向文件开放业务脚本接口。保留 CSS、图片、页内锚点和源码切换。原生 file/content
+访问仍关闭，公网及内嵌资源同样通过有界读取，加载详情、预算与超时由工作区专题维护。
+`RenderedContent.offlineDiagram` 仅标记由应用构造的 Mermaid 全屏文档，不能通过检测文件文本来授予脚本权限。
 它不访问聊天 Artifact；页面中的 base 标签不能更换借用目录。`FileDocumentPreview` 同时观察文件来源变化，
 因此没有新网络请求的已加载 Markdown、HTML/SVG 或 Mermaid 也会在撤权时撤下；细节见 [工作区架构](workspace-architecture.md)。
 

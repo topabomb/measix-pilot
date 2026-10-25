@@ -92,6 +92,7 @@ internal open class FileBrowserVM(
                     // Validation may suspend while a server switch opens a different session.
                     if (_state.value.handle === handle) {
                         overwriteAnswer?.cancel()
+                        previewHistory.clear()
                         _state.update { it.copy(handle = null, directory = null, revoked = true, error = null,
                             preview = null, editorSession = null, save = null, overwrite = null, results = emptyList(), progress = 0, total = null, activeIndex = null) }
                     }
@@ -101,9 +102,15 @@ internal open class FileBrowserVM(
         }
     }
 
-    fun retry() = loadDirectory(force = false)
+    fun retry() = loadDirectory(force = false, refresh = true)
 
-    private fun loadDirectory(force: Boolean) {
+    fun resume() {
+        if (_state.value.revoked) return
+        val handle = _state.value.handle ?: return
+        loadDirectory(force = false, refresh = false, resumeHandle = handle)
+    }
+
+    private fun loadDirectory(force: Boolean, refresh: Boolean = true, resumeHandle: FileBrowserSession? = null) {
         if (source.selection == null || _state.value.running || leaving) return
         val path = _state.value.path
         if (!force && readJob?.isActive == true && readPath == path) return
@@ -114,13 +121,17 @@ internal open class FileBrowserVM(
             var acquired: FileBrowserSession? = null
             _state.update { it.copy(loading = true, error = null) }
             try {
-                if (_state.value.handle != null) source.refresh()
-                val handle = _state.value.handle ?: source.open().also { acquired = it }
+                if (resumeHandle != null) {
+                    source.refresh()
+                    if (!resumeHandle.isValid() || _state.value.revoked || _state.value.handle !== resumeHandle) return@launch
+                }
+                if (refresh) _state.value.handle?.refresh()
+                val handle = resumeHandle ?: _state.value.handle ?: source.open().also { acquired = it }
                 ensureActive()
                 if (revision != readRevision) return@launch
                 _state.update { it.copy(handle = handle, revoked = false) }
                 acquired = null
-                val directory = handle.list(path)
+                val directory = if (refresh) handle.list(path) else handle.browse(path)
                 if (revision == readRevision && _state.value.handle === handle) _state.update { it.copy(directory = directory) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { if (revision == readRevision) report(error) }
@@ -135,20 +146,43 @@ internal open class FileBrowserVM(
         if (_state.value.running || leaving) return
         _state.value.handle?.path(path) ?: return
         _state.update { it.copy(path = path, directory = null) }
-        retry()
+        loadDirectory(force = false, refresh = false)
     }
+
+    private val previewHistory = java.util.ArrayDeque<Pair<BrowserFile, FileBrowserEditorSession>>()
 
     fun openPreview(file: BrowserFile) {
         if (leaving) return
         val handle = _state.value.handle ?: return
+        previewHistory.clear()
         if (!_state.value.running) _state.update {
             it.copy(preview = file, editorSession = FileBrowserEditorSession(handle, file.path), save = null)
         }
     }
 
+    suspend fun openLinkedFile(handle: FileBrowserSession, path: String, beforeNavigation: () -> Unit = {}) {
+        val before = _state.value
+        check(!before.running && before.handle === handle && before.editorSession?.editing != true) { "workspace_navigation_unavailable" }
+        val file = requireNotNull(handle.stat(path)) { "workspace_file_missing: $path" }
+        check(handle.isValid() && _state.value.handle === handle && _state.value.preview == before.preview) { "rendered_file_revoked" }
+        check(!leaving && !_state.value.running && _state.value.editorSession === before.editorSession &&
+            before.editorSession?.editing != true) { "workspace_navigation_unavailable" }
+        beforeNavigation()
+        if (file.directory) {
+            previewHistory.clear()
+            _state.update { it.copy(preview = null, editorSession = null, save = null) }
+            browse(file.path)
+        } else {
+            if (before.preview != null && before.editorSession != null) previewHistory.addLast(before.preview to before.editorSession)
+            while (previewHistory.size > 16) previewHistory.removeFirst()
+            _state.update { it.copy(preview = file, editorSession = FileBrowserEditorSession(handle, file.path), save = null) }
+        }
+    }
+
     fun closePreview() {
         if (_state.value.save?.result == null && _state.value.save != null) return
-        _state.update { it.copy(preview = null, editorSession = null, save = null) }
+        val previous = previewHistory.pollLast()
+        _state.update { it.copy(preview = previous?.first, editorSession = previous?.second, save = null) }
     }
 
     fun clearSave() { if (!_state.value.running) _state.update { it.copy(save = null) } }
@@ -157,6 +191,8 @@ internal open class FileBrowserVM(
     fun dismissVerifiedResult(handle: FileBrowserSession, path: String) {
         _state.update { if (it.running || it.handle !== handle) it else it.copy(results = it.results.filterNot { result -> result.path == path }) }
     }
+
+    fun dismissError() { _state.update { it.copy(error = null) } }
 
     fun report(error: Throwable) {
         android.util.Log.e("RemoteWorkspacePage", "Remote file operation failed", error)
@@ -382,6 +418,7 @@ internal open class FileBrowserVM(
 
     private suspend fun closeTarget() {
         leaving = true
+        previewHistory.clear()
         ++readRevision
         pendingUpload = null
         pendingDownload = null
@@ -403,6 +440,7 @@ internal open class FileBrowserVM(
     }
 
     override fun onCleared() {
+        previewHistory.clear()
         _state.value.handle?.closeLater()
         _state.update { it.copy(preview = null, editorSession = null, save = null) }
     }

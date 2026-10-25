@@ -27,6 +27,22 @@ class ChatErrorCardAndroidTest {
     @get:Rule val compose = createComposeRule()
     private val context = ApplicationProvider.getApplicationContext<Context>()
 
+    @Test fun swipeDismissUsesTheSameCallbackWhileReadFailuresCannotBeSwipedAway() {
+        var visible by mutableStateOf(true)
+        var dismissals = 0
+        val error = ChatError(detail = "network unavailable", retention = ChatErrorRetention.UNTIL_DISMISSED)
+        compose.setContent { MaterialTheme { Column {
+            if (visible) ErrorCard(error, Modifier.testTag("dismissible"), onDismiss = { visible = false; dismissals++ })
+            ErrorCard(error.copy(id = kotlin.uuid.Uuid.random()), Modifier.testTag("required"), onRetry = {})
+        } } }
+        compose.onNodeWithTag("dismissible").performTouchInput { swipeLeft() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("dismissible").assertDoesNotExist()
+        assertEquals(1, dismissals)
+        compose.onNodeWithTag("required").performTouchInput { swipeLeft() }
+        compose.onNodeWithTag("required").assertIsDisplayed()
+    }
+
     @Test fun longDiagnosticsStayCompactAndCopyDoesNotDismiss() {
         val diagnostic = "IOException: " + (1..50).joinToString("\n") { "payload failure $it with original diagnostic" }
         val error = ChatError(detail = diagnostic, retention = ChatErrorRetention.UNTIL_DISMISSED)

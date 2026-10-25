@@ -451,7 +451,7 @@ class RouteActivity : ComponentActivity() {
                             }
 
                             entry<Screen.ContentPreview> { key ->
-                                ContentPreviewPage(key.document)
+                                ContentPreviewPage(key.document, key.onFileLink)
                             }
 
                             entry<Screen.SettingTheme> {
@@ -798,6 +798,7 @@ sealed interface Screen : NavKey {
     data class ContentPreview(
         val id: String = java.util.UUID.randomUUID().toString(),
         @kotlinx.serialization.Transient val document: net.weero.measix.pilot.service.RenderedContent? = null,
+        @kotlinx.serialization.Transient val onFileLink: (suspend (String, () -> Unit) -> Unit)? = null,
     ) : Screen
 
     @Serializable

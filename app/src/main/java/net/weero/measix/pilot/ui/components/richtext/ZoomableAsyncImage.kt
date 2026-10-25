@@ -11,6 +11,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.DefaultAlpha
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -108,10 +113,21 @@ internal fun ResolvedImage(
     if (preview?.diagnostic != null) {
         net.weero.measix.pilot.ui.components.message.AttachmentPreviewDiagnostic(preview)
     } else {
+        val workspace = LocalRenderedContentSource.current is net.weero.measix.pilot.service.RenderedContentSource.WorkspaceFile
+        var visible by remember(url, LocalRenderedContentSource.current) { mutableStateOf(!workspace) }
+        var height by remember(url, LocalRenderedContentSource.current, androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp) { mutableStateOf(120.dp) }
+        val density = LocalDensity.current
+        val window = androidx.compose.ui.platform.LocalView.current
+        val viewport = if (!workspace) modifier else modifier.heightIn(min = height).onGloballyPositioned { coordinates ->
+            val top = coordinates.localToWindow(androidx.compose.ui.geometry.Offset.Zero).y
+            val preload = window.height.coerceAtLeast(1).toFloat()
+            visible = coordinates.size.width > 0 && top < window.height + preload && top + coordinates.size.height > -preload
+            if (visible) height = with(density) { coordinates.size.height.toDp().coerceAtLeast(120.dp) }
+        }
         ZoomableAsyncImage(
-            model = rememberResolvedImageSource(url),
+            model = if (visible) rememberResolvedImageSource(url) else null,
             contentDescription = contentDescription,
-            modifier = modifier,
+            modifier = viewport,
             contentScale = contentScale,
         )
     }

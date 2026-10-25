@@ -70,7 +70,9 @@ class ToastHostAndroidTest {
             MaterialTheme {
                 val state = rememberToasterState()
                 LaunchedEffect(Unit) { state.show(message, duration = Duration.INFINITE) }
-                Box(Modifier.fillMaxSize()) { Toaster(state) }
+                androidx.compose.runtime.CompositionLocalProvider(
+                    net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()
+                ) { Box(Modifier.fillMaxSize()) { Toaster(state) } }
             }
         }
         compose.onNodeWithText(compose.activity.getString(R.string.toast_details)).performClick()

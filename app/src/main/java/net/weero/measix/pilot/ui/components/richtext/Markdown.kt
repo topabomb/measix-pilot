@@ -408,11 +408,15 @@ private fun MarkdownNode(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     node.children.fastForEach { node ->
                         if (node.type == MarkdownTokenTypes.ATX_CONTENT) {
+                            val headingModifier = if (LocalMarkdownAnchors.current != null) {
+                                val headingSource = node.getTextInNode(content).toString()
+                                modifier.markdownAnchor(remember(headingSource) { markdownHeadingText(headingSource) })
+                            } else modifier
                             Paragraph(
                                 node = node,
                                 content = content,
                                 onClickCitation = onClickCitation,
-                                modifier = modifier.padding(vertical = headingPadding),
+                                modifier = headingModifier.padding(vertical = headingPadding),
                                 trim = true,
                             )
                         }

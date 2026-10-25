@@ -49,22 +49,31 @@ import net.weero.measix.pilot.ui.theme.JetbrainsMono
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ContentPreviewPage(document: RenderedContent?) {
-    RichTextHost(document?.source) { ContentPreview(document) }
+fun ContentPreviewPage(document: RenderedContent?, onFileLink: (suspend (String, () -> Unit) -> Unit)? = null) {
+    val navigation = net.weero.measix.pilot.ui.context.LocalNavController.current
+    var revision by remember(document) { mutableIntStateOf(0) }
+    val file = (document?.source as? net.weero.measix.pilot.service.RenderedContentSource.WorkspaceFile)?.file
+    val preview = remember(file, revision) { file?.newPreview() }
+    androidx.compose.runtime.DisposableEffect(preview) { onDispose { preview?.close() } }
+    val current = remember(document, preview) {
+        if (preview == null) document else document?.copy(source = net.weero.measix.pilot.service.RenderedContentSource.WorkspaceFile(preview))
+    }
+    Column(Modifier.fillMaxSize()) {
+        key(current, revision) { RichTextHost(current?.source, onFileLink = onFileLink, beforeFileNavigation = { navigation.popBackStack() }) { ContentPreview(current) { revision++ } } }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ContentPreview(document: RenderedContent?) {
-    var readRevision by remember(document) { mutableIntStateOf(0) }
-    val read = rememberRenderedContentState(document, readRevision = readRevision)
+private fun ContentPreview(document: RenderedContent?, retry: () -> Unit) {
+    val read = rememberRenderedContentState(document)
     val state = (read as? RenderedContentReadState.Ready)?.webView
     if (state == null) {
         Scaffold(topBar = { TopAppBar(title = { Text(stringResource(R.string.code_block_preview)) }, navigationIcon = { BackButton() }) }) {
             when (read) {
                 RenderedContentReadState.Loading -> LinearProgressIndicator(Modifier.padding(it).fillMaxWidth())
                 RenderedContentReadState.Unavailable -> Text(stringResource(R.string.rendered_content_unavailable), Modifier.padding(it).padding(16.dp))
-                is RenderedContentReadState.Failed -> RenderedContentReadFailure(read.error, { readRevision++ },
+                is RenderedContentReadState.Failed -> RenderedContentReadFailure(read.error, retry,
                     Modifier.padding(it).verticalScroll(rememberScrollState()))
                 is RenderedContentReadState.Ready -> Unit
             }
@@ -90,7 +99,7 @@ private fun ContentPreview(document: RenderedContent?) {
                     BackButton()
                 },
                 actions = {
-                    IconButton(onClick = { readRevision++ }) {
+                    IconButton(onClick = retry) {
                         Icon(HugeIcons.Refresh01, contentDescription = "Refresh")
                     }
 
@@ -117,8 +126,11 @@ private fun ContentPreview(document: RenderedContent?) {
             )
         }
     ) {
-        key(state) {
-            WebView(state = state, modifier = Modifier.fillMaxSize().padding(it))
+        Column(Modifier.fillMaxSize().padding(it)) {
+            (document?.source as? net.weero.measix.pilot.service.RenderedContentSource.WorkspaceFile)?.file?.let { file ->
+                net.weero.measix.pilot.ui.components.files.FilePreviewResourceStatus(file, retry)
+            }
+            key(state) { WebView(state = state, modifier = Modifier.weight(1f).fillMaxWidth()) }
         }
     }
 

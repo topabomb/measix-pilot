@@ -19,11 +19,27 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class WebDavBrowserServiceTest {
+    @Test fun `session browse reuses snapshots but refresh and writes invalidate them`() = runTest {
+        val f = Fixture(backgroundScope)
+        val session = f.source.open()
+        coEvery { f.dav.list(f.handle, "") } returns net.weero.measix.pilot.data.webdav.DavDirectory(emptyList(), null, null, null)
+        coEvery { f.dav.mkdir(f.handle, "new") } returns Unit
+        session.browse("")
+        session.browse("")
+        coVerify(exactly = 1) { f.dav.list(f.handle, "") }
+        session.createDirectory("new")
+        session.browse("")
+        session.refresh()
+        session.browse("")
+        coVerify(exactly = 3) { f.dav.list(f.handle, "") }
+        session.close()
+    }
+
     @Test fun `rendered resources borrow DAV root and stop after session close`() = runTest {
         val f = Fixture(backgroundScope)
         val session = f.source.open()
         coEvery { f.dav.download(f.handle, "assets/theme.css", any(), any(), any(), any()) } coAnswers {
-            assertEquals(24L * 1024 * 1024, arg<Long>(5))
+            assertEquals(8L * 1024 * 1024, arg<Long>(5))
             arg<java.io.OutputStream>(2).write("body{}".toByteArray())
             6L
         }

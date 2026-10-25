@@ -181,7 +181,7 @@ class ArchitectureDependencyTest {
             .map { it.relativeTo(architectureSourceRoot).invariantSeparatorsPath }.filterNot(allowed::contains)
         assertTrue("UI and data owners must not create image capabilities: $violations", violations.isEmpty())
         // A rendered document can derive a bounded image read only from its original file session.
-        val renderedOwners = setOf("service/files/FileBrowserSession.kt", "service/workspace/WorkspaceApplicationService.kt")
+        val renderedOwners = setOf("service/RenderedFileSource.kt", "service/files/FileBrowserSession.kt", "service/workspace/WorkspaceApplicationService.kt")
         val renderedConstructor = Regex("""(?<![\w])RenderedFileSource\s*\(""")
         val renderedViolations = architectureSources.filter { renderedConstructor.containsMatchIn(it.readText()) }
             .map { it.relativeTo(architectureSourceRoot).invariantSeparatorsPath }.filterNot(renderedOwners::contains)

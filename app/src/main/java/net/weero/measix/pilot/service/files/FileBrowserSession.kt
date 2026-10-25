@@ -18,6 +18,8 @@ internal interface FileBrowserSession {
     suspend fun close()
     fun closeLater()
     suspend fun list(path: String): BrowserDirectory
+    suspend fun browse(path: String): BrowserDirectory = list(path)
+    suspend fun previewText(file: BrowserFile): BrowserTextDocument = readText(file)
     suspend fun stat(path: String): BrowserFile?
     suspend fun readText(file: BrowserFile): BrowserTextDocument
     suspend fun readPreviewResource(path: String, maxBytes: Long): ByteArray

@@ -24,6 +24,8 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.action.ViewActions.closeSoftKeyboard
@@ -62,6 +64,52 @@ class RemoteWorkspacePageAndroidTest {
 
     private val file = BrowserFile("notes.txt", false, 8, null, "\"v1\"")
     private val document = BrowserTextDocument(file, WorkspaceText("original", false, "\n"))
+
+    @Test fun resumeRefreshesOwnerAdmissionBeforeReadingDirectory() {
+        val f = Fixture()
+        f.show()
+        compose.waitUntil(5_000) { !f.vm.state.value.loading }
+        var admitted = false
+        coEvery { f.service.refresh(f.selection) } coAnswers { admitted = true }
+        coEvery { f.service.list(f.handle, any()) } coAnswers {
+            check(admitted) { "workspace_status_unavailable" }
+            BrowserDirectory(secondArg(), listOf(file), null, null)
+        }
+        compose.runOnUiThread { f.vm.resume() }
+        compose.waitUntil(5_000) { admitted && !f.vm.state.value.loading }
+        assertNull(f.vm.state.value.error)
+        assertNotNull(f.vm.state.value.directory)
+    }
+
+    @Test fun delayedFileLinkCannotReplaceEditorEnteredWhileTargetWasLoading() {
+        val f = Fixture()
+        f.show()
+        compose.waitUntil(5_000) { !f.vm.state.value.loading }
+        val target = file.copy(path = "next.txt")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val result = CompletableDeferred<Throwable?>()
+        coEvery { f.service.list(f.handle, "") } coAnswers {
+            entered.complete(Unit)
+            release.await()
+            BrowserDirectory("", listOf(target), null, null)
+        }
+        compose.runOnUiThread {
+            f.vm.openPreview(file)
+            compose.activity.lifecycleScope.launch {
+                result.complete(runCatching { f.vm.openLinkedFile(requireNotNull(f.vm.state.value.handle), target.path) }.exceptionOrNull())
+            }
+        }
+        compose.waitUntil(5_000) { entered.isCompleted }
+        compose.runOnUiThread {
+            requireNotNull(f.vm.state.value.editorSession).editing = true
+            release.complete(Unit)
+        }
+        compose.waitUntil(5_000) { result.isCompleted }
+        assertEquals(file, f.vm.state.value.preview)
+        assertTrue(f.vm.state.value.editorSession?.editing == true)
+        assertTrue(result.getCompleted() is IllegalStateException)
+    }
 
     @Test fun commonCodeFilesUseSourcePreviewAndExplicitEditingWithFullBody() {
         val f = Fixture()
@@ -195,7 +243,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(file.name).assertIsDisplayed()
         compose.onNodeWithContentDescription(text(R.string.back)).performClick()
         compose.waitUntil(5_000) { f.vm.state.value.path.isEmpty() && !f.vm.state.value.loading }
-        compose.onNodeWithText("folder-1").assertIsDisplayed()
+        compose.onNodeWithText("folder-20").assertIsDisplayed()
     }
 
     @Test fun compactSourcePreviewShowsOptionalLogicalLineNumbers() {
@@ -320,8 +368,8 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(file.name).performClick()
         compose.onNodeWithText(text(R.string.enterprise_budget_refresh)).assertIsDisplayed()
         compose.onNodeWithText(text(R.string.remote_workspace_preview_unsupported)).assertDoesNotExist()
-        compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
-        compose.onNodeWithText("IOException: HTTP 503 preview read unavailable", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.chat_conversation_diagnostics)).performClick()
+        compose.onNode(hasText("IOException: HTTP 503 preview read unavailable", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
         capture("remote-workspace-read-diagnostic.png")
         compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
         compose.runOnIdle { f.summary.value = RemoteWorkspaceSummary(f.selection, RemoteWorkspaceStatus.FAILED) }
@@ -492,7 +540,7 @@ class RemoteWorkspacePageAndroidTest {
         compose.onNodeWithText(file.name).performClick()
         onView(isAssignableFrom(EditText::class.java)).check(matches(withText("original")))
         compose.runOnIdle { assertNotSame(owner, f.vm.state.value.editorSession) }
-        coVerify(exactly = 2) { f.service.readText(f.handle, file) }
+        coVerify(exactly = 1) { f.service.readText(f.handle, file) }
     }
 
     @Test fun authorizationRevocationDiscardsTheUnsubmittedNativeEditorBuffer() {
@@ -633,8 +681,8 @@ class RemoteWorkspacePageAndroidTest {
             compose.waitUntil(10_000) { compose.onNodeWithText(text(R.string.remote_workspace_operation_failed)).isDisplayed() }
             compose.onNodeWithText("1 / 0").assertDoesNotExist()
             compose.onAllNodes(hasProgressBarRangeInfo(ProgressBarRangeInfo.Indeterminate)).assertCountEquals(0)
-            compose.onNodeWithText(text(R.string.remote_workspace_details)).performClick()
-            compose.onNodeWithText("IOException", substring = true).assertIsDisplayed()
+            compose.onNodeWithText(text(R.string.chat_conversation_diagnostics)).performClick()
+            compose.onNode(hasText("IOException", substring = true) and hasAnyAncestor(isDialog())).assertIsDisplayed()
             compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
             compose.onNodeWithText(text(R.string.enterprise_budget_refresh)).performClick()
             compose.waitUntil(10_000) { compose.onNodeWithText("1 / 2").isDisplayed() }

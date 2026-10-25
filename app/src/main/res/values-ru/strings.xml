@@ -2251,4 +2251,5 @@
   <string name="toast_details">Подробности</string>
   <string name="qr_camera_permission">Разрешите доступ к камере для сканирования QR-кода. Если разрешение заблокировано, включите его в настройках.</string>
   <string name="qr_scan_failed">Не удалось отсканировать код камерой. Проверьте подробности и повторите попытку.</string>
+  <string name="file_preview_resources_failed">Не удалось загрузить некоторые ресурсы</string>
 </resources>

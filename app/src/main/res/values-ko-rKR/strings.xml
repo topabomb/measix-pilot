@@ -2251,4 +2251,5 @@
   <string name="toast_details">자세히</string>
   <string name="qr_camera_permission">QR 코드를 스캔하려면 카메라 접근을 허용하세요. 권한이 차단된 경우 설정에서 활성화하세요.</string>
   <string name="qr_scan_failed">카메라로 코드를 스캔하지 못했습니다. 자세한 내용을 확인한 후 다시 시도하세요.</string>
+  <string name="file_preview_resources_failed">일부 리소스를 불러오지 못했습니다</string>
 </resources>

@@ -5,13 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -42,25 +37,27 @@ fun Toaster(state: ToasterState, modifier: Modifier = Modifier, alignment: Align
             state.items.asReversed().forEach { item -> key(item.id) {
                 var overflow by remember(item) { mutableStateOf(false) }
                 val colors = MaterialTheme.colorScheme
-                Surface(
-                    color = when (item.type) {
-                        ToastType.Error -> colors.errorContainer
-                        ToastType.Warning -> colors.tertiaryContainer
-                        ToastType.Success -> colors.secondaryContainer
-                        else -> colors.surfaceContainerHigh
-                    },
-                    shape = MaterialTheme.shapes.large,
-                    shadowElevation = 4.dp,
-                    modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
-                ) {
-                    Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp)) {
-                        Text(item.message, style = MaterialTheme.typography.bodyMedium, maxLines = 4,
-                            overflow = TextOverflow.Ellipsis, onTextLayout = { overflow = it.hasVisualOverflow })
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            if (overflow) TextButton(onClick = { details = item.message }) {
-                                Text(stringResource(R.string.toast_details))
+                net.weero.measix.pilot.ui.components.ui.DismissibleNotice({ state.dismiss(item.id) }) {
+                    Surface(
+                        color = when (item.type) {
+                            ToastType.Error -> colors.errorContainer
+                            ToastType.Warning -> colors.tertiaryContainer
+                            ToastType.Success -> colors.secondaryContainer
+                            else -> colors.surfaceContainerHigh
+                        },
+                        shape = MaterialTheme.shapes.large,
+                        shadowElevation = 4.dp,
+                        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+                    ) {
+                        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 4.dp)) {
+                            Text(item.message, style = MaterialTheme.typography.bodyMedium, maxLines = 4,
+                                overflow = TextOverflow.Ellipsis, onTextLayout = { overflow = it.hasVisualOverflow })
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                if (overflow) TextButton(onClick = { details = item.message }) {
+                                    Text(stringResource(R.string.toast_details))
+                                }
+                                TextButton(onClick = { state.dismiss(item.id) }) { Text(stringResource(R.string.toast_close)) }
                             }
-                            TextButton(onClick = { state.dismiss(item.id) }) { Text(stringResource(R.string.toast_close)) }
                         }
                     }
                 }
@@ -68,11 +65,9 @@ fun Toaster(state: ToasterState, modifier: Modifier = Modifier, alignment: Align
         }
     }
     details?.let { message ->
-        AlertDialog(
-            onDismissRequest = { details = null },
-            title = { Text(stringResource(R.string.toast_details)) },
-            text = { SelectionContainer { Text(message, Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) } },
-            confirmButton = { TextButton(onClick = { details = null }) { Text(stringResource(R.string.toast_close)) } },
+        net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+            remember(message) { net.weero.measix.pilot.service.ChatError(title = null, detail = message) },
+            onDismiss = { details = null },
         )
     }
 }

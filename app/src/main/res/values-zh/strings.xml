@@ -2251,4 +2251,5 @@
   <string name="toast_details">详情</string>
   <string name="qr_camera_permission">请允许使用相机扫描二维码。若权限已被禁止，请在设置中开启。</string>
   <string name="qr_scan_failed">相机无法扫描二维码，请查看详情后重试。</string>
+  <string name="file_preview_resources_failed">部分资源未能加载</string>
 </resources>

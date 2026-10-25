@@ -56,18 +56,18 @@ class RemoteWorkspaceServiceTest {
         val f = fixture()
         val browser = RemoteWorkspaceBrowserSource(f.service, f.selection)
         val session = browser.open()
-        coEvery { f.client.download(any(), any(), any(), "assets/app.js", any(), any(), any()) } coAnswers {
-            assertEquals(24L * 1024 * 1024, arg<Long>(5))
-            arg<java.io.OutputStream>(4).write("run()".toByteArray())
+        coEvery { f.client.download(any(), any(), any(), "assets/theme.css", any(), any(), any()) } coAnswers {
+            assertEquals(8L * 1024 * 1024, arg<Long>(5))
+            arg<java.io.OutputStream>(4).write("body{}".toByteArray())
             WorkspaceContentMetadata("\"v1\"", 5, null)
         }
         val source = session.renderedSource("docs/index.html", browser.changes)
-        val result = source.readResource("../assets/app.js")
-        assertEquals("text/javascript", result.first)
-        assertEquals("run()", result.second.decodeToString())
+        val result = source.readResource("../assets/theme.css")
+        assertEquals("text/css", result.first)
+        assertEquals("body{}", result.second.decodeToString())
         coVerify(exactly = 0) { f.client.list(any(), any(), any(), any()) }
         session.close()
-        try { source.readResource("../assets/app.js"); fail() }
+        try { source.readResource("../assets/theme.css"); fail() }
         catch (error: IllegalStateException) { assertEquals("rendered_file_revoked", error.message) }
         coVerify(exactly = 1) { f.client.download(any(), any(), any(), any(), any(), any(), any()) }
     }

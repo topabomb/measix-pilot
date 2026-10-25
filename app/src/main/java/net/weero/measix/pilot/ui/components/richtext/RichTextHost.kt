@@ -19,6 +19,7 @@ import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalToaster
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.compose.koinInject
 
 val LocalRenderedContentSource = staticCompositionLocalOf<RenderedContentSource?> { null }
@@ -57,7 +58,7 @@ internal fun MessageRichTextHost(
 internal class RichTextActions(
     val uriHandler: UriHandler,
     val exportText: ((String, String, String) -> Unit)?,
-    val preview: (String) -> Unit,
+    val preview: (String, Boolean) -> Unit,
 )
 
 /** One pending picker belongs to the host, not to a recomposing code block or table cell. */
@@ -67,6 +68,8 @@ fun RichTextHost(
     vararg values: ProvidedValue<*>,
     files: FileManagementApplicationService = koinInject(),
     exports: MediaExportService = koinInject(),
+    onFileLink: (suspend (String, () -> Unit) -> Unit)? = null,
+    beforeFileNavigation: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
@@ -76,6 +79,10 @@ fun RichTextHost(
     val toaster = LocalToaster.current
     val navigator = LocalNavController.current
     val scope = rememberCoroutineScope()
+    val anchors = remember(source) { mutableMapOf<String, MutableList<androidx.compose.foundation.relocation.BringIntoViewRequester>>() }
+    var linkError by remember(source) { mutableStateOf<Exception?>(null) }
+    val fileLink by rememberUpdatedState(onFileLink)
+    val beforeNavigation by rememberUpdatedState(beforeFileNavigation)
     var pending by remember { mutableStateOf<TextDocumentExport?>(null) }
     fun reportExportFailure() {
         toaster.show(exportFailure, type = ToastType.Error)
@@ -90,13 +97,35 @@ fun RichTextHost(
             catch (_: Exception) { reportExportFailure() }
         }
     }
-    val handler = remember(source, scope, exports, context, toaster, openFailure) {
+    val handler = remember(source, scope, exports, context, toaster, openFailure, anchors) {
         object : UriHandler {
             override fun openUri(uri: String) {
                 scope.launch {
-                    try { exports.openContentLink(context, requireNotNull(source) { "content_source_unavailable" }, uri) }
+                    try {
+                        val original = requireNotNull(source) { "content_source_unavailable" }
+                        files.requireContentAccess(original)
+                        val url = java.net.URI(uri)
+                        when {
+                            original is RenderedContentSource.WorkspaceFile && url.scheme == null && url.rawAuthority == null &&
+                                url.path.isNullOrEmpty() && url.fragment != null -> {
+                                val id = url.fragment
+                                val target = anchors[id]?.firstOrNull() ?: Regex("(.+)-(\\d+)$").matchEntire(id)?.let {
+                                    anchors[it.groupValues[1]]?.getOrNull(it.groupValues[2].toInt())
+                                }
+                                requireNotNull(target) { "content_anchor_unavailable: $id" }.bringIntoView()
+                            }
+                            original is RenderedContentSource.WorkspaceFile && url.scheme == null && url.rawAuthority == null -> {
+                                val path = original.file.resourcePath(uri)
+                                requireNotNull(fileLink) { "content_file_navigation_unavailable: $path" }.invoke(path, beforeNavigation)
+                            }
+                            else -> exports.openContentLink(context, original, uri)
+                        }
+                    }
                     catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { toaster.show(openFailure, type = ToastType.Error) }
+                    catch (error: Exception) {
+                        net.weero.measix.pilot.utils.logDiagnosticFailure("RichTextHost", "Unable to open content link", error)
+                        linkError = error
+                    }
                 }
             }
         }
@@ -111,11 +140,11 @@ fun RichTextHost(
                 catch (_: Exception) { pending = null; reportExportFailure() }
             }
         },
-        preview = { html ->
+        preview = { html, offlineDiagram ->
             if (source != null) scope.launch {
                 try {
                     files.requireContentAccess(source)
-                    navigator.navigate(Screen.ContentPreview(document = RenderedContent(source, html)))
+                    navigator.navigate(Screen.ContentPreview(document = RenderedContent(source, html, offlineDiagram), onFileLink = onFileLink))
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { toaster.show(previewUnavailable, type = ToastType.Error) }
             }
@@ -127,10 +156,15 @@ fun RichTextHost(
     CompositionLocalProvider(
         *values,
         LocalRenderedContentSource provides source,
+        LocalMarkdownAnchors provides anchors.takeIf { source is RenderedContentSource.WorkspaceFile },
         LocalRichTextActions provides actions,
         LocalUriHandler provides handler,
         LocalImageSourceResolver provides imageResolver,
-        content = content,
+        content = {
+            linkError?.let { net.weero.measix.pilot.ui.components.ui.ErrorNotice(
+                it.userVisibleDiagnostic(), title = openFailure, onDismiss = { linkError = null }) }
+            content()
+        },
     )
 }
 

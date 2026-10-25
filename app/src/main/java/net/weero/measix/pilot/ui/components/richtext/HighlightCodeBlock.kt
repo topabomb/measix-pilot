@@ -477,7 +477,7 @@ private fun HighlightCodeActions(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
                         .onClick {
-                            actions?.preview?.invoke(fullScreenPreviewContent)
+                            actions?.preview?.invoke(fullScreenPreviewContent, language.equals("mermaid", true))
                         }
                         .padding(4.dp)
                         .size(iconSize)

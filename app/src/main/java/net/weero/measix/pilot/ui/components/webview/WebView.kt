@@ -59,6 +59,10 @@ internal class MyWebViewClient(private val state: WebViewState) : WebViewClient(
     }
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+        if (state.allowSameDocumentAnchors && request.hasGesture() && request.url.fragment != null) {
+            val base = (state.content as? WebContent.Data)?.baseUrl
+            if (request.url.buildUpon().fragment(null).build().toString() == base) return false
+        }
         val navigation = state.onNavigate ?: return super.shouldOverrideUrlLoading(view, request)
         if (request.hasGesture()) navigation(request.url.toString())
         return true
@@ -239,6 +243,7 @@ class WebViewState(
     val settings: WebSettings.() -> Unit = {},
     internal val interceptRequest: ((android.net.Uri) -> WebResourceResponse?)? = null,
     internal val onNavigate: ((String) -> Unit)? = null,
+    internal val allowSameDocumentAnchors: Boolean = false,
 ) {
     // --- Content State ---
     var content: WebContent by mutableStateOf(initialContent)

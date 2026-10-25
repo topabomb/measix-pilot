@@ -28,6 +28,169 @@ import java.util.concurrent.CopyOnWriteArrayList
 class FileDocumentPreviewAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun dismissingResourceFailuresDoesNotHideLaterFailures() {
+        val file = RenderedFileSource("index.html", MutableStateFlow(Unit), {}, { it }, { path, _ -> throw java.io.FileNotFoundException(path) })
+        fun failResource(path: String) = kotlinx.coroutines.runBlocking {
+            try { file.readResource(path); fail("expected missing resource") }
+            catch (_: net.weero.measix.pilot.service.RenderedResourceException) { }
+        }
+        failResource("first.css")
+        var retried = false
+        compose.setContent { Host { FilePreviewResourceStatus(file) { retried = true } } }
+        val title = compose.activity.getString(net.weero.measix.pilot.R.string.file_preview_resources_failed)
+        compose.onNodeWithText(title).assertIsDisplayed()
+        compose.onNodeWithContentDescription(compose.activity.getString(net.weero.measix.pilot.R.string.chat_page_dismiss_error)).performClick()
+        failResource("first.css")
+        compose.onNodeWithText(title).assertDoesNotExist()
+        failResource("second.css")
+        compose.waitUntil(5_000) { runCatching { compose.onNodeWithText(title).assertIsDisplayed() }.isSuccess }
+        compose.onNodeWithText(compose.activity.getString(net.weero.measix.pilot.R.string.application_recovery_retry)).performClick()
+        assertTrue(retried)
+    }
+
+    @Test fun offscreenImagesPreserveSingleDimensionAndAuthorMinimumHeight() {
+        val bitmap = android.graphics.Bitmap.createBitmap(40, 80, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().use { output ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output); output.toByteArray()
+        }
+        bitmap.recycle()
+        val file = RenderedFileSource("index.html", MutableStateFlow(Unit), {}, { it }, { _, _ -> bytes })
+        show(file, "<img id='single' src='one.png' width='120'><img id='styled' src='two.png' style='width:120px;height:auto;min-height:300px'><div style='height:12000px'></div>", "index.html")
+        awaitScript("Array.from(document.images).every(i => i.naturalWidth === 40).toString()") { it.contains("true") }
+        val sizes = "[document.getElementById('single').offsetHeight,document.getElementById('styled').offsetHeight].join(',')"
+        awaitScript(sizes) { it.contains("240,300") }
+        var scrollHeight = ""
+        awaitScript("document.body.scrollHeight.toString()") { scrollHeight = it; it.trim('"').toIntOrNull() != null }
+        awaitScript("window.scrollTo(0, document.body.scrollHeight); 'scrolled'") { it.contains("scrolled") }
+        awaitScript("Array.from(document.images).every(i => i.dataset.previewActive !== '1' && i.src.includes('/.measix-preview-placeholder.svg?')).toString()") { it.contains("true") }
+        awaitScript(sizes) { it.contains("240,300") }
+        awaitScript("document.body.scrollHeight.toString()") { it == scrollHeight }
+    }
+
+    @Test fun cssImageSetCannotBypassInlineResourceValidation() {
+        val file = RenderedFileSource("index.html", MutableStateFlow(Unit), {}, { it }, { _, _ -> error("unexpected read") })
+        show(file, "<div id='target' style='width:100px;height:100px'></div>", "index.html")
+        awaitScript("""(() => {
+            if (!document.getElementById('target')) return false;
+            window.inlineBlocked = false;
+            document.addEventListener('securitypolicyviolation', e => {
+                if (e.violatedDirective === 'img-src' && e.blockedURI === 'data') window.inlineBlocked = true;
+            });
+            document.getElementById('target').style.backgroundImage = 'image-set("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22/%3E" 1x)';
+            return true;
+        })().toString()""") { it.contains("true") }
+        awaitScript("window.inlineBlocked.toString()") { it.contains("true") }
+    }
+
+    @Test fun longGalleryRendersPastOldCountAndCumulativePixelLimits() {
+        val bitmap = android.graphics.Bitmap.createBitmap(400, 400, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.GREEN)
+        val bytes = java.io.ByteArrayOutputStream().use { output ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+            output.toByteArray()
+        }
+        bitmap.recycle()
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val file = RenderedFileSource("gallery/index.html", MutableStateFlow(Unit), {}, { it }, { _, _ ->
+            reads.incrementAndGet()
+            bytes
+        })
+        val html = (0 until 160).joinToString("") { "<img src='thumb-$it.png' width='40' height='40'>" }
+        show(file, html, "index.html")
+        awaitScript("Array.from(document.images).filter(i => i.complete && i.naturalWidth === 400).length.toString()") {
+            it.contains("160")
+        }
+        assertEquals(160, reads.get())
+        compose.onNodeWithText(compose.activity.getString(net.weero.measix.pilot.R.string.file_preview_resources_failed)).assertDoesNotExist()
+    }
+
+    @Test fun offscreenImagesWaitUntilNearViewportAndScrollingBackUsesBoundedCache() {
+        val bitmap = android.graphics.Bitmap.createBitmap(40, 40, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().use { output ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output); output.toByteArray()
+        }
+        bitmap.recycle()
+        val reads = CopyOnWriteArrayList<String>()
+        val file = RenderedFileSource("gallery/index.html", MutableStateFlow(Unit), {}, { it }, { path, _ -> reads += path; bytes })
+        show(file, "<img id='first' src='first.png' width='40' height='40'><div style='height:12000px'></div><img id='last' src='last.png' width='40' height='40'>", "index.html")
+        awaitScript("(() => { const i = document.getElementById('first'); return i.naturalWidth === 40 && i.dataset.previewActive === '1' && i.currentSrc.endsWith('/first.png'); })().toString()") { it.contains("true") }
+        assertTrue(reads.contains("gallery/first.png"))
+        assertFalse(reads.contains("gallery/last.png"))
+        awaitScript("window.scrollTo(0, document.body.scrollHeight); 'scrolled'") { it.contains("scrolled") }
+        awaitScript("document.getElementById('last').naturalWidth.toString()") { it.contains("40") }
+        awaitScript("(document.getElementById('first').dataset.previewActive === '1').toString()") { it.contains("false") }
+        awaitScript("window.scrollTo(0, 0); 'returned'") { it.contains("returned") }
+        awaitScript("(() => { const i = document.getElementById('first'); return i.naturalWidth === 40 && i.dataset.previewActive === '1' && i.currentSrc.endsWith('/first.png'); })().toString()") { it.contains("true") }
+        assertEquals(1, reads.count { it == "gallery/first.png" })
+    }
+
+    @Test fun fullscreenFileLinkKeepsOriginalDirectoryAndReturnsBeforeNativeNavigation() {
+        val stack = mutableStateListOf<androidx.navigation3.runtime.NavKey>(Screen.Enterprise)
+        val navigator = Navigator(stack)
+        val file = RenderedFileSource("docs/note.md", MutableStateFlow(Unit), {}, { it }, { _, _ -> error("unexpected resource") })
+        var opened: String? = null
+        compose.setContent { Host {
+            CompositionLocalProvider(LocalNavController provides navigator) {
+                val current = stack.last()
+                if (current is Screen.ContentPreview) net.weero.measix.pilot.ui.pages.webview.ContentPreviewPage(current.document, current.onFileLink)
+                else FileDocumentPreview(file, "```html\n<a id='target' href='../next.md'>Open linked file</a>\n```", "note.md",
+                    Modifier.fillMaxSize(), onFileLink = { path, before ->
+                        before()
+                        assertEquals(1, stack.size)
+                        opened = path
+                    })
+            }
+        } }
+        compose.onNodeWithContentDescription(compose.activity.getString(net.weero.measix.pilot.R.string.code_block_fullscreen_preview)).performClick()
+        compose.waitUntil(5_000) { stack.last() is Screen.ContentPreview }
+        tapHtmlElement("target")
+        compose.waitUntil(5_000) { opened == "next.md" }
+        assertEquals(1, stack.size)
+    }
+
+    @Test fun markdownAnchorUsesDisplayedLinkedHeadingText() {
+        val file = RenderedFileSource("note.md", MutableStateFlow(Unit), {}, { it }, { _, _ -> error("unexpected read") })
+        show(file, "[跳转](#安装)\n\n" + (1..80).joinToString("\n\n") { "Paragraph $it" } + "\n\n# [安装](guide.md)\n\nEnd", "note.md")
+        compose.onNodeWithText("跳转").performTouchInput { click(androidx.compose.ui.geometry.Offset(10f, centerY)) }
+        compose.waitUntil(5_000) { runCatching { compose.onNodeWithText("安装").assertIsDisplayed() }.isSuccess }
+    }
+
+    @Test fun fullscreenMissingFileLinkShowsDismissibleDiagnostic() {
+        val file = RenderedFileSource("docs/note.html", MutableStateFlow(Unit), {}, { it }, { _, _ -> error("unexpected read") })
+        compose.setContent { Host {
+            net.weero.measix.pilot.ui.pages.webview.ContentPreviewPage(
+                net.weero.measix.pilot.service.RenderedContent(
+                    net.weero.measix.pilot.service.RenderedContentSource.WorkspaceFile(file),
+                    "<a id='missing' href='missing.md'>Missing file</a>"),
+                onFileLink = { _, _ -> error("workspace_file_missing: docs/missing.md") })
+        } }
+        tapHtmlElement("missing")
+        compose.waitUntil(5_000) { runCatching {
+            compose.onNodeWithText(compose.activity.getString(net.weero.measix.pilot.R.string.chat_message_attachment_open_failed)).assertIsDisplayed()
+        }.isSuccess }
+        compose.onNodeWithContentDescription(compose.activity.getString(net.weero.measix.pilot.R.string.chat_page_dismiss_error)).performClick()
+        compose.onNodeWithText(compose.activity.getString(net.weero.measix.pilot.R.string.chat_message_attachment_open_failed)).assertDoesNotExist()
+    }
+
+    private fun tapHtmlElement(id: String) {
+        var points = listOf<Float>()
+        awaitScript("(() => { const r=document.getElementById('$id').getBoundingClientRect(); return [r.left+r.width/2,r.top+r.height/2,innerWidth].join(','); })()") {
+            points = it.trim('"').split(',').mapNotNull(String::toFloatOrNull)
+            points.size == 3
+        }
+        compose.runOnUiThread {
+            val view = requireNotNull(webView(compose.activity.window.decorView))
+            val scale = view.width / points[2]
+            val time = android.os.SystemClock.uptimeMillis()
+            listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP).forEach { action ->
+                val event = android.view.MotionEvent.obtain(time, time + if (action == android.view.MotionEvent.ACTION_UP) 50 else 0,
+                    action, points[0] * scale, points[1] * scale, 0)
+                view.dispatchTouchEvent(event)
+                event.recycle()
+            }
+        }
+    }
+
     @Test fun fileMarkdownTableKeepsCopyAfterReplacingRestrictedRenderer() {
         val file = RenderedFileSource("note.md", MutableStateFlow(Unit), {}, { it }, { _, _ -> byteArrayOf() })
         show(file, "| Action | Result |\n| --- | --- |\n| Save | Version |", "note.md")
@@ -37,7 +200,7 @@ class FileDocumentPreviewAndroidTest {
         compose.waitUntil(5_000) { clipboard.primaryClip?.getItemAt(0)?.text?.contains("| Save | Version |") == true }
     }
 
-    @Test fun htmlLoadsRelativeCssAndScriptThenRevocationRemovesStaticDocument() {
+    @Test fun htmlLoadsRelativeCssWithoutExecutingScriptThenRevocationRemovesStaticDocument() {
         val allowed = MutableStateFlow(true)
         val reads = CopyOnWriteArrayList<String>()
         val file = RenderedFileSource("pages/index.html", allowed,
@@ -52,12 +215,123 @@ class FileDocumentPreviewAndroidTest {
             })
         show(file, """<base href="https://untrusted.invalid/"><link rel="stylesheet" href="../assets/theme.css?v=1"><div id="result">initial</div><script src="app.js"></script>""", "index.html")
         awaitScript("document.body.innerText + '|' + getComputedStyle(document.getElementById('result')).color") {
-            it.contains("script loaded") && it.contains("rgb(12, 34, 56)")
+            it.contains("initial") && it.contains("rgb(12, 34, 56)")
         }
-        assertTrue(reads.containsAll(listOf("assets/theme.css", "pages/app.js")))
+        assertTrue(reads.contains("assets/theme.css"))
+        assertFalse(reads.contains("pages/app.js"))
+        compose.runOnIdle { assertTrue(requireNotNull(webView(compose.activity.window.decorView)).settings.javaScriptEnabled) }
         compose.runOnIdle { allowed.value = false }
         compose.waitUntil(5_000) { webView(compose.activity.window.decorView) == null }
         compose.onNodeWithText("rendered_file_revoked", substring = true).assertExists()
+    }
+
+    @Test fun missingStylesheetKeepsBodyAndRetryLoadsFreshResources() {
+        var available = false
+        val file = RenderedFileSource("index.html", MutableStateFlow(Unit), {}, { it }, { path, _ ->
+            if (!available || path != "theme.css") throw java.io.FileNotFoundException(path)
+            "#result{color:rgb(12,34,56)}".toByteArray()
+        })
+        show(file, "<link rel='icon' href='favicon.ico'><link rel='stylesheet' href='theme.css'><p id='result'>Still readable</p>", "index.html")
+        awaitScript("document.body.innerText") { it.contains("Still readable") }
+        compose.onNodeWithText(compose.activity.getString(net.weero.measix.pilot.R.string.file_preview_resources_failed)).assertExists()
+        compose.runOnIdle { available = true }
+        compose.onNodeWithText(compose.activity.getString(net.weero.measix.pilot.R.string.application_recovery_retry)).performClick()
+        awaitScript("getComputedStyle(document.getElementById('result')).color") { it.contains("rgb(12, 34, 56)") }
+        compose.onNodeWithText(compose.activity.getString(net.weero.measix.pilot.R.string.file_preview_resources_failed)).assertDoesNotExist()
+    }
+
+    @Test fun leavingPreviewCancelsBlockedResourceAndReturningReadsFreshContent() {
+        val started = java.util.concurrent.CountDownLatch(1)
+        val exited = java.util.concurrent.CountDownLatch(1)
+        var block = true
+        val file = RenderedFileSource("index.html", MutableStateFlow(Unit), {}, { it }, { _, _ ->
+            if (block) {
+                started.countDown()
+                try { kotlinx.coroutines.awaitCancellation() } finally { exited.countDown() }
+            }
+            "#result{color:rgb(12,34,56)}".toByteArray()
+        })
+        var preview by mutableStateOf(true)
+        var body by mutableStateOf("before edit")
+        compose.setContent { Host {
+            if (preview) FileDocumentPreview(file, "<link rel='stylesheet' href='theme.css'><p id='result'>$body</p>", "index.html", Modifier.fillMaxSize())
+            else androidx.compose.material3.Text("Editor draft")
+        } }
+        compose.waitUntil(10_000) { started.count == 0L }
+        compose.runOnIdle { preview = false }
+        compose.onNodeWithText("Editor draft").assertExists()
+        assertTrue(exited.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        compose.runOnIdle { block = false; body = "after save"; preview = true }
+        awaitScript("document.body.innerText") { it.contains("after save") && !it.contains("before edit") }
+    }
+
+    @Test fun slowResourceTimesOutWithoutLosingBodyAndCanRetry() {
+        var slow = true
+        val file = RenderedFileSource("index.html", MutableStateFlow(Unit), {}, { it }, { _, _ ->
+            if (slow) kotlinx.coroutines.awaitCancellation()
+            "p{color:rgb(12,34,56)}".toByteArray()
+        })
+        show(file, "<link rel='stylesheet' href='slow.css'><p>Timeout recovery</p>", "index.html")
+        val message = compose.activity.getString(net.weero.measix.pilot.R.string.file_preview_resources_failed)
+        compose.waitUntil(45_000) { compose.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty() }
+        awaitScript("document.body.innerText") { it.contains("Timeout recovery") }
+        compose.runOnIdle { slow = false }
+        compose.onNodeWithText(compose.activity.getString(net.weero.measix.pilot.R.string.application_recovery_retry)).performClick()
+        awaitScript("getComputedStyle(document.querySelector('p')).color") { it.contains("rgb(12, 34, 56)") }
+        compose.onNodeWithText(message).assertDoesNotExist()
+    }
+
+    @Test fun inlineImagesAndNestedStylesheetsRenderThroughTheManagedResourcePath() {
+        val bitmap = android.graphics.Bitmap.createBitmap(8, 8, android.graphics.Bitmap.Config.ARGB_8888)
+        val png = java.io.ByteArrayOutputStream().use { out ->
+            bitmap.eraseColor(android.graphics.Color.GREEN)
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            bitmap.recycle()
+            out.toByteArray()
+        }
+        val reads = CopyOnWriteArrayList<String>()
+        val file = RenderedFileSource("pages/index.html", MutableStateFlow(Unit), {}, { it }, { path, _ ->
+            reads += path
+            when (path) {
+                "styles/theme.css" -> "@import 'nested/colors.css'; body{font-family:sans-serif;padding:20px;background:#f6f4ef} img{width:64px;height:64px}".toByteArray()
+                "styles/nested/colors.css" -> "h1{color:rgb(12,34,56)}".toByteArray()
+                else -> throw java.io.FileNotFoundException(path)
+            }
+        })
+        val inline = "data:image/png;base64," + android.util.Base64.encodeToString(png, android.util.Base64.NO_WRAP)
+        val svg = "data:image/svg+xml," + java.net.URLEncoder.encode("<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'><rect width='8' height='8' fill='#008000'/></svg>", "UTF-8").replace("+", "%20")
+        show(file, "<link rel='stylesheet' href='../styles/theme.css'><h1>Workspace preview</h1><p>Static styles and images remain readable.</p><img id='image' src='$inline'><img id='vector' src='$svg'><p>Missing optional files do not replace this document.</p>", "index.html")
+        awaitScript("document.getElementById('vector').naturalWidth + '|' + document.getElementById('image').naturalWidth + '|' + getComputedStyle(document.querySelector('h1')).color") {
+            it.contains("8|8|rgb(12, 34, 56)")
+        }
+        assertTrue(reads.containsAll(listOf("styles/theme.css", "styles/nested/colors.css")))
+        val drawn = java.util.concurrent.CountDownLatch(1)
+        compose.runOnUiThread {
+            requireNotNull(webView(compose.activity.window.decorView)).postVisualStateCallback(1, object : WebView.VisualStateCallback() {
+                override fun onComplete(requestId: Long) { drawn.countDown() }
+            })
+        }
+        assertTrue(drawn.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        compose.mainClock.advanceTimeByFrame()
+        compose.waitForIdle()
+        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(500, 5_000)
+        val screenshot = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        java.io.File(compose.activity.getExternalFilesDir(null), "workspace-static-preview.png").outputStream().use {
+            screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
+        screenshot.recycle()
+    }
+
+    @Test fun fullscreenOfflineMermaidRetainsItsExplicitRenderer() {
+        val file = RenderedFileSource("docs/note.md", MutableStateFlow(Unit), {}, { it }, { _, _ -> error("Unexpected workspace read") })
+        compose.setContent { Host {
+            net.weero.measix.pilot.ui.pages.webview.ContentPreviewPage(net.weero.measix.pilot.service.RenderedContent(
+                net.weero.measix.pilot.service.RenderedContentSource.WorkspaceFile(file),
+                net.weero.measix.pilot.ui.components.richtext.buildMermaidHtml("graph TD\nA[Source] --> B[Preview]", MaterialTheme.colorScheme),
+                offlineDiagram = true,
+            ))
+        } }
+        awaitScript("document.querySelector('svg')?.textContent") { it.contains("Source") && it.contains("Preview") }
     }
 
     @Test fun markdownHtmlFenceAndSvgUseTheSamePreviewPath() {
@@ -88,10 +362,21 @@ class FileDocumentPreviewAndroidTest {
     }
 
     private fun awaitScript(script: String, accept: (String) -> Boolean) {
+        compose.waitForIdle()
         var value = ""
-        compose.waitUntil(15_000) {
-            compose.runOnUiThread { webView(compose.activity.window.decorView)?.evaluateJavascript(script) { value = it } }
-            accept(value)
+        val pending = java.util.concurrent.atomic.AtomicBoolean(false)
+        try { compose.waitUntil(15_000) {
+            if (!pending.get() && accept(value)) return@waitUntil true
+            compose.runOnUiThread { webView(compose.activity.window.decorView)?.let { view ->
+                if (!pending.compareAndSet(false, true)) return@let
+                // Test-only DOM inspection; page scripts have already been removed before loading.
+                val enabled = view.settings.javaScriptEnabled
+                view.settings.javaScriptEnabled = true
+                view.evaluateJavascript(script) { view.settings.javaScriptEnabled = enabled; value = it; pending.set(false) }
+            } }
+            !pending.get() && accept(value)
+        } } catch (error: androidx.compose.ui.test.ComposeTimeoutException) {
+            throw AssertionError("JavaScript condition timed out: $script; last result: $value", error)
         }
     }
 

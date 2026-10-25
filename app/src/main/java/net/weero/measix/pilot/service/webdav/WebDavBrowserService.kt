@@ -73,6 +73,9 @@ internal class WebDavBrowserService(
     }
 
     private inner class Session(val handle: WebDavHandle, val changes: Flow<*>) : FileBrowserSession {
+        private val cache = FileBrowserReadCache()
+        override suspend fun browse(path: String) = cache.directory(path, ::checkAccess) { list(path) }
+        override suspend fun previewText(file: BrowserFile) = cache.text(file, ::checkAccess) { readText(file) }
         private val paths = WebDavPaths(handle.target.root)
         private val monitor = Any()
         private val closed = AtomicBoolean()
@@ -84,6 +87,7 @@ internal class WebDavBrowserService(
         override fun path(value: String) = paths.logical(value)
         override fun child(parent: String, name: String) = paths.child(parent, name)
         override suspend fun refresh() {
+            cache.invalidate()
             check(!closed.get()) { "webdav_access_closed" }
             // Explicit retry must be able to replace an earlier uncertain status diagnosis.
             dav.validate(handle)
@@ -105,6 +109,7 @@ internal class WebDavBrowserService(
         }
 
         override suspend fun close() {
+            cache.invalidate()
             val pending = synchronized(monitor) { closed.set(true); jobs.toList().also { it.forEach(Job::cancel) } }
             // Once closed, all owned jobs and copies must settle even if the leaving UI is cancelled.
             withContext(NonCancellable) {
@@ -114,6 +119,7 @@ internal class WebDavBrowserService(
             }
         }
         override fun closeLater() {
+            cache.invalidate()
             synchronized(monitor) { closed.set(true); jobs.forEach(Job::cancel) }
             scope.launch { close() }
         }
@@ -153,7 +159,7 @@ internal class WebDavBrowserService(
                 dav.mutate(handle, file.path, action.name, destination, file.etag.takeIf { file.versioned }, overwrite?.etag, file.directory)
             }
         }
-        private suspend fun writeResult(path: String, action: suspend () -> Unit): BrowserOperationResult = try {
+        private suspend fun writeResult(path: String, action: suspend () -> Unit): BrowserOperationResult = cache.writing { try {
             operation { action() }
             BrowserOperationResult(path, BrowserOutcome.SUCCEEDED)
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -161,6 +167,7 @@ internal class WebDavBrowserService(
             android.util.Log.e("WebDavBrowser", "DAV write failed", failure)
             BrowserOperationResult(path, if (path in dav.unknownPaths(handle)) BrowserOutcome.UNKNOWN else BrowserOutcome.FAILED,
                 failure.userVisibleDiagnostic())
+        }
         }
         override fun outcomeAfterCancellation(path: String) = if (path in dav.unknownPaths(handle)) BrowserOutcome.UNKNOWN else BrowserOutcome.CANCELLED
         override suspend fun verifyUnknown(path: String) = operation { dav.verifyUnknown(handle, path)?.let(::browserFile) }

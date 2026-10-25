@@ -99,29 +99,31 @@ fun ErrorCard(
             dismiss?.invoke()
         }
     }
-    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.errorContainer,
-        contentColor = MaterialTheme.colorScheme.onErrorContainer) {
-        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Text(error.title ?: stringResource(R.string.error_title_operation), Modifier.weight(1f).padding(top = 8.dp),
-                    style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (onDismiss != null) IconButton(onClick = onDismiss) {
-                    Icon(HugeIcons.Cancel01, stringResource(R.string.chat_page_dismiss_error))
+    DismissibleNotice(onDismiss, modifier.fillMaxWidth()) {
+        Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    Text(error.title ?: stringResource(R.string.error_title_operation), Modifier.weight(1f).padding(top = 8.dp),
+                        style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onErrorContainer,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (onDismiss != null) IconButton(onClick = onDismiss) {
+                        Icon(HugeIcons.Cancel01, stringResource(R.string.chat_page_dismiss_error))
+                    }
                 }
-            }
-            Text(error.summary ?: error.detail, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            FlowRow(verticalArrangement = Arrangement.Center) {
-                TextButton(onClick = { showDetails = true }) {
-                    Icon(HugeIcons.InformationCircle, stringResource(R.string.chat_conversation_diagnostics), Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.chat_conversation_diagnostics))
-                }
-                if (onRetry != null) TextButton(onClick = onRetry) { Text(stringResource(R.string.application_recovery_retry)) }
-                ErrorSolution(error.solution)
-                IconButton(onClick = copy) {
-                    Icon(HugeIcons.Copy01, stringResource(R.string.chat_page_copy_error))
+                Text(error.summary ?: error.detail, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                FlowRow(verticalArrangement = Arrangement.Center) {
+                    TextButton(onClick = { showDetails = true }) {
+                        Icon(HugeIcons.InformationCircle, stringResource(R.string.chat_conversation_diagnostics), Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(R.string.chat_conversation_diagnostics))
+                    }
+                    if (onRetry != null) TextButton(onClick = onRetry) { Text(stringResource(R.string.application_recovery_retry)) }
+                    ErrorSolution(error.solution)
+                    IconButton(onClick = copy) {
+                        Icon(HugeIcons.Copy01, stringResource(R.string.chat_page_copy_error))
+                    }
                 }
             }
         }
@@ -199,3 +201,28 @@ private fun ErrorSolution(solution: ChatErrorSolution?, onSelected: () -> Unit =
 }
 
 private const val TRANSIENT_ERROR_DURATION_MILLIS = 5_000L
+
+/** Only dismissible presentation participates; closing never acknowledges an unknown write outcome. */
+@Composable
+fun DismissibleNotice(onDismiss: (() -> Unit)?, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    if (onDismiss == null) { Box(modifier) { content() }; return }
+    val threshold = SwipeToDismissBoxDefaults.positionalThreshold
+    val state = remember { SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, threshold) }
+    val dismiss by rememberUpdatedState(onDismiss)
+    LaunchedEffect(state.settledValue) {
+        if (state.settledValue != SwipeToDismissBoxValue.Settled) {
+            dismiss?.invoke()
+            state.snapTo(SwipeToDismissBoxValue.Settled)
+        }
+    }
+    SwipeToDismissBox(state = state, modifier = modifier, backgroundContent = {}) { content() }
+}
+
+@Composable
+fun ErrorNotice(detail: String, modifier: Modifier = Modifier,
+    title: String = stringResource(R.string.error_title_operation),
+    onRetry: (() -> Unit)? = null, onDismiss: (() -> Unit)? = null,
+) {
+    val error = remember(detail, title) { ChatError(title = title, detail = detail, retention = ChatErrorRetention.UNTIL_DISMISSED) }
+    key(error.id) { ErrorCard(error, modifier, onDismiss, onRetry) }
+}

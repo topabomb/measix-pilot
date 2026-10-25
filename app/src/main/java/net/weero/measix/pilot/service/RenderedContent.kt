@@ -24,7 +24,7 @@ sealed interface RenderedContentSource {
     data object Static : RenderedContentSource
 }
 
-data class RenderedContent(val source: RenderedContentSource, val html: String)
+data class RenderedContent(val source: RenderedContentSource, val html: String, val offlineDiagram: Boolean = false)
 
 /** Frozen at the user's click, before the system document picker can suspend the page. */
 data class TextDocumentExport(

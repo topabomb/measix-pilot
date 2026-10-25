@@ -104,13 +104,7 @@ class FileManagementApplicationService internal constructor(
     suspend fun resolveContentImage(source: RenderedContentSource, url: String): ImageSource? = when (source) {
         is RenderedContentSource.WorkspaceFile -> {
             source.file.requireAccess()
-            if (url.startsWith("https://", true) || url.startsWith("http://", true) || url.startsWith("data:", true)) externalImageSource(url)?.let { image ->
-                ImageSource(cacheIdentity = "rendered-file:${source.file.identity}:${image.cacheKey}", origin = image.origin,
-                    displayName = image.displayName, mimeHint = image.mimeHint,
-                    verifyAccess = { source.file.requireAccess(); image.requireAccess(); source.file.requireAccess() },
-                    readPayload = { source.file.requireAccess(); image.readBytes().also { source.file.requireAccess() } })
-            }
-            else source.file.image(url)
+            source.file.image(url)
         }
         is RenderedContentSource.Conversation -> resolveMessageImage(source, url)
         is RenderedContentSource.RealmConfiguration -> resolveConfigurationImage(url, source.view)

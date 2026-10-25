@@ -107,6 +107,7 @@ private fun WorkspaceFileEditorContent(
     val tooLargeText = stringResource(R.string.workspace_file_editor_too_large)
 
     val textState = remember(id, area, path) { FileEditorState() }
+    var readRevision by remember(id, area, path) { androidx.compose.runtime.mutableIntStateOf(0) }
     var loading by remember(id, area, path) { mutableStateOf(true) }
     var loadError by remember(id, area, path) { mutableStateOf<String?>(null) }
     var saveError by remember { mutableStateOf<String?>(null) }
@@ -158,7 +159,7 @@ private fun WorkspaceFileEditorContent(
     }
     BackHandler { close() }
 
-    LaunchedEffect(id, area, path) {
+    LaunchedEffect(id, area, path, readRevision) {
         loading = true
         loadError = null
         try {
@@ -299,7 +300,7 @@ private fun WorkspaceFileEditorContent(
                     .padding(16.dp),
             ) {
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-                    SelectionContainer { Text(text = loadError.orEmpty(), color = MaterialTheme.colorScheme.error) }
+                    net.weero.measix.pilot.ui.components.ui.ErrorNotice(loadError.orEmpty(), onRetry = { readRevision++ })
                     Row {
                         TextButton(::download, enabled = !exporting && !exportPending) { Text(stringResource(R.string.remote_workspace_download)) }
                         if (area == WorkspaceStorageArea.FILES) TextButton(::external) { Text(stringResource(R.string.remote_workspace_open_external)) }
@@ -315,7 +316,11 @@ private fun WorkspaceFileEditorContent(
                 Modifier.fillMaxSize().padding(innerPadding)) { loadError = it.userVisibleDiagnostic() }
             isRenderedFile(fileName) && !editing && !sourceView && renderedFile != null -> FileDocumentPreview(
                 requireNotNull(renderedFile), publishedText.orEmpty(), fileName,
-                Modifier.fillMaxSize().padding(innerPadding))
+                Modifier.fillMaxSize().padding(innerPadding), onFileLink = { target, before ->
+                    renderedFile?.requireAccess()
+                    before()
+                    navController.navigate(net.weero.measix.pilot.Screen.WorkspaceFileEditor(id, area.name, target))
+                })
             else -> FileTextEditor(
                 state = textState,
                 modifier = Modifier

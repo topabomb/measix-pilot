@@ -298,6 +298,33 @@ class RemoteWorkspaceNavigationRecoveryAndroidTest {
         coVerify(atLeast = 1) { f.service.close(f.handle) }
     }
 
+    @Test fun revocationDuringForegroundRefreshCannotAutomaticallyOpenAnotherHandle() {
+        val f = Fixture()
+        f.show()
+        compose.waitUntil(5_000) { !f.vm.state.value.loading }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { f.service.refresh(f.selection) } coAnswers {
+            entered.complete(Unit)
+            release.await()
+        }
+        compose.runOnIdle { f.vm.resume() }
+        compose.waitUntil(5_000) { entered.isCompleted }
+        compose.runOnIdle {
+            f.valid.set(false)
+            f.summary.value = RemoteWorkspaceSummary(f.selection, RemoteWorkspaceStatus.DISCONNECTED)
+        }
+        compose.waitUntil(5_000) { f.vm.state.value.revoked && f.vm.state.value.handle == null }
+        compose.runOnIdle { release.complete(Unit) }
+        compose.waitUntil(5_000) { !f.vm.state.value.loading }
+        compose.runOnIdle {
+            assertTrue(f.vm.state.value.revoked)
+            assertNull(f.vm.state.value.handle)
+            assertNull(f.vm.state.value.directory)
+        }
+        coVerify(exactly = 1) { f.service.open(f.selection) }
+    }
+
     private fun label(id: Int): String = compose.activity.getString(id)
 
     private class DelayedPickerRegistry : ActivityResultRegistry() {

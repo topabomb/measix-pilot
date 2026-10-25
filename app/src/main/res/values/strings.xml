@@ -2259,4 +2259,5 @@
   <string name="toast_details">Details</string>
   <string name="qr_camera_permission">Allow camera access to scan a QR code. If permission is blocked, enable it in Settings.</string>
   <string name="qr_scan_failed">The camera could not scan the code. Check the details and retry.</string>
+  <string name="file_preview_resources_failed">Some resources could not be loaded</string>
 </resources>

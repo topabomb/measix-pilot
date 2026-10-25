@@ -102,7 +102,7 @@ internal fun rememberRenderedContentState(
     return state.value
 }
 
-private fun renderedContentWebViewState(
+private suspend fun renderedContentWebViewState(
     document: RenderedContent,
     files: FileManagementApplicationService,
     handler: androidx.compose.ui.platform.UriHandler,
@@ -110,34 +110,64 @@ private fun renderedContentWebViewState(
     onFailure: (Exception) -> Unit,
 ): WebViewState {
     // Independent registrable origins prevent cookies, IndexedDB and browser caches from becoming a cross-source store.
-    val origin = android.net.Uri.parse("https://measix-preview-${java.util.UUID.randomUUID()}.invalid")
     val fileSource = (document.source as? RenderedContentSource.WorkspaceFile)?.file
+    val origin = android.net.Uri.parse(fileSource?.resourceOrigin ?: "https://measix-preview-${java.util.UUID.randomUUID()}.invalid")
     val messageSource = (document.source as? RenderedContentSource.Conversation)?.message
     val baseUrl = origin.toString() + (fileSource?.documentUrlPath ?: messageSource?.documentUrlPath).orEmpty()
+    val html = withContext(kotlinx.coroutines.Dispatchers.Default) {
+        if (fileSource != null && !document.offlineDiagram) prepareStaticFileHtml(document.html, origin.toString())
+        else prepareRenderedHtml(document.html, origin.toString(), fileSource != null)
+    }
     return WebViewState(
-        initialContent = WebContent.Data(prepareRenderedHtml(document.html, origin.toString(), fileSource != null), baseUrl, "UTF-8", "text/html"),
+        initialContent = WebContent.Data(html, baseUrl, "UTF-8", "text/html"),
         settings = {
             domStorageEnabled = false
             builtInZoomControls = true
             displayZoomControls = false
             useWideViewPort = true
             loadWithOverviewMode = true
+            if (fileSource != null) {
+                blockNetworkLoads = true
+                cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+            }
         },
         onNavigate = { url ->
             val uri = android.net.Uri.parse(url)
             if (uri.host == origin.host) {
-                renderedLocalFileUrl(uri)?.let(handler::openUri)
+                if (fileSource != null) handler.openUri(uri.encodedPath.orEmpty() + uri.encodedFragment?.let { "#$it" }.orEmpty())
+                else renderedLocalFileUrl(uri)?.let(handler::openUri)
             } else handler.openUri(url)
         },
+        allowSameDocumentAnchors = fileSource != null,
         interceptRequest = { uri ->
             fun denied() = WebResourceResponse("text/plain", "UTF-8", 403, "Unavailable", emptyMap(), java.io.ByteArrayInputStream(byteArrayOf()))
             try {
                 runBlocking(reads) {
                     ensureActive()
                     files.requireContentAccess(document.source)
+                    if (fileSource != null) {
+                        if (uri.scheme == "https" && uri.host == origin.host && uri.port == -1 && uri.path == FILE_PREVIEW_PLACEHOLDER_PATH) {
+                            val width = uri.getQueryParameter("w")?.toIntOrNull() ?: 0
+                            val height = uri.getQueryParameter("h")?.toIntOrNull() ?: 0
+                            if (width <= 0 || height <= 0 || width.toLong() * height > 16_000_000L) return@runBlocking denied()
+                            val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="$width" height="$height"/>"""
+                            return@runBlocking WebResourceResponse("image/svg+xml", "UTF-8", 200, "OK",
+                                mapOf("Cache-Control" to "no-store"), svg.byteInputStream())
+                        }
+                        if (uri.host == origin.host && uri.path == "/favicon.ico") return@runBlocking WebResourceResponse(
+                            "image/x-icon", null, 204, "No Content", emptyMap(), java.io.ByteArrayInputStream(byteArrayOf()))
+                        if (document.offlineDiagram && uri.host == "measix.local" && uri.path == "/assets/html/mermaid.min.js") return@runBlocking null
+                        if (uri.scheme.equals("data", true)) return@runBlocking null
+                        val reference = if (uri.host == origin.host && uri.scheme == "https" && uri.port == -1) {
+                            if (uri.encodedPath == RENDERED_INLINE_PATH) uri.getQueryParameter("url").orEmpty() else uri.encodedPath.orEmpty()
+                        }
+                            else uri.toString()
+                        if (document.offlineDiagram) return@runBlocking denied()
+                        val (mime, bytes) = files.readRenderedResource(document.source, reference) ?: return@runBlocking denied()
+                        return@runBlocking WebResourceResponse(mime, if (mime == "text/css") "UTF-8" else null, 200, "OK",
+                            mapOf("Access-Control-Allow-Origin" to "*", "Cache-Control" to "no-store", "X-Content-Type-Options" to "nosniff"), java.io.ByteArrayInputStream(bytes))
+                    }
                     val localUrl = when {
-                        fileSource != null && uri.host == origin.host -> uri.encodedPath
-                        fileSource != null -> null
                         messageSource?.documentUrlPath != null && uri.host == origin.host -> renderedLocalFileUrl(uri) ?: uri.encodedPath
                         uri.scheme.equals("file", ignoreCase = true) -> uri.toString()
                         uri.host == origin.host || uri.host.equals("measix.local", ignoreCase = true) -> renderedLocalFileUrl(uri)
@@ -146,8 +176,7 @@ private fun renderedContentWebViewState(
                     when {
                         // loadDataWithBaseURL itself enters through a synthetic data URL; inline document resources have no filesystem authority.
                         uri.scheme.equals("data", ignoreCase = true) -> null
-                        localUrl != null -> (if (fileSource != null) files.readRenderedResource(document.source, localUrl)
-                            else files.readRenderedImage(document.source, localUrl))?.let { (mime, bytes) ->
+                        localUrl != null -> files.readRenderedImage(document.source, localUrl)?.let { (mime, bytes) ->
                             WebResourceResponse(mime, null, java.io.ByteArrayInputStream(bytes))
                         } ?: denied()
                         uri.scheme.equals("content", ignoreCase = true) -> denied()
@@ -159,11 +188,13 @@ private fun renderedContentWebViewState(
             // This is a native WebView callback, not a suspending caller. IO has already unwound;
             // a disposed document receives a denied response without reporting cancellation as failure.
             } catch (cancelled: CancellationException) { denied() }
+            catch (_: RenderedResourceException) { denied() }
             catch (_: ArtifactProjectionException) { denied() }
             catch (error: Exception) { onFailure(error); denied() }
         },
-    )
+    ).apply { javaScriptEnabled = true }
 }
+
 
 @Composable
 fun RenderedContentWebView(document: RenderedContent?, modifier: Modifier = Modifier) {

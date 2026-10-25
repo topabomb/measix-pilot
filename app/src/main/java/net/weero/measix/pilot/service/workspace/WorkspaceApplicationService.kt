@@ -326,7 +326,21 @@ class WorkspaceApplicationService internal constructor(
                 repository.readRootfsBytes(origin.workspaceId, "/$path", limit).also { verifyRoot() }
             } },
         )
-        return file.image(reference)
+        val path = file.resourcePath(reference)
+        return ImageSource(cacheIdentity = "rendered-file:${file.identity}:$path", origin = net.weero.measix.pilot.service.ImageOrigin.LOCAL,
+            displayName = path.substringAfterLast('/'),
+            mimeHint = if (path.endsWith(".svg", true)) "image/svg+xml" else null,
+            verifyAccess = file::requireAccess,
+            readPayload = {
+                file.requireAccess()
+                gated(origin.workspaceId) {
+                    verifyRoot()
+                    repository.readRootfsBytes(origin.workspaceId, "/$path", 4L * 1024 * 1024).also {
+                        verifyRoot()
+                        validateWorkspaceImage(it, path)
+                    }
+                }.also { file.requireAccess() }
+            })
     }
 
     internal suspend fun renderedSource(workspaceId: String, area: WorkspaceStorageArea, document: String): net.weero.measix.pilot.service.RenderedFileSource {

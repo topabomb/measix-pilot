@@ -34,6 +34,7 @@ class ImageSource internal constructor(
     private val readPayload: suspend () -> ByteArray,
     internal val mimeHint: String? = null,
     internal val gallerySaveSupported: Boolean = true,
+    internal val memoryCacheEnabled: Boolean = true,
 ) {
     internal val cacheKey = "image-source:" + cacheIdentity.encodeUtf8().sha256().hex()
 
@@ -60,7 +61,9 @@ internal object ImageSourceInterceptor : Interceptor {
     override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
         val source = chain.request.data as? ImageSource ?: return chain.proceed()
         source.requireAccess()
-        val result = chain.proceed()
+        val request = if (source.memoryCacheEnabled) chain.request else chain.request.newBuilder()
+            .memoryCachePolicy(coil3.request.CachePolicy.DISABLED).build()
+        val result = chain.withRequest(request).proceed()
         source.requireAccess()
         return result
     }

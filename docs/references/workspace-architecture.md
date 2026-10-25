@@ -315,11 +315,46 @@ HTML/SVG 文档采用统一 WebView 策略，不向页面披露 Bearer URL、DAV
 `RenderedFileSource` 绑定原文档目录，URL 在统一资源入口解码一次，拒绝其他 authority、编码斜线和越根路径，
 逻辑路径再交原服务校验。`FileBrowserSession.readPreviewResource` 分别沿 RemoteWorkspaceService 和
 WebDavBrowserService 的原 operation 执行；本地读取沿 WorkspaceApplicationService 的原 gate 与 NOFOLLOW IO。
-CSS、JS、SVG、字体等按 MIME 返回，单资源最多 24 MiB，Markdown 图片最多 4 MiB；不通过目录列表推断文件存在，
-不新增 Artifact/GeneratedMedia 记录或缓存 owner。读取前后复验原权限，来源变化会撤下静态已加载页面。
-渲染实例关闭/重试只取消自身读取 Job，不关闭借用的文件浏览会话；取消桥接见 [消息渲染](message-rendering-pipeline.md)。
+工作区 HTML/SVG 与 Markdown 内 HTML 块采用静态预览，不执行文件自带脚本、表单或嵌入页面。
+实现依据 Android 的 [WebViewClient 资源拦截](https://developer.android.com/reference/android/webkit/WebViewClient#shouldInterceptRequest(android.webkit.WebView,%20android.webkit.WebResourceRequest))
+和 [WebSettings 网络开关](https://developer.android.com/reference/android/webkit/WebSettings#setBlockNetworkLoads(boolean))；
+拦截不覆盖所有协议或重定向，因此同时约束文档、禁用浏览器联网，并由应用完成重定向校验。
+CSS、图片和字体通过原文件来源或无凭据的公网读取返回，WebView 不自行联网。公网 DNS 和每次重定向
+复验地址，拒绝本地网络、URL 凭据及 HTTPS 降级，不借用 Portal Cookie。CSS 相对 URL 按样式表位置解析，
+公网重定向后按最终位置解析。内嵌图片和字体映射回同一读取入口；data srcset 使用普通 src 回退。
+离线 Mermaid 保持专用渲染，工作区全屏图表只开放应用内置 Mermaid 资源。
+
+`RenderedFileSource.newPreview` 为每次显示借用原文件权限，`RenderedResourceCache` 只持有该次预览的临时字节。
+三个来源及 Markdown/WebView 共享最多 4 个资源读取；同路径在途读取合并，取消时等实际 IO 退出再归还名额。
+每次读取含排队、DNS、重定向与下载最多等待 30 秒；底层阻塞 IO 的退出仍依赖原读取组件的取消支持。
+每次预览的 LRU 字节缓存最多保留 32 MiB / 128 项；超出时淘汰最久未用的资源，不限制整页累计地址或流量。
+最多 128 个调用进入预览读取表，其余可取消地等待，等待计入同一 30 秒超时；在途记录在最后一个调用退出后移除。
+同地址读取仍合并，成功资源有效期 30 秒，失败记录有效期 5 秒并按 LRU 最多保留 128 项；重试开启新实例。
+全局 4 路、每资源最多 8 MiB 限制在途载荷，CSS 最多 1 MiB，字体最多 2 MiB；图片继续逐张校验最多 1600 万像素。
+不累计已经读过的图片像素或下载字节作为内存指标，否则长图库会永久耗尽额度，LRU 淘汰后重读还会重复计费。
+缓存预算不包含读取临时拷贝、当前响应流、DOM、解码和 WebView/GPU 内存，不是进程峰值承诺。
+Markdown 图片按视口及上下一个屏幕提前加载，离开范围释放显示请求并保留占位高度。HTML 的 img/picture
+由应用固定 IntersectionObserver 控制器按视口及最多 900px 提前加载，远离后替换为空白 SVG 占位，保留固有尺寸与作者尺寸规则；不执行文件自带脚本。
+依据 [HTML 延迟加载规则](https://html.spec.whatwg.org/multipage/urls-and-fetching.html)，禁用脚本时浏览器不会提供原生图片延迟加载；
+因此采用随机 nonce CSP 限定的 [IntersectionObserver](https://developer.mozilla.org/en-US/docs/Web/API/Intersection_Observer_API) 控制器。
+CSS 背景和字体仍随样式加载。
+原生图片及全屏查看统一禁止额外保留 Coil 解码内存缓存。
+不通过目录列表推断资源存在，不新增磁盘缓存或 Artifact/GeneratedMedia 记录；命中缓存仍复验原权限。
+
+图片、样式和字体的缺失、超时或超限保留正文，统一显示可复制诊断与重试；显示窗口保留最近 16 条不同资源诊断，
+关闭后新增失败仍重新提示。隐式 favicon 请求不读取工作区。
+主文件读取失败仍沿原页面错误流程，原来源撤权仍撤下整个预览。切源码、进入编辑、离页和重试关闭旧预览的
+资源读取与缓存，不关闭文件浏览会话或修改编辑稿；再次预览、保存后返回和全屏刷新取得新的临时读取实例。
+未保存编辑不能作为已发布文件预览。取消桥接见 [消息渲染](message-rendering-pipeline.md)。
 
 ### 文件管理与预览
+
+远程与 WebDAV 会话复用 FileBrowserReadCache：目录有效期 15 秒，最多 32 个目录及合计 8192 项；
+有强版本的文本有效期 30 秒，最多 4 份、合计 4 MiB UTF-16 字符占用。无版本文本不缓存，本地文件保持直接读取。
+命中前后复验原句柄，过期失败不伪装成旧数据成功。返回前台由原 owner 刷新状态，但只续用同一个有效句柄；
+撤权、刷新期间换域或没有已打开句柄时不自动申请新句柄。显式刷新、关闭及每次写入前后清空缓存；
+写入期间的迟到读取不能重新填充旧缓存。stat、冲突检查和 UNKNOWN 核验始终沿原新鲜读取。
+列表按路径保留最多 32 份滚动位置。资源缓存仍属于每次预览，不增加磁盘缓存或第二份可编辑状态。
 
 列表筛选和选择由页面管理；批次进度由实际循环的 `activeIndex/batchSize` 和当前目标发布，只在已知长度时显示传输比例，字节传完仍等待远端结果。完成后提供汇总及逐项诊断，UNKNOWN 保留读取核验入口；新批次或清除已知结果不能删除未核实路径。
 

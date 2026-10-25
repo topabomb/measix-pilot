@@ -2251,4 +2251,5 @@
   <string name="toast_details">詳細</string>
   <string name="qr_camera_permission">QR コードを読み取るにはカメラへのアクセスを許可してください。権限がブロックされている場合は設定で有効にしてください。</string>
   <string name="qr_scan_failed">カメラでコードを読み取れませんでした。詳細を確認して再試行してください。</string>
+  <string name="file_preview_resources_failed">一部のリソースを読み込めませんでした</string>
 </resources>

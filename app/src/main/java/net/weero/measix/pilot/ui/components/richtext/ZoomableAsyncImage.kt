@@ -102,6 +102,24 @@ internal fun resolveViewerImages(album: List<ImageSource>, model: ImageSource?):
 
 val LocalImageSourceResolver = androidx.compose.runtime.compositionLocalOf<(suspend (String) -> ImageSource?)?> { null }
 
+/** Geometry only. Limits include URL keys so a document cannot retain arbitrarily large addresses. */
+internal class PreviewImageHeights {
+    private val heights = linkedMapOf<String, Float>()
+    private var keyCharacters = 0
+    fun get(key: String) = heights[key]
+    fun put(key: String, height: Float) {
+        if (key.length > 2048 || !height.isFinite() || height <= 0) return
+        heights.remove(key)?.let { keyCharacters -= key.length }
+        heights[key] = height; keyCharacters += key.length
+        while (heights.size > 256 || keyCharacters > 4096) {
+            val oldest = heights.keys.first(); heights.remove(oldest); keyCharacters -= oldest.length
+        }
+    }
+    fun snapshot() = heights.toMap()
+    fun clear() { heights.clear(); keyCharacters = 0 }
+}
+internal val LocalPreviewImageHeights = androidx.compose.runtime.compositionLocalOf<PreviewImageHeights?> { null }
+
 @Composable
 internal fun ResolvedImage(
     url: String?,
@@ -114,15 +132,21 @@ internal fun ResolvedImage(
         net.weero.measix.pilot.ui.components.message.AttachmentPreviewDiagnostic(preview)
     } else {
         val workspace = LocalRenderedContentSource.current is net.weero.measix.pilot.service.RenderedContentSource.WorkspaceFile
+        val heights = LocalPreviewImageHeights.current
+        val width = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+        val geometryKey = "$width:$url"
         var visible by remember(url, LocalRenderedContentSource.current) { mutableStateOf(!workspace) }
-        var height by remember(url, LocalRenderedContentSource.current, androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp) { mutableStateOf(120.dp) }
+        var height by remember(url, LocalRenderedContentSource.current, width) { mutableStateOf((heights?.get(geometryKey) ?: 120f).dp) }
         val density = LocalDensity.current
         val window = androidx.compose.ui.platform.LocalView.current
         val viewport = if (!workspace) modifier else modifier.heightIn(min = height).onGloballyPositioned { coordinates ->
             val top = coordinates.localToWindow(androidx.compose.ui.geometry.Offset.Zero).y
             val preload = window.height.coerceAtLeast(1).toFloat()
             visible = coordinates.size.width > 0 && top < window.height + preload && top + coordinates.size.height > -preload
-            if (visible) height = with(density) { coordinates.size.height.toDp().coerceAtLeast(120.dp) }
+            if (visible) {
+                height = with(density) { coordinates.size.height.toDp().coerceAtLeast(120.dp) }
+                if (workspace) heights?.put(geometryKey, height.value)
+            }
         }
         ZoomableAsyncImage(
             model = if (visible) rememberResolvedImageSource(url) else null,

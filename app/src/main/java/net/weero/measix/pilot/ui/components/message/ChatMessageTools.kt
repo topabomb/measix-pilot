@@ -78,17 +78,31 @@ import net.weero.measix.pilot.ui.components.ui.DotLoading
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.modifier.shimmer
 import net.weero.measix.pilot.utils.JsonInstant
-import kotlin.time.Duration.Companion.milliseconds
 
 private const val ASK_USER_TOOL_NAME = "ask_user"
 
 @Composable
 internal fun ToolExecutionDuration(durationMillis: Long) {
     Text(
-        text = durationMillis.milliseconds.toString(),
+        text = formatToolExecutionDuration(durationMillis),
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+internal fun formatToolExecutionDuration(millis: Long): String {
+    if (millis < 1_000) return "<1s"
+    if (millis < 9_950) {
+        val tenths = (millis + 50) / 100
+        return if (tenths % 10 == 0L) "${tenths / 10}s" else "${tenths / 10}.${tenths % 10}s"
+    }
+    val seconds = millis / 1_000 + if (millis % 1_000 >= 500) 1 else 0
+    if (seconds < 60) return "${seconds}s"
+    val minutes = seconds / 60
+    if (minutes < 60) return "${minutes}m" + if (seconds % 60 == 0L) "" else " ${seconds % 60}s"
+    val hours = minutes / 60
+    if (hours < 24) return "${hours}h" + if (minutes % 60 == 0L) "" else " ${minutes % 60}m"
+    return "${hours / 24}d" + if (hours % 24 == 0L) "" else " ${hours % 24}h"
 }
 
 @Composable

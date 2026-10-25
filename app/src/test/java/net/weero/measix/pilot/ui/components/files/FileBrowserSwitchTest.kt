@@ -16,6 +16,19 @@ import org.junit.Test
 @org.robolectric.annotation.Config(sdk = [34])
 @OptIn(ExperimentalCoroutinesApi::class)
 class FileBrowserSwitchTest {
+    @Test fun `local file links retain distinct bounded visits without removing the workspace entry`() {
+        val root = net.weero.measix.pilot.Screen.WorkspaceDetail("workspace")
+        val stack = mutableListOf<androidx.navigation3.runtime.NavKey>(net.weero.measix.pilot.Screen.Enterprise, root)
+        val navigator = net.weero.measix.pilot.ui.context.Navigator(stack)
+        repeat(24) { navigator.navigateWorkspaceFile(net.weero.measix.pilot.Screen.WorkspaceFileEditor("workspace", "FILES", "page${it % 2}.html")) }
+        val visits = stack.filterIsInstance<net.weero.measix.pilot.Screen.WorkspaceFileEditor>()
+        assertEquals(16, visits.size)
+        assertEquals(16, visits.map { it.visitId }.distinct().size)
+        assertSame(root, stack[1])
+        repeat(16) { navigator.popBackStack() }
+        assertSame(root, stack.last())
+    }
+
     private class Browser(source: FileBrowserSource) : FileBrowserVM(source, mockk<Context>()) {
         suspend fun switch(change: () -> Unit) = resetTarget(change)
     }
@@ -23,6 +36,49 @@ class FileBrowserSwitchTest {
     private fun session() = mockk<FileBrowserSession>(relaxed = true) {
         coEvery { list("") } returns BrowserDirectory("", emptyList(), null, null)
         coEvery { isValid() } returns true
+    }
+
+    @Test fun `history drops old text under its budget but retains positions and does not expire active drafts`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val session = session()
+            val source = mockk<FileBrowserSource> {
+                every { selection } returns RealmSelection(RealmAccess.Personal, 1)
+                every { changes } returns MutableSharedFlow<Unit>()
+                coEvery { open() } returns session
+            }
+            val vm = Browser(source).also { store.put("browser", it) }
+            runCurrent()
+            val files = (0..3).map { BrowserFile("page$it.md", false, 1_048_576, null, "\"v1\"") }
+            coEvery { session.stat(any()) } answers { files.single { it.path == firstArg<String>() } }
+            vm.openPreview(files.first())
+            val first = requireNotNull(vm.state.value.editorSession)
+            first.previewState.webScroll.y = 2400
+            first.previewState.mediaPosition.longValue = 12_000
+            val body = "a".repeat(1_048_576)
+            repeat(3) { index ->
+                requireNotNull(vm.state.value.editorSession).accept(BrowserTextDocument(files[index],
+                    net.weero.measix.pilot.data.enterprise.WorkspaceText(body, false, "\n")))
+                vm.openLinkedFile(session, files[index + 1].path)
+            }
+            assertNull(first.document)
+            assertEquals("", first.editor.snapshot())
+            repeat(3) { vm.closePreview() }
+            assertSame(first, vm.state.value.editorSession)
+            assertEquals(2400, first.previewState.webScroll.y)
+            assertEquals(12_000L, first.previewState.mediaPosition.longValue)
+            first.accept(BrowserTextDocument(files[0], net.weero.measix.pilot.data.enterprise.WorkspaceText("body", false, "\n")))
+            assertTrue(first.hasFreshDocument())
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(31))
+            assertFalse(first.hasFreshDocument())
+            first.editing = true
+            first.editor.replaceText("unsaved")
+            assertTrue(first.hasFreshDocument())
+            assertEquals("unsaved", first.editor.snapshot())
+            first.accept(BrowserTextDocument(files[0], net.weero.measix.pilot.data.enterprise.WorkspaceText("body", false, "\n")))
+            assertEquals("body", first.editor.snapshot())
+        } finally { store.clear(); Dispatchers.resetMain() }
     }
 
     @Test fun `late invalidation of old server does not revoke or close new server`() = runTest {

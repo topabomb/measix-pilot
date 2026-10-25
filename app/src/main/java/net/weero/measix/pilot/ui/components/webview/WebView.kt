@@ -49,6 +49,24 @@ internal class MyWebChromeClient(private val state: WebViewState) : WebChromeCli
 }
 
 internal class MyWebViewClient(private val state: WebViewState) : WebViewClient() {
+    private fun restoreScroll(view: WebView, finalLayout: Boolean) {
+        val position = state.scrollPosition ?: return
+        if (state.scrollRestored) return
+        view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
+            override fun onComplete(requestId: Long) {
+                if (state.webView !== view || state.scrollRestored) return
+                @Suppress("DEPRECATION")
+                val maximumY = (view.contentHeight * view.scale - view.height).coerceAtLeast(0f)
+                if (!finalLayout && position.y > maximumY) return
+                view.scrollTo(position.x, position.y)
+                state.scrollRestored = true
+            }
+        })
+    }
+
+    override fun onPageCommitVisible(view: WebView, url: String?) {
+        restoreScroll(view, finalLayout = false)
+    }
     override fun shouldInterceptRequest(
         view: WebView,
         request: WebResourceRequest
@@ -81,6 +99,7 @@ internal class MyWebViewClient(private val state: WebViewState) : WebViewClient(
         state.pageTitle = view?.title // Update title
         state.canGoBack = view?.canGoBack() == true
         state.canGoForward = view?.canGoForward() == true
+        if (view != null) restoreScroll(view, finalLayout = true)
     }
 }
 
@@ -130,6 +149,16 @@ fun WebView(
                     )
 
                     state.webView = this // Assign the WebView instance to the state
+                    setOnScrollChangeListener { _, x, y, _, _ ->
+                        if (state.scrollRestored) state.scrollPosition?.let { it.x = x; it.y = y }
+                    }
+                    setOnTouchListener { _, event ->
+                        if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                            state.scrollRestored = true
+                            state.scrollPosition?.let { it.x = scrollX; it.y = scrollY }
+                        }
+                        false
+                    }
 
                     onCreated(this)
 
@@ -236,6 +265,20 @@ sealed class WebContent {
     data object NavigatorOnly : WebContent()
 }
 
+/** Small navigation state only; never retains a WebView, its Activity or decoded resources. */
+class WebViewScrollPosition(var x: Int = 0, var y: Int = 0) {
+    private val imageSizes = linkedMapOf<Int, Pair<Int, Int>>()
+    @android.webkit.JavascriptInterface
+    @Synchronized fun recordImageSize(index: Int, width: Int, height: Int) {
+        if (index < 0 || width <= 0 || height <= 0 || width.toLong() * height > 16_000_000) return
+        imageSizes.remove(index)
+        imageSizes[index] = width to height
+        while (imageSizes.size > 512) imageSizes.remove(imageSizes.keys.first())
+    }
+    @Synchronized fun imageSizes(): Map<Int, Pair<Int, Int>> = imageSizes.toMap()
+    @Synchronized fun clearImageSizes() = imageSizes.clear()
+}
+
 @Stable // Mark as Stable for better Compose performance
 class WebViewState(
     initialContent: WebContent = WebContent.NavigatorOnly,
@@ -244,7 +287,9 @@ class WebViewState(
     internal val interceptRequest: ((android.net.Uri) -> WebResourceResponse?)? = null,
     internal val onNavigate: ((String) -> Unit)? = null,
     internal val allowSameDocumentAnchors: Boolean = false,
+    internal val scrollPosition: WebViewScrollPosition? = null,
 ) {
+    internal var scrollRestored = false
     // --- Content State ---
     var content: WebContent by mutableStateOf(initialContent)
     internal var forceReload: Boolean by mutableStateOf(false) // Internal state to force URL reload if needed

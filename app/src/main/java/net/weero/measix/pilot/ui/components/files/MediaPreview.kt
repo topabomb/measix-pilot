@@ -53,13 +53,14 @@ import net.weero.measix.pilot.service.ChatError
 @Composable
 internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExternal: (() -> Unit)? = null,
     onDownload: (() -> Unit)? = null, actionsEnabled: Boolean = true,
-    speechPlayback: SpeechPlayback? = null, status: @Composable () -> Unit = {}) {
+    speechPlayback: SpeechPlayback? = null, positionState: MutableLongState? = null, status: @Composable () -> Unit = {}) {
     val currentSpeech by rememberUpdatedState(speechPlayback)
     val context = LocalContext.current
     val orientation = LocalConfiguration.current.orientation
     val activity = remember(context) { context.activity() }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var position by rememberSaveable(source.name, source.length) { mutableLongStateOf(0L) }
+    val localPosition = rememberSaveable(source.name, source.length) { mutableLongStateOf(0L) }
+    var position by (positionState ?: localPosition)
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
     var menu by remember { mutableStateOf(false) }
@@ -67,15 +68,17 @@ internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExt
     var error by remember(source) { mutableStateOf<String?>(null) }
     val player = remember(source, lifecycle) {
         ExoPlayer.Builder(context).setLoadControl(DefaultLoadControl.Builder()
+            .setBufferDurationsMs(15_000, 30_000, 3_000, 5_000)
             .setTargetBufferBytes(24 * 1024 * 1024).setPrioritizeTimeOverSizeThresholds(false).build()).build().apply {
             setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
             setHandleAudioBecomingNoisy(true)
         }
     }
     fun prepare() {
+        val restoredPosition = position
         player.setMediaSource(ProgressiveMediaSource.Factory(DataSource.Factory { MediaPreviewDataSource(source) })
             .createMediaSource(MediaItem.fromUri(Uri.parse("workspace-media:/content"))))
-        player.seekTo(position)
+        player.seekTo(restoredPosition)
         player.prepare()
     }
     DisposableEffect(player, lifecycle) {
@@ -164,7 +167,7 @@ internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExt
             AndroidView(factory = { PlayerView(it).apply {
                 this.player = player
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
                 setShowNextButton(false); setShowPreviousButton(false)
                 setFullscreenButtonClickListener { fullscreen = it }
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { controlsVisible = it == android.view.View.VISIBLE })

@@ -36,6 +36,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.key
 import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.rememberCoroutineScope
@@ -98,7 +99,8 @@ private fun WorkspaceFileEditorContent(
 
     val type = remember(fileName) { fileType(fileName) }
     var editing by remember(id, area, path) { mutableStateOf(false) }
-    var sourceView by remember(id, area, path) { mutableStateOf(false) }
+    val previewState = rememberSaveable(id, area, path, saver = FilePreviewState.Saver) { FilePreviewState() }
+    var sourceView by previewState::sourceView
     var media by remember(id, area, path) { mutableStateOf<MediaPreviewSource?>(null) }
     var renderedFile by remember(id, area, path) { mutableStateOf<net.weero.measix.pilot.service.RenderedFileSource?>(null) }
     val context = LocalContext.current
@@ -106,7 +108,7 @@ private fun WorkspaceFileEditorContent(
     val saveButtonText = stringResource(R.string.common_save)
     val tooLargeText = stringResource(R.string.workspace_file_editor_too_large)
 
-    val textState = remember(id, area, path) { FileEditorState() }
+    val textState = rememberSaveable(id, area, path, saver = FileEditorState.PositionSaver) { FileEditorState() }
     var readRevision by remember(id, area, path) { androidx.compose.runtime.mutableIntStateOf(0) }
     var loading by remember(id, area, path) { mutableStateOf(true) }
     var loadError by remember(id, area, path) { mutableStateOf<String?>(null) }
@@ -193,6 +195,7 @@ private fun WorkspaceFileEditorContent(
 
     media?.let {
         MediaPreview(it, { navController.popBackStack() },
+            positionState = previewState.mediaPosition,
             speechPlayback = koinInject<net.weero.measix.pilot.service.SpeechApplicationService>().playback,
             onExternal = if (area == WorkspaceStorageArea.FILES) ::external else null,
             onDownload = ::download, actionsEnabled = !exporting && !exportPending, status = {
@@ -227,7 +230,7 @@ private fun WorkspaceFileEditorContent(
                 },
                 actions = {
                     if (editing && isRenderedFile(fileName)) {
-                        TextButton(enabled = !dirty && !saving && !preparingPreview, onClick = {
+                        FilePreviewToggleButton(sourceView = true, enabled = !dirty && !saving && !preparingPreview, onClick = {
                             preparingPreview = true
                             scope.launch {
                                 try {
@@ -238,12 +241,10 @@ private fun WorkspaceFileEditorContent(
                                 catch (failure: Exception) { saveError = failure.userVisibleDiagnostic() }
                                 finally { preparingPreview = false }
                             }
-                        }) { Text(stringResource(R.string.file_preview_rendered)) }
+                        })
                     }
                     if (publishedText != null && !editing) {
-                        if (isRenderedFile(fileName)) TextButton({ sourceView = !sourceView }) {
-                            Text(stringResource(if (sourceView) R.string.file_preview_rendered else R.string.file_preview_source))
-                        }
+                        if (isRenderedFile(fileName)) FilePreviewToggleButton(sourceView) { sourceView = !sourceView }
                         if (editable) TextButton({ editing = true }) { Text(stringResource(R.string.edit)) }
                     }
                     if (showSaveAction) {
@@ -313,13 +314,13 @@ private fun WorkspaceFileEditorContent(
             }
 
             type == FileType.PDF -> PdfPreview("$id:$area:$path", { applicationService.openPreview(id, area, path) },
-                Modifier.fillMaxSize().padding(innerPadding)) { loadError = it.userVisibleDiagnostic() }
+                Modifier.fillMaxSize().padding(innerPadding), pageState = previewState.pdfPage) { loadError = it.userVisibleDiagnostic() }
             isRenderedFile(fileName) && !editing && !sourceView && renderedFile != null -> FileDocumentPreview(
                 requireNotNull(renderedFile), publishedText.orEmpty(), fileName,
-                Modifier.fillMaxSize().padding(innerPadding), onFileLink = { target, before ->
+                Modifier.fillMaxSize().padding(innerPadding), state = previewState, onFileLink = { target, before ->
                     renderedFile?.requireAccess()
                     before()
-                    navController.navigate(net.weero.measix.pilot.Screen.WorkspaceFileEditor(id, area.name, target))
+                    navController.navigateWorkspaceFile(net.weero.measix.pilot.Screen.WorkspaceFileEditor(id, area.name, target))
                 })
             else -> FileTextEditor(
                 state = textState,

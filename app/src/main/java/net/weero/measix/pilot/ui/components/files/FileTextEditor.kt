@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -56,6 +57,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.doOnLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -72,6 +74,8 @@ import net.weero.measix.pilot.ui.theme.AtomOneLightPalette
 /** In-memory draft; the native editor and this state share the same editable buffer. */
 @Stable
 class FileEditorState(initialText: String = "") {
+    internal var scrollX = 0
+    internal var scrollY = 0
     internal var beforeReplace: ((Int, Int, CharSequence, Int, Int) -> Unit)? = null
     internal val editable = object : SpannableStringBuilder(initialText) {
         override fun replace(start: Int, end: Int, source: CharSequence, sourceStart: Int, sourceEnd: Int): SpannableStringBuilder {
@@ -95,6 +99,14 @@ class FileEditorState(initialText: String = "") {
 
     fun replaceText(text: CharSequence) {
         if (text !== editable) editable.replace(0, editable.length, text)
+    }
+
+    companion object {
+        // File content is revalidated by the file owner; only the viewport belongs in navigation state.
+        val PositionSaver = listSaver<FileEditorState, Int>(
+            save = { listOf(it.scrollX, it.scrollY) },
+            restore = { FileEditorState().apply { scrollX = it[0]; scrollY = it[1] } },
+        )
     }
 }
 
@@ -172,8 +184,15 @@ fun FileTextEditor(
             }
             key(state) {
                 AndroidView(
-                    factory = { context -> FileEditText(context, state).also { nativeView = it } },
+                    factory = { context -> FileEditText(context, state).also { view ->
+                        nativeView = view
+                        val restoredX = state.scrollX
+                        val restoredY = state.scrollY
+                        view.doOnLayout { view.post { view.scrollTo(restoredX, restoredY) } }
+                        view.setOnScrollChangeListener { _, x, y, _, _ -> state.scrollX = x; state.scrollY = y }
+                    } },
                     onRelease = { view ->
+                        state.scrollX = view.scrollX; state.scrollY = view.scrollY
                         state.beforeReplace = null
                         view.stopScrolling()
                         view.clearSyntaxHighlight()

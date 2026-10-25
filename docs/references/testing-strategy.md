@@ -213,11 +213,17 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 这些设备证据不能代替真实 DAV 服务的 HEAD/206/If-Match、代理转发和中断响应验证；真实服务必须单独记录部署身份。
 
 `EnterpriseWebDavServiceTest` 验证多次媒体缓存命中不增加远端状态查询，已发布绑定变化仍阻止目标数组被写入；
+并验证 token 挂起期间切域、绑定变化、只读变化不会发送写请求，普通范围读保留前后两次远端校验、401 恢复保留额外校验。
+`MediaPreviewDataSourceTest` 验证慢段收缩、增长上限、seek 重置，以及 30 秒无响应后的取消与重开。
 `RemoteWorkspaceServiceTest` 验证独立 DAV 查询与状态刷新的迟到发布隔离。
 `MediaPreviewAndroidTest.throttledDavReportsRangeLatencyPlaybackAndSeek` 通过 `mediaDavBenchmarkRoot` 显式启用，
 使用专用受控 DAV 下的 `video.mp4`（至少 60 秒、大小超过 9 MiB），对比固定 8 MiB 与 seek 首窗口读取延迟，
 记录连续播放、卡顿次数、暂停拖动后的解码画面及关闭证据到 `media-dav-performance.json`。
 服务延迟、限速、设备及视频编码需随结果记录，耗时不作为普通 CI 阈值；受控 DAV 不替代真实企业 Core/Relay/Agent Space 验收。
+`WorkspaceReadPerformanceLiveAndroidTest` 使用 `workspaceReadPerformanceInput` 指向 app cache 内一次性 JSON，
+包含 `platformUrl` 与 `enrollment`，或已接入专用设备的 `resumeEnrolled: true` 和原 `deploymentId`；可指定 `directory` 与 `video`。
+它只读比较同一目录的 Files/DAV 完整调用、原始 DAV 请求和缓存命中；未指定视频时最多检查八个目录寻找候选。
+证据位于 `workspace-read-performance.json`，不写凭据。设备接入后用保留数据安装及直接 instrumentation，不能再运行会卸载应用的设备门禁。
 `ImagePreviewDialogTest` 另验证反复打开信息面板复用元信息，以及权限失效后不展示缓存信息。
 
 `EnterpriseMediaPreviewLiveAndroidTest` 在未接入的专用模拟器上，通过 `enterpriseMediaInput` 指定 app cache 内的一次性 JSON，
@@ -229,6 +235,7 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 它沿正式接入和同步链开通原会话访问，对本次 UUID 目录中的同一视频核对 DAV/Files 长度、非零 Range 和完整 SHA-256，
 再在两个正式文件页面各播放至少 15 秒并验证暂停拖动后的新画面。finally 撤播放器、等待原页面/句柄退出，
 只删除确认创建的测试目录及本次本地视频；结果和清理诊断写入 `enterprise-media-preview-live-evidence.json`，保留企业账号供诊断。
+可用 `rangeBenchmark=true` 额外比较同一视频的 256 KiB、1 MiB、8 MiB 完整范围读取耗时，指标写入同一证据，不能作为固定 CI 阈值。
 根目录查询失败但原句柄仍有效时，测试记录失败，再经同一 ViewModel 的 `browse` 进入已确认创建的测试目录，
 独立采集播放指标；任一根目录失败都会使完整用例失败，不能以目录内播放成功登记入口验收通过。
 必须使用保留数据安装及直接 instrumentation；不改变企业发布、权限或工作卷，真实服务身份与实际指标单独记录。

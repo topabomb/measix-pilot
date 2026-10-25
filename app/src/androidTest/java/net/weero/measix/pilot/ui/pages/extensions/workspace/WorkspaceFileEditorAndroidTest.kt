@@ -102,9 +102,9 @@ class WorkspaceFileEditorAndroidTest {
         compose.onNodeWithText(compose.activity.getString(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText("# Updated heading"), closeSoftKeyboard())
         val preview = compose.activity.getString(R.string.file_preview_rendered)
-        compose.onNodeWithText(preview).assertIsNotEnabled()
+        compose.onNodeWithContentDescription(preview).assertIsNotEnabled()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).performClick()
-        compose.onNodeWithText(preview).assertIsEnabled().performClick()
+        compose.onNodeWithContentDescription(preview).assertIsEnabled().performClick()
         compose.onNodeWithText("Updated heading").assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.edit)).assertIsDisplayed()
         coVerify(exactly = 1) { query.readTextForPreview(any(), any(), any()) }
@@ -127,11 +127,11 @@ class WorkspaceFileEditorAndroidTest {
         }
         coEvery { application.writeText("workspace", "drawing.svg", updated) } returns mockk<me.rerere.workspace.WorkspaceFileEntry>()
         showPage("drawing.svg", application, query)
-        compose.onNodeWithText(compose.activity.getString(R.string.file_preview_source)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.file_preview_source)).performClick()
         compose.onNodeWithText(compose.activity.getString(R.string.edit)).performClick()
         onView(isAssignableFrom(EditText::class.java)).perform(replaceText(updated), closeSoftKeyboard())
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.common_save)).performClick()
-        compose.onNodeWithText(compose.activity.getString(R.string.file_preview_rendered)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.file_preview_rendered)).performClick()
         compose.onNodeWithText("preview_refresh_failed", substring = true).assertIsDisplayed()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.update_card_close)).performClick()
         onView(isAssignableFrom(EditText::class.java)).check { view, error ->
@@ -139,8 +139,8 @@ class WorkspaceFileEditorAndroidTest {
             assertEquals(updated, (view as EditText).text.toString())
             assertNotNull(view.keyListener)
         }
-        compose.onNodeWithText(compose.activity.getString(R.string.file_preview_rendered)).performClick()
-        compose.onNodeWithText(compose.activity.getString(R.string.file_preview_source)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.file_preview_rendered)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.file_preview_source)).assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.edit)).assertIsDisplayed()
         coVerify(exactly = 3) { application.renderedSource("workspace", WorkspaceStorageArea.FILES, "drawing.svg") }
     }
@@ -181,7 +181,7 @@ class WorkspaceFileEditorAndroidTest {
                 }
             }
         }
-        compose.onNodeWithText(compose.activity.getString(R.string.file_preview_source)).performClick()
+        compose.onNodeWithContentDescription(compose.activity.getString(R.string.file_preview_source)).performClick()
         var editor: EditText? = null
         compose.waitUntil(5_000) { compose.onNodeWithText(compose.activity.getString(R.string.edit)).isDisplayed() }
         onView(isAssignableFrom(EditText::class.java)).check { view, failure ->

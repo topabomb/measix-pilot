@@ -48,11 +48,12 @@ internal fun rememberRenderedContentState(
     files: FileManagementApplicationService = koinInject(),
     queries: ConversationQueryService = koinInject(),
     readRevision: Int = 0,
+    scrollPosition: WebViewScrollPosition? = null,
 ): RenderedContentReadState {
     val handler = net.weero.measix.pilot.ui.components.richtext.LocalRichTextActions.current?.uriHandler
         ?: net.weero.measix.pilot.ui.components.richtext.UnavailableContentUriHandler
     // Every attempt owns its UI state; callbacks from a disposed WebView cannot fail a new document.
-    val state = remember(document, files, queries, readRevision, handler) {
+    val state = remember(document, files, queries, readRevision, handler, scrollPosition) {
         mutableStateOf<RenderedContentReadState>(if (document == null) RenderedContentReadState.Unavailable else RenderedContentReadState.Loading)
     }
     val reads = remember(state) { SupervisorJob() }
@@ -64,7 +65,7 @@ internal fun rememberRenderedContentState(
             val current = document ?: return@LaunchedEffect
             val source = current.source
             files.requireContentAccess(source)
-            val webView = renderedContentWebViewState(current, files, handler, reads) { error ->
+            val webView = renderedContentWebViewState(current, files, handler, reads, scrollPosition) { error ->
                 reads.cancel()
                 if (state.value is RenderedContentReadState.Ready) state.value = renderedContentFailure(error)
             }
@@ -107,6 +108,7 @@ private suspend fun renderedContentWebViewState(
     files: FileManagementApplicationService,
     handler: androidx.compose.ui.platform.UriHandler,
     reads: Job,
+    scrollPosition: WebViewScrollPosition?,
     onFailure: (Exception) -> Unit,
 ): WebViewState {
     // Independent registrable origins prevent cookies, IndexedDB and browser caches from becoming a cross-source store.
@@ -115,11 +117,13 @@ private suspend fun renderedContentWebViewState(
     val messageSource = (document.source as? RenderedContentSource.Conversation)?.message
     val baseUrl = origin.toString() + (fileSource?.documentUrlPath ?: messageSource?.documentUrlPath).orEmpty()
     val html = withContext(kotlinx.coroutines.Dispatchers.Default) {
-        if (fileSource != null && !document.offlineDiagram) prepareStaticFileHtml(document.html, origin.toString())
+        if (fileSource != null && !document.offlineDiagram) prepareStaticFileHtml(document.html, origin.toString(), scrollPosition?.imageSizes().orEmpty())
         else prepareRenderedHtml(document.html, origin.toString(), fileSource != null)
     }
     return WebViewState(
         initialContent = WebContent.Data(html, baseUrl, "UTF-8", "text/html"),
+        interfaces = if (fileSource != null && !document.offlineDiagram && scrollPosition != null)
+            mapOf("MeasixPreviewLayout" to scrollPosition) else emptyMap(),
         settings = {
             domStorageEnabled = false
             builtInZoomControls = true
@@ -139,6 +143,7 @@ private suspend fun renderedContentWebViewState(
             } else handler.openUri(url)
         },
         allowSameDocumentAnchors = fileSource != null,
+        scrollPosition = scrollPosition,
         interceptRequest = { uri ->
             fun denied() = WebResourceResponse("text/plain", "UTF-8", 403, "Unavailable", emptyMap(), java.io.ByteArrayInputStream(byteArrayOf()))
             try {
@@ -197,9 +202,9 @@ private suspend fun renderedContentWebViewState(
 
 
 @Composable
-fun RenderedContentWebView(document: RenderedContent?, modifier: Modifier = Modifier) {
+fun RenderedContentWebView(document: RenderedContent?, modifier: Modifier = Modifier, scrollPosition: WebViewScrollPosition? = null) {
     var revision by remember(document) { mutableIntStateOf(0) }
-    when (val state = rememberRenderedContentState(document, readRevision = revision)) {
+    when (val state = rememberRenderedContentState(document, readRevision = revision, scrollPosition = scrollPosition)) {
         RenderedContentReadState.Loading -> LinearProgressIndicator(modifier.fillMaxWidth())
         RenderedContentReadState.Unavailable -> Text(stringResource(R.string.rendered_content_unavailable), modifier)
         is RenderedContentReadState.Failed -> RenderedContentReadFailure(state.error, { revision++ }, modifier)

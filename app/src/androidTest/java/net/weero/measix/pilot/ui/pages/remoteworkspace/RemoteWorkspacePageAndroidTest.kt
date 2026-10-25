@@ -128,7 +128,7 @@ class RemoteWorkspacePageAndroidTest {
         f.show()
         files.forEach { current ->
             compose.onNodeWithText(current.name).performClick()
-            if (current.name == "page.html") compose.onNodeWithText(text(R.string.file_preview_source)).performClick()
+            if (current.name == "page.html") compose.onNodeWithContentDescription(text(R.string.file_preview_source)).performClick()
             var native: EditText? = null
             onView(isAssignableFrom(EditText::class.java)).check { view, error ->
                 if (error != null) throw error

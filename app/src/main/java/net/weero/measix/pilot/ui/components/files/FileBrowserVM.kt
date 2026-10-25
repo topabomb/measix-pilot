@@ -28,13 +28,18 @@ internal data class FileBrowserDownloadPicker(val handle: FileBrowserSession, va
 /** One transient native buffer survives view recreation only within its original management session. */
 internal class FileBrowserEditorSession(val handle: FileBrowserSession, val path: String) {
     val editor = FileEditorState()
+    val previewState = FilePreviewState()
     var document by mutableStateOf<BrowserTextDocument?>(null)
     var editing by mutableStateOf(false)
+    private var documentReadAt = 0L
+    fun hasFreshDocument() = document != null && (editing || android.os.SystemClock.elapsedRealtime() - documentReadAt < 30_000)
+    fun releaseCachedDocument() { document = null; editor.replaceText("") }
 
     fun accept(document: BrowserTextDocument) {
         require(document.file.path == path)
+        if (!android.text.TextUtils.equals(editor.editable, document.content.text)) editor.replaceText(document.content.text)
         this.document = document
-        editor.replaceText(document.content.text)
+        documentReadAt = android.os.SystemClock.elapsedRealtime()
     }
 }
 internal data class FileBrowserState(
@@ -175,6 +180,13 @@ internal open class FileBrowserVM(
         } else {
             if (before.preview != null && before.editorSession != null) previewHistory.addLast(before.preview to before.editorSession)
             while (previewHistory.size > 16) previewHistory.removeFirst()
+            // History retains lightweight positions after dropping old text, never native viewers.
+            var textBytes = previewHistory.sumOf { (it.second.document?.content?.text?.length ?: 0).toLong() * 4 }
+            for ((_, session) in previewHistory) {
+                if (textBytes <= 8L * 1024 * 1024) break
+                textBytes -= (session.document?.content?.text?.length ?: 0).toLong() * 4
+                session.releaseCachedDocument()
+            }
             _state.update { it.copy(preview = file, editorSession = FileBrowserEditorSession(handle, file.path), save = null) }
         }
     }

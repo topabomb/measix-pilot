@@ -24,26 +24,29 @@ import kotlinx.coroutines.*
 
 /** One bounded page at a time. The producing coroutine owns the renderer and file descriptor. */
 @Composable
-internal fun PdfPreview(file: File, modifier: Modifier = Modifier, onFailure: (Throwable) -> Unit) {
-    PdfPreview(file, { ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY) }, modifier, onFailure)
+internal fun PdfPreview(file: File, modifier: Modifier = Modifier, pageState: MutableIntState? = null, onFailure: (Throwable) -> Unit) {
+    PdfPreview(file, { ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY) }, modifier, pageState, onFailure)
 }
 
 @Composable
-internal fun PdfPreview(identity: Any, open: suspend () -> ParcelFileDescriptor, modifier: Modifier = Modifier, onFailure: (Throwable) -> Unit) {
+internal fun PdfPreview(identity: Any, open: suspend () -> ParcelFileDescriptor, modifier: Modifier = Modifier, pageState: MutableIntState? = null, onFailure: (Throwable) -> Unit) {
     var jump by remember(identity) { mutableStateOf(false) }
     var input by remember(identity) { mutableStateOf("") }
-    var page by remember(identity) { mutableIntStateOf(0) }
+    val localPage = remember(identity) { mutableIntStateOf(0) }
+    var page by (pageState ?: localPage)
     var count by remember(identity) { mutableIntStateOf(0) }
     var bitmap by remember(identity) { mutableStateOf<Bitmap?>(null) }
     DisposableEffect(identity) { onDispose { bitmap?.recycle(); bitmap = null } }
     LaunchedEffect(identity, page) {
         bitmap?.recycle(); bitmap = null
         var rendered: Bitmap? = null
+        var renderedPage = page
         try {
             val result = withContext(Dispatchers.IO) {
                 open().use { descriptor ->
                     PdfRenderer(descriptor).use { renderer ->
-                        renderer.openPage(page).use { pdf ->
+                        renderedPage = page.coerceIn(0, (renderer.pageCount - 1).coerceAtLeast(0))
+                        renderer.openPage(renderedPage).use { pdf ->
                             val scale = minOf(2f, 2000f / maxOf(pdf.width, pdf.height))
                             val width = (pdf.width * scale).toInt().coerceAtLeast(1)
                             val height = (pdf.height * scale).toInt().coerceAtLeast(1)
@@ -57,6 +60,7 @@ internal fun PdfPreview(identity: Any, open: suspend () -> ParcelFileDescriptor,
                 }
             }
             ensureActive()
+            page = renderedPage
             bitmap?.recycle(); bitmap = rendered; rendered = null; count = result
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { error.printStackTrace(); onFailure(error) }

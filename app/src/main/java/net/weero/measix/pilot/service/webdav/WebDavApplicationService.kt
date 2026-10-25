@@ -328,7 +328,10 @@ internal class WebDavApplicationService(
         try {
             check(lease.access == target.access && lease.context.platform.connection == target.connection) { "webdav_identity_changed" }
             val token = platform.accessToken(target.access.sessionId, target.connection)
-            validate(handle, writing)
+            // operation refreshes authority before and after IO. Token acquisition can suspend,
+            // so recheck the selected session's published identity without a third status request.
+            // Background tools have no selected projection and retain the remote check.
+            validateAccess(handle, writing, local = handle.selection != null)
             return try { action(enterpriseClient, "Bearer ${token.value}") }
             catch (failure: PlatformHttpException) {
                 if (failure.problem?.forwarded == false) onRejected()

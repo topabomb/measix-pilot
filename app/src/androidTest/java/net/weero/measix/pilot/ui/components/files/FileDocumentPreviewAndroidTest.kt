@@ -28,6 +28,114 @@ import java.util.concurrent.CopyOnWriteArrayList
 class FileDocumentPreviewAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun linkedHtmlViewsRestoreEachScrollPositionWhenReturningThroughHistory() {
+        val files = (0..2).map { index -> RenderedFileSource("page$index.html", MutableStateFlow(Unit), {}, { it }, { _, _ -> error("unexpected resource") }) }
+        val states = (0..2).map { FilePreviewState() }
+        var selected by mutableIntStateOf(0)
+        compose.setContent { Host { key(selected) {
+            FileDocumentPreview(files[selected], "<div style='height:2400px'>Page $selected</div><a id='next' href='page${selected + 1}.html'>Next page</a><div style='height:8000px'></div>",
+                "page$selected.html", Modifier.fillMaxSize(), state = states[selected], onFileLink = { _, before -> before(); selected++ })
+        } } }
+        repeat(2) { index ->
+            awaitScript("window.scrollTo(0,2400); window.scrollY.toString()") {
+                it.contains("2400") && states[index].webScroll.y > 0
+            }
+            tapHtmlElement("next")
+            compose.waitUntil(5_000) { selected == index + 1 }
+        }
+        awaitScript("document.body.innerText") { it.contains("Page 2") }
+        for (index in 1 downTo 0) {
+            compose.runOnIdle { selected = index }
+            awaitScript("document.body.innerText + '|' + window.scrollY") { it.contains("Page $index") && it.endsWith("|2400\"") }
+        }
+    }
+
+    @Test fun markdownPositionSurvivesDisposalAndSourceModeRoundTrip() {
+        val file = RenderedFileSource("note.md", MutableStateFlow(Unit), {}, { it }, { _, _ -> error("unexpected resource") })
+        val state = FilePreviewState()
+        var visible by mutableStateOf(true)
+        compose.setContent { Host {
+            if (visible) FileDocumentPreview(file, (1..100).joinToString("\n\n") { "Paragraph $it" }, "note.md", Modifier.fillMaxSize(), state = state)
+        } }
+        compose.waitUntil(5_000) { state.markdownScroll.maxValue > 1500 }
+        compose.runOnIdle { kotlinx.coroutines.runBlocking { state.markdownScroll.scrollTo(1500) } }
+        compose.runOnIdle { visible = false }
+        compose.waitForIdle()
+        compose.runOnIdle { visible = true }
+        compose.waitUntil(5_000) { state.markdownScroll.maxValue > 1500 }
+        compose.runOnIdle { assertEquals(1500, state.markdownScroll.value) }
+    }
+
+    @Test fun htmlImageGeometryKeepsDeepPositionWhileReturningImagesAreStillLoading() {
+        val bitmap = android.graphics.Bitmap.createBitmap(40, 400, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it); it.toByteArray() }
+        bitmap.recycle()
+        val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var delayImages = false
+        val file = RenderedFileSource("gallery.html", MutableStateFlow(Unit), {}, { it }, { _, _ ->
+            if (delayImages) resume.await()
+            bytes
+        })
+        val html = (0..7).joinToString("") { "<img src='image$it.png' width='120' style='display:block'>" }
+        var state = FilePreviewState()
+        val restoration = androidx.compose.ui.test.junit4.StateRestorationTester(compose)
+        restoration.setContent { Host {
+            val current = androidx.compose.runtime.saveable.rememberSaveable(saver = FilePreviewState.Saver) { FilePreviewState() }
+            SideEffect { state = current }
+            FileDocumentPreview(file, html, "gallery.html", Modifier.fillMaxSize(), state = current)
+        } }
+        try {
+            repeat(8) { index ->
+                awaitScript("document.images[$index].scrollIntoView(); 'scrolled'") { state.webScroll.imageSizes().containsKey(index) }
+            }
+            awaitScript("document.readyState") { it.contains("complete") }
+            awaitScript("window.scrollTo(0,7000); window.scrollY.toString()") { it.contains("7000") && state.webScroll.y > 0 }
+            compose.runOnIdle {
+                val view = requireNotNull(webView(compose.activity.window.decorView))
+                assertEquals(view.scrollY, state.webScroll.y)
+                @Suppress("DEPRECATION")
+                assertEquals(7000f, state.webScroll.y / view.scale, 1f)
+            }
+            delayImages = true
+            val previous = state
+            restoration.emulateSavedInstanceStateRestore()
+            compose.waitUntil(5_000) { state !== previous }
+            awaitScript("JSON.stringify({y:scrollY,height:document.documentElement.scrollHeight,ready:document.readyState})") { it.contains("7000") }
+            assertFalse(resume.isCompleted)
+            resume.complete(Unit)
+            awaitScript("document.readyState + '|' + window.scrollY") { it.contains("complete|7000") }
+        } finally { resume.complete(Unit) }
+    }
+
+    @Test fun markdownImageGeometryKeepsPositionBeforeImagesReload() {
+        val bitmap = android.graphics.Bitmap.createBitmap(400, 1600, android.graphics.Bitmap.Config.ARGB_8888)
+        val bytes = java.io.ByteArrayOutputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it); it.toByteArray() }
+        bitmap.recycle()
+        val resume = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val pending = java.util.concurrent.atomic.AtomicInteger()
+        var delayImages = false
+        val file = RenderedFileSource("gallery.md", MutableStateFlow(Unit), {}, { it }, { _, _ ->
+            if (delayImages) { pending.incrementAndGet(); resume.await() }
+            bytes
+        })
+        val state = FilePreviewState()
+        var visible by mutableStateOf(true)
+        val text = (0..7).joinToString("\n\n") { "![Image $it](image$it.png)" }
+        compose.setContent { Host { if (visible) FileDocumentPreview(file, text, "gallery.md", Modifier.fillMaxSize(), state = state) } }
+        try {
+            compose.waitUntil(10_000) { state.markdownScroll.maxValue > 2000 }
+            compose.runOnIdle { kotlinx.coroutines.runBlocking { state.markdownScroll.scrollTo(2000) } }
+            compose.waitForIdle()
+            compose.runOnIdle { visible = false }
+            compose.waitForIdle()
+            delayImages = true
+            compose.runOnIdle { visible = true }
+            compose.waitUntil(10_000) { pending.get() > 0 }
+            compose.runOnIdle { assertEquals(2000, state.markdownScroll.value) }
+            resume.complete(Unit)
+        } finally { resume.complete(Unit) }
+    }
+
     @Test fun dismissingResourceFailuresDoesNotHideLaterFailures() {
         val file = RenderedFileSource("index.html", MutableStateFlow(Unit), {}, { it }, { path, _ -> throw java.io.FileNotFoundException(path) })
         fun failResource(path: String) = kotlinx.coroutines.runBlocking {

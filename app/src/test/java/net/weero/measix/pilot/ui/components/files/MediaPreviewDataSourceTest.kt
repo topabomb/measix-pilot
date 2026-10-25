@@ -138,7 +138,7 @@ class MediaPreviewDataSourceTest {
         try {
             data.open(spec(position))
             assertEquals(1, data.read(ByteArray(1), 0, 1))
-            assertEquals(position to 256 * 1024, ranges.single())
+            assertEquals(position to 512 * 1024, ranges.single())
             assertEquals(1, data.read(ByteArray(1), 0, 1))
             assertEquals(1, ranges.size)
             val target = ByteArray(8 * 1024 * 1024)
@@ -149,7 +149,7 @@ class MediaPreviewDataSourceTest {
             data.close()
             data.open(spec(position + 1))
             data.read(ByteArray(1), 0, 1)
-            assertEquals(position + 1 to 256 * 1024, ranges.last())
+            assertEquals(position + 1 to 512 * 1024, ranges.last())
         } finally { data.close(); source.close() }
     }
 
@@ -171,6 +171,50 @@ class MediaPreviewDataSourceTest {
             assertEquals(3, data.read(target, 0, target.size))
             assertEquals(listOf(50L to 3, 50L to 3), ranges)
             assertEquals(C.RESULT_END_OF_INPUT, data.read(target, 0, target.size))
+        } finally { data.close(); source.close() }
+    }
+
+    @Test fun `slow complete ranges shrink the next window and seek resets its budget`() {
+        val sizes = mutableListOf<Int>()
+        var clock = 0L
+        val source = MediaPreviewSource("video", 64L * 1024 * 1024, emptyFlow<Unit>(), {}, readRange = { _, count ->
+            sizes += count
+            clock += (if (sizes.size == 6) 16_000L else 100L) * 1_000_000
+            ByteArray(count)
+        })
+        val data = MediaPreviewDataSource(source) { clock }
+        try {
+            data.open(spec(0))
+            val target = ByteArray(8 * 1024 * 1024)
+            repeat(8) { data.read(target, 0, target.size) }
+            assertEquals(listOf(512, 1024, 2048, 4096, 8192, 8192, 2048, 4096).map { it * 1024 }, sizes)
+            data.close()
+            data.open(spec(1))
+            data.read(target, 0, target.size)
+            assertEquals(512 * 1024, sizes.last())
+        } finally { data.close(); source.close() }
+    }
+
+    @Test fun `a stalled range times out cancels its reader and allows reopening`() {
+        var stalled = true
+        var cancelled = false
+        val source = MediaPreviewSource("video", 10, emptyFlow<Unit>(), {}, readRange = { _, count ->
+            if (stalled) try { kotlinx.coroutines.awaitCancellation() } finally { cancelled = true }
+            ByteArray(count) { 42 }
+        })
+        val data = MediaPreviewDataSource(source)
+        try {
+            data.open(spec(0))
+            val target = ByteArray(1) { -1 }
+            val failure = assertThrows(IOException::class.java) { data.read(target, 0, 1) }
+            assertTrue(failure.cause is kotlinx.coroutines.TimeoutCancellationException)
+            assertTrue(cancelled)
+            assertEquals((-1).toByte(), target[0])
+            data.close()
+            stalled = false
+            data.open(spec(0))
+            assertEquals(1, data.read(target, 0, 1))
+            assertEquals(42.toByte(), target[0])
         } finally { data.close(); source.close() }
     }
 }

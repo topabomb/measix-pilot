@@ -773,7 +773,8 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
         editorSession.document?.let { editor.snapshot() != it.content.text } == true
     } }
     val type = fileType(file.name)
-    var sourceView by remember(file, handle) { mutableStateOf(false) }
+    val previewState = editorSession.previewState
+    var sourceView by previewState::sourceView
     var media by remember(file, handle) { mutableStateOf<MediaPreviewSource?>(null) }
     val image = type == FileType.IMAGE
     val markdown = type == FileType.MARKDOWN
@@ -788,7 +789,7 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
     fun close() { if (saving) return else if (dirty) discard = true else finish() }
     BackHandler { close() }
     LaunchedEffect(file, handle, reload) {
-        if (reload == 0 && editorSession.document != null) { loading = false; return@LaunchedEffect }
+        if (reload == 0 && editorSession.hasFreshDocument()) { loading = false; return@LaunchedEffect }
         loading = true; error = null
         try {
             if (reload > 0) handle.refresh()
@@ -830,6 +831,7 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
     }
     media?.let {
         MediaPreview(it, onClose, onExternal = { onShare(true) }, onDownload = onDownload,
+            positionState = previewState.mediaPosition,
             speechPlayback = org.koin.compose.koinInject<net.weero.measix.pilot.service.SpeechApplicationService>().playback,
             actionsEnabled = !state.running, status = {
                 if (state.running || state.error != null) Surface {
@@ -861,9 +863,7 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
     Scaffold(topBar = { TopAppBar(title = { Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium) },
         navigationIcon = { IconButton({ close() }, enabled = !saving) { Icon(HugeIcons.ArrowLeft01, stringResource(R.string.back)) } },
         actions = {
-            if (document != null && !editing && isRenderedFile(file.name)) TextButton({ sourceView = !sourceView }) {
-                Text(stringResource(if (sourceView) R.string.file_preview_rendered else R.string.file_preview_source))
-            }
+            if (document != null && !editing && isRenderedFile(file.name)) FilePreviewToggleButton(sourceView) { sourceView = !sourceView }
             if (document != null && !editing) Tooltip(tooltip = { Text(stringResource(R.string.edit)) }) {
                 IconButton({ editorSession.editing = true }, enabled = handle.writable && !state.running && !loading) {
                     Icon(HugeIcons.FileEdit, stringResource(R.string.edit))
@@ -909,7 +909,7 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
             when {
                 document != null && isRenderedFile(file.name) && !editing && !sourceView -> FileDocumentPreview(
                     requireNotNull(renderedFile), document.content.text, file.name, Modifier.weight(1f).fillMaxWidth(),
-                    onFileLink = { path, before -> vm.openLinkedFile(handle, path, before) })
+                    onFileLink = { path, before -> vm.openLinkedFile(handle, path, before) }, state = previewState)
                 document != null -> FileTextEditor(
                     state = editor,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -919,7 +919,7 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
                     fillViewport = true,
                     fileName = file.name,
                 )
-                pdf != null -> PdfPreview(requireNotNull(pdf), Modifier.weight(1f)) {
+                pdf != null -> PdfPreview(requireNotNull(pdf), Modifier.weight(1f), pageState = previewState.pdfPage) {
                     error = it.userVisibleDiagnostic()
                     pdf = null
                 }

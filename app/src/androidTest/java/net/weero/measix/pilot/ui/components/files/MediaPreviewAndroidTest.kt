@@ -59,6 +59,7 @@ class MediaPreviewAndroidTest {
     private val authorized = MutableStateFlow(true)
     private val reads = AtomicInteger()
     private val closed = java.util.concurrent.atomic.AtomicBoolean()
+    private val position = androidx.compose.runtime.mutableLongStateOf(0)
 
     private var immersiveConfirmation: String? = null
     private var immersiveConfirmationCaptured = false
@@ -107,13 +108,13 @@ class MediaPreviewAndroidTest {
     }
 
     private fun openSource(source: MediaPreviewSource, speech: net.weero.measix.pilot.service.SpeechPlayback? = null): PlayerView {
-        compose.runOnUiThread { compose.activity.setContent {
+        compose.runOnUiThread { visible = true; compose.activity.setContent {
             MaterialTheme {
                 CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
                     Box(Modifier.fillMaxSize()) {
                         if (visible) {
                             DisposableEffect(source) { onDispose { source.close() } }
-                            MediaPreview(source, onClose = { visible = false }, speechPlayback = speech)
+                            MediaPreview(source, onClose = { visible = false }, speechPlayback = speech, positionState = position)
                         }
                     }
                 }
@@ -153,6 +154,20 @@ class MediaPreviewAndroidTest {
         assertEquals(2, pauses.get())
         io.mockk.verify(exactly = 2) { speech.pause() }
         io.mockk.verify(exactly = 0) { speech.stop() }
+    }
+
+    @Test fun returningToDisposedVideoRestoresPositionWithoutAutoplay() {
+        val view = open()
+        compose.runOnIdle { requireNotNull(view.player).seekTo(7_000) }
+        compose.waitUntil(5_000) { compose.runOnIdle { view.player?.playbackState == Player.STATE_READY } }
+        compose.runOnIdle { visible = false }
+        compose.waitUntil(5_000) { compose.runOnIdle { view.player == null } }
+        compose.runOnIdle { assertEquals(7_000, position.longValue) }
+        val returned = open()
+        compose.runOnIdle {
+            assertEquals(7_000, requireNotNull(returned.player).currentPosition)
+            assertFalse(requireNotNull(returned.player).playWhenReady)
+        }
     }
 
     @Test fun decodedVideoSupportsPlaybackScrubbingFullscreenAndClose() {
@@ -233,7 +248,7 @@ class MediaPreviewAndroidTest {
             val smallStart = android.os.SystemClock.elapsedRealtime()
             assertEquals(1, data.read(ByteArray(1), 0, 1))
             evidence.put("initialSeekWindowMs", android.os.SystemClock.elapsedRealtime() - smallStart)
-            assertEquals(256 * 1024, requests.single().second)
+            assertEquals(512 * 1024, requests.single().second)
             data.close()
             val prepareStart = android.os.SystemClock.elapsedRealtime()
             val view = openSource(source)

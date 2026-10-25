@@ -877,7 +877,7 @@ sealed interface Screen : NavKey {
     data class WorkspaceTerminal(val id: String) : Screen
 
     @Serializable
-    data class WorkspaceFileEditor(val id: String, val area: String, val path: String) : Screen
+    data class WorkspaceFileEditor(val id: String, val area: String, val path: String, val visitId: String = "") : Screen
 
     @Serializable
     data class SkillDetail(val skillName: String) : Screen

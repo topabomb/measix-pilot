@@ -242,6 +242,20 @@ class EnterpriseMediaPreviewLiveAndroidTest {
                 try {
                     assertEquals(fileBytes, filesSource.length)
                     assertArrayEquals(expectedRange, filesSource.readRange(offset, rangeCount))
+                    if (input.optBoolean("rangeBenchmark")) {
+                        val timings = org.json.JSONArray().also { evidence.put("rangeTimings", it) }
+                        for (count in listOf(256 * 1024, 1024 * 1024, 8 * 1024 * 1024)) {
+                            if (offset + count > fileBytes) continue
+                            var start = SystemClock.elapsedRealtime()
+                            assertEquals(count, filesSource.readRange(offset, count).size)
+                            timings.put(JSONObject().put("source", "files").put("bytes", count)
+                                .put("elapsedMs", SystemClock.elapsedRealtime() - start))
+                            start = SystemClock.elapsedRealtime()
+                            assertEquals(count, davService.mediaRange(openedDav, path, metadata, offset, count).size)
+                            timings.put(JSONObject().put("source", "dav").put("bytes", count)
+                                .put("elapsedMs", SystemClock.elapsedRealtime() - start))
+                        }
+                    }
                 } finally { filesSource.close() }
                 val davDigest = DigestSink()
                 assertEquals(fileBytes, davService.download(openedDav, path, davDigest, metadata.etag))

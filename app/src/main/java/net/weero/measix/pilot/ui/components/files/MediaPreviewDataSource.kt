@@ -6,18 +6,22 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSpec
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import net.weero.measix.pilot.service.files.MediaPreviewSource
 import java.io.IOException
 
 /** Loader-thread IO; close may cancel it from another thread without publishing late bytes. */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-internal class MediaPreviewDataSource(private val source: MediaPreviewSource) : BaseDataSource(true) {
+internal class MediaPreviewDataSource(
+    private val source: MediaPreviewSource,
+    private val nanoTime: () -> Long = System::nanoTime,
+) : BaseDataSource(true) {
     private class ReadSession(val uri: Uri, var position: Long, var remaining: Long) {
         val job = Job()
         var buffer = ByteArray(0)
         var bufferOffset = 0
         var started = false
-        var nextWindow = 256 * 1024
+        var nextWindow = 512 * 1024
     }
     private val lock = Any()
     private var current: ReadSession? = null
@@ -33,7 +37,7 @@ internal class MediaPreviewDataSource(private val source: MediaPreviewSource) : 
                 current = session
                 transferInitializing(dataSpec)
             }
-            runBlocking(session.job) { source.verifyAccess() }
+            runBlocking(session.job) { withTimeout(30_000) { source.verifyAccess() } }
             return synchronized(lock) {
                 requireCurrent(session)
                 session.started = true
@@ -51,7 +55,7 @@ internal class MediaPreviewDataSource(private val source: MediaPreviewSource) : 
         if (length == 0) return 0
         val session = synchronized(lock) { current ?: throw IOException("workspace_media_closed") }
         try {
-            runBlocking(session.job) { source.verifyAccess() }
+            runBlocking(session.job) { withTimeout(30_000) { source.verifyAccess() } }
             val range = synchronized(lock) {
                 requireCurrent(session)
                 if (session.remaining == 0L) return C.RESULT_END_OF_INPUT
@@ -65,13 +69,19 @@ internal class MediaPreviewDataSource(private val source: MediaPreviewSource) : 
             }
             if (range != null) {
                 // Neither the state lock nor a previous session's authority spans network IO.
-                val bytes = runBlocking(session.job) { source.readRange(range.first, range.second) }
+                val started = nanoTime()
+                val bytes = runBlocking(session.job) { withTimeout(30_000) { source.readRange(range.first, range.second) } }
                 if (bytes.size != range.second) throw IOException("workspace_incomplete_media_range")
+                val elapsedMs = ((nanoTime() - started) / 1_000_000).coerceAtLeast(1)
                 synchronized(lock) {
                     requireCurrent(session)
                     session.buffer = bytes
                     session.bufferOffset = 0
-                    session.nextWindow = (session.nextWindow * 2).coerceAtMost(8 * 1024 * 1024)
+                    // Aim for roughly four seconds per complete range, amortizing remote access
+                    // checks without growing unbounded waits. Slow links must not wait
+                    // for an ever-growing 8 MiB response; fast links still amortize request latency.
+                    session.nextWindow = (bytes.size.toLong() * 4_000 / elapsedMs)
+                        .coerceIn(256 * 1024L, minOf(session.nextWindow * 2L, 8 * 1024 * 1024L)).toInt()
                 }
             }
             return synchronized(lock) {

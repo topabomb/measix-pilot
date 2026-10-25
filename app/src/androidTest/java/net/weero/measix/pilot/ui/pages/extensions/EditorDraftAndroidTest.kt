@@ -75,6 +75,31 @@ class EditorDraftAndroidTest {
     // Real repository IO must resume through queued composition work, not the legacy unconfined dispatcher.
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun sourceViewportRestoresWithoutSavingDocumentBody() {
+        val body = (1..500).joinToString("\n") { "Source line $it" }
+        val restoration = StateRestorationTester(compose)
+        restoration.setContent { host {
+            val state = androidx.compose.runtime.saveable.rememberSaveable(
+                saver = net.weero.measix.pilot.ui.components.files.FileEditorState.PositionSaver,
+            ) { net.weero.measix.pilot.ui.components.files.FileEditorState() }
+            SideEffect { if (state.snapshot() != body) state.replaceText(body) }
+            net.weero.measix.pilot.ui.components.files.FileTextEditor(state, readOnly = true, fillViewport = true)
+        } }
+        compose.waitForIdle()
+        onView(isAssignableFrom(EditText::class.java)).check { view, missing ->
+            if (missing != null) throw missing
+            view.scrollTo(0, 1_500)
+            assertEquals(1_500, view.scrollY)
+        }
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        onView(isAssignableFrom(EditText::class.java)).check { view, missing ->
+            if (missing != null) throw missing
+            assertEquals(1_500, view.scrollY)
+        }
+        assertSmallActivityBundle()
+    }
+
     @Test fun workspaceDraftDoesNotEnterActivityBundle() {
         val published = largeBundleBody(paragraphCount = 400)
         val queries = mockk<WorkspaceQueryService>()

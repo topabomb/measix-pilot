@@ -174,6 +174,7 @@ class EnterpriseWebDavServiceTest {
         try {
             val f = Fixture(backgroundScope, "http://127.0.0.1:${server.address.port}")
             val handle = f.service.open(selection)
+            clearMocks(f.remote, answers = false)
             val output = ByteArrayOutputStream()
             assertEquals(4L, f.service.download(handle, "file", output))
             assertEquals("data", output.toString())
@@ -181,6 +182,41 @@ class EnterpriseWebDavServiceTest {
             assertTrue(paths.all { it == "/runtime/v1/resources/$id/spaces/$space/dav/file" })
             coVerify(exactly = 1) { f.platform.recoverWorkspaceAccessToken(access, f.connection, f.first) }
             coVerify(exactly = 1) { f.lease.release() }
+            coVerify(exactly = 3) { f.remote.readDavProjection(access) }
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `token wait cannot retain a revoked selection changed binding or old write permission`() = runTest {
+        val requests = AtomicInteger()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { request -> request.use { requests.incrementAndGet(); it.sendResponseHeaders(204, -1) } }
+            start()
+        }
+        try {
+            for (change in listOf("selection", "binding", "readonly")) {
+                val f = Fixture(backgroundScope, "http://127.0.0.1:${server.address.port}")
+                val handle = f.service.open(selection)
+                val entered = CompletableDeferred<Unit>()
+                val resume = CompletableDeferred<Unit>()
+                coEvery { f.platform.accessToken(access.sessionId, f.connection) } coAnswers {
+                    entered.complete(Unit); resume.await(); f.first
+                }
+                val operation = async {
+                    runCatching { f.service.upload(handle, "file", 1, { byteArrayOf(1).inputStream() }) }
+                }
+                entered.await()
+                when (change) {
+                    "selection" -> coEvery { f.queries.requireSelection(selection) } throws EnterpriseConfigurationException("enterprise_selection_revoked")
+                    "binding" -> f.publishedProjection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+                    else -> f.publishedProjection = ready.copy(webdav = ready.webdav!!.copy(accessMode = PlatformDAVAccessMode.READ_ONLY))
+                }
+                resume.complete(Unit)
+                assertTrue(operation.await().isFailure)
+                assertEquals(0, requests.get())
+                assertTrue(f.service.unknownPaths(handle).isEmpty())
+                coVerify(exactly = 1) { f.lease.release() }
+                f.service.close(handle)
+            }
         } finally { server.stop(0) }
     }
 
@@ -216,7 +252,9 @@ class EnterpriseWebDavServiceTest {
             val data = MediaPreviewDataSource(source)
             try {
                 data.open(DataSpec.Builder().setUri(Uri.parse("workspace-media:/video")).build())
+                clearMocks(f.remote, answers = false)
                 assertEquals(1, data.read(ByteArray(1), 0, 1))
+                coVerify(exactly = 2) { f.remote.readDavProjection(access) }
                 clearMocks(f.remote, answers = false)
                 repeat(32) {
                     val bytes = ByteArray(1024)

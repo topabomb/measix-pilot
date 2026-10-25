@@ -6,7 +6,7 @@ import net.weero.measix.pilot.service.renderedInlineUrl
 internal const val FILE_PREVIEW_PLACEHOLDER_PATH = "/.measix-preview-placeholder.svg"
 
 /** Preserve static layout; document-owned active content never runs in a file viewer. */
-internal fun prepareStaticFileHtml(html: String, origin: String = "https://preview.invalid"): String {
+internal fun prepareStaticFileHtml(html: String, origin: String = "https://preview.invalid", imageSizes: Map<Int, Pair<Int, Int>> = emptyMap()): String {
     val document = org.jsoup.Jsoup.parse(html)
     val nonce = java.util.UUID.randomUUID().toString()
     document.select("script,base,iframe,frame,frameset,object,embed,portal").remove()
@@ -40,9 +40,19 @@ internal fun prepareStaticFileHtml(html: String, origin: String = "https://previ
         }
     }
     document.select("audio,video").attr("preload", "none").attr("controls", "")
+    val restoredRatios = StringBuilder()
+    document.select("img").forEachIndexed { index, img ->
+        imageSizes[index]?.let { (width, height) ->
+            img.attr("src", "$origin$FILE_PREVIEW_PLACEHOLDER_PATH?w=$width&h=$height").removeAttr("data-preview-pending")
+            img.attr("data-preview-size", index.toString())
+            // Keep layout stable even when the real request replaces an undecoded placeholder.
+            // Zero specificity leaves the document's own sizing rules in control.
+            restoredRatios.append(":where(img[data-preview-size=\"$index\"]){aspect-ratio:auto $width/$height}")
+        }
+    }
     // A zero-specificity fallback reserves unknown images without replacing author sizing rules.
     document.head().prependElement("style").appendChild(org.jsoup.nodes.DataNode(
-        ":where(img[data-preview-pending]:not([width]):not([height])){min-height:96px}"))
+        ":where(img[data-preview-pending]:not([width]):not([height])){min-height:96px}$restoredRatios"))
     if (document.select("meta[name=viewport]").isEmpty()) document.head().appendElement("meta")
         .attr("name", "viewport").attr("content", "width=device-width, initial-scale=1")
     document.head().prependElement("meta").attr("http-equiv", "Content-Security-Policy").attr("content",
@@ -76,10 +86,12 @@ private const val FILE_PREVIEW_CONTROLLER = """
     const placeholder = placeholders.get(img);
     if (placeholder) img.src = placeholder;
   };
-  images.forEach(img => {
+  images.forEach((img, index) => {
+    if (img.src.startsWith('PREVIEW_PLACEHOLDER_URL?')) placeholders.set(img, img.src);
     img.addEventListener('load', () => {
       if (!img.naturalWidth || img.dataset.previewActive !== '1') return;
       placeholders.set(img, 'PREVIEW_PLACEHOLDER_URL?w=' + img.naturalWidth + '&h=' + img.naturalHeight);
+      if (window.MeasixPreviewLayout) window.MeasixPreviewLayout.recordImageSize(index, img.naturalWidth, img.naturalHeight);
       img.removeAttribute('data-preview-pending');
     });
   });

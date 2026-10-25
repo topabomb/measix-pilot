@@ -41,6 +41,14 @@ class Navigator(private val backStack: MutableList<NavKey>) {
         backStack.add(screen)
     }
 
+    /** File links are distinct visits, even A -> B -> A; bound their saved viewer state. */
+    internal fun navigateWorkspaceFile(screen: Screen.WorkspaceFileEditor) {
+        while (backStack.count { it is Screen.WorkspaceFileEditor } >= 16) {
+            backStack.removeAt(backStack.indexOfFirst { it is Screen.WorkspaceFileEditor })
+        }
+        backStack.add(screen.copy(visitId = java.util.UUID.randomUUID().toString()))
+    }
+
     fun clearAndNavigate(screen: Screen) {
         backStack.clear()
         backStack.add(screen)

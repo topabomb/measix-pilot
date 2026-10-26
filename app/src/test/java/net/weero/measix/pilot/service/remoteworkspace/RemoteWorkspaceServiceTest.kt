@@ -11,6 +11,12 @@ import kotlinx.coroutines.test.*
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
 import net.weero.measix.pilot.service.PlatformEnterpriseService
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.WebDavConfigurationReadState
+import net.weero.measix.pilot.service.webdav.*
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.data.configuration.ResolvedConfiguration
+import kotlinx.coroutines.flow.flowOf
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.junit.Assert.*
 import org.junit.Rule
@@ -107,6 +113,115 @@ class RemoteWorkspaceServiceTest {
         release.complete(Unit)
         close.await()
         assertTrue(lookup.isCancelled)
+    }
+
+    @Test fun `fresh DAV capture shares the owners refresh and retains its original failure`() = runTest {
+        for (failure in listOf(null, IOException("status offline"), WorkspaceProtocolUnavailableException("workspace_endpoint_not_supported"))) {
+            val f = fixture()
+            clearMocks(f.client, answers = false)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            coEvery { f.client.state(any(), any()) } coAnswers {
+                entered.complete(Unit); release.await()
+                if (failure != null) throw failure
+                ready
+            }
+            val ordinary = async { f.service.refresh(f.selection) }
+            entered.await()
+            val fresh = async { runCatching { f.service.refreshDavProjection(f.selection) } }
+            runCurrent()
+            coVerify(exactly = 1) { f.client.state(any(), any()) }
+            release.complete(Unit)
+            ordinary.await()
+            val result = fresh.await()
+            if (failure == null) assertEquals(ready, result.getOrThrow().projection)
+            else assertSame(failure, result.exceptionOrNull())
+            if (failure is WorkspaceProtocolUnavailableException) assertNull(f.service.summary.value)
+            else if (failure != null) assertTrue(f.service.queryState.value!!.diagnostic!!.contains("status offline"))
+        }
+    }
+
+    @Test fun `cancelling one fresh waiter leaves the shared refresh running`() = runTest {
+        val f = fixture()
+        clearMocks(f.client, answers = false)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { f.client.state(any(), any()) } coAnswers { entered.complete(Unit); release.await(); ready }
+        val fresh = async { f.service.refreshDavProjection(f.selection) }
+        entered.await()
+        val ordinary = async { f.service.refresh(f.selection) }
+        runCurrent()
+        fresh.cancelAndJoin()
+        assertFalse(ordinary.isCompleted)
+        release.complete(Unit)
+        ordinary.await()
+        assertEquals(ready, f.service.readPublishedDavProjection(f.selection).projection)
+        coVerify(exactly = 1) { f.client.state(any(), any()) }
+    }
+
+    @Test fun `a superseded fresh refresh cannot return an older binding as fresh`() = runTest {
+        val f = fixture()
+        val changed = ready.copy(bindingRevision = 2)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        coEvery { f.client.state(any(), any()) } coAnswers {
+            if (++calls == 1) { entered.complete(Unit); release.await(); ready } else changed
+        }
+        val fresh = async { runCatching { f.service.refreshDavProjection(f.selection) } }
+        entered.await()
+        f.service.readDavProjection(f.selection.access as RealmAccess.Enterprise)
+        release.complete(Unit)
+        assertEquals("workspace_status_changed", fresh.await().exceptionOrNull()?.message)
+        assertEquals(changed, f.service.readPublishedDavProjection(f.selection).projection)
+    }
+
+    @Test fun `revocation cancels shared fresh refresh and waits for its cleanup`() = runTest {
+        val f = fixture()
+        val entered = CompletableDeferred<Unit>()
+        val cleaning = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { f.client.state(any(), any()) } coAnswers {
+            entered.complete(Unit)
+            try { awaitCancellation() }
+            finally { withContext(NonCancellable) { cleaning.complete(Unit); release.await() } }
+        }
+        val fresh = async { f.service.refreshDavProjection(f.selection) }
+        entered.await()
+        val closing = async { f.service.cancelAndAwait(f.selection.access) }
+        cleaning.await()
+        assertFalse(closing.isCompleted)
+        release.complete(Unit)
+        closing.await()
+        assertTrue(fresh.isCancelled)
+    }
+
+    @Test fun `enterprise DAV browser opening consumes one fresh owner query`() = runTest {
+        val id = "dav_12345678-1234-4234-8234-123456789abc"
+        val projection = ready.copy(fileExchangeWebdavResourceId = id,
+            webdav = PlatformWorkspaceDAVProjection(id, true, "ready", PlatformDAVAccessMode.FULL, 2))
+        val f = fixture(projection)
+        clearMocks(f.client, answers = false)
+        val definition = EnterpriseWebDavResource(id, "Files", true, PlatformWebDAVDefinitionPurpose.WORKSPACE_FILE_EXCHANGE,
+            PlatformWebDAVDefinitionClientProtocol.WEBDAV, PlatformWebDAVDefinitionAuthOwnership.ENTERPRISE_MANAGED,
+            "/runtime/v1/resources/$id/spaces/{agentSpaceId}/dav/")
+        val configuration = mockk<ResolvedConfiguration> {
+            every { enterpriseConfiguration } returns mockk { every { webdav } returns listOf(definition) }
+        }
+        val queries = mockk<ConfigurationQueryService> {
+            every { observe(ConfigurationScope.Personal) } returns flowOf(mockk { every { personalWebDavConnections } returns emptyList() })
+            every { observeSelectedRealmSelection() } returns flowOf(f.selection)
+            every { observeWebDavConfiguration() } returns flowOf(WebDavConfigurationReadState.Available(f.selection, emptyList(), null))
+            coEvery { requireSelection(f.selection) } returns Unit
+            coEvery { read(f.selection.access) } returns configuration
+        }
+        val dav = WebDavApplicationService(queries, mockk(), backgroundScope, f.sessions, mockk(), f.service)
+        val browser = WebDavBrowserService(dav, queries, ApplicationRecoveryGate().apply { ready() }, backgroundScope, temporary.newFolder())
+        val session = browser.source(f.selection).open()
+        try {
+            assertTrue(session.isValid())
+            coVerify(exactly = 1) { f.client.state(any(), any()) }
+        } finally { session.close() }
     }
 
     @Test fun `a newer DAV observation is published and cannot be overwritten by an older refresh`() = runTest {

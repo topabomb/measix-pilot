@@ -80,7 +80,7 @@ internal class RemoteWorkspaceService(
         set(value) { state.value = value }
     private var generation = 0L
     private var davQueryRevision = 0L
-    private var refreshing: Pair<Identity, Deferred<Unit>>? = null
+    private var refreshing: Pair<Identity, Deferred<Result<WorkspaceDavSnapshot>>>? = null
     private val _summary = MutableStateFlow<RemoteWorkspaceSummary?>(null)
     val summary: StateFlow<RemoteWorkspaceSummary?> = _summary.asStateFlow()
     private val _queryState = MutableStateFlow<RemoteWorkspaceQueryState?>(null)
@@ -198,6 +198,19 @@ internal class RemoteWorkspaceService(
     }
 
     suspend fun refresh(selection: RealmSelection) {
+        refreshResult(selection)
+    }
+
+    /** Reuse the selected owner's current refresh, including its original failure, for DAV capture. */
+    suspend fun refreshDavProjection(selection: RealmSelection): WorkspaceDavSnapshot {
+        val snapshot = refreshResult(selection).getOrThrow()
+        check(snapshot.access == selection.access && identity(selection).connection == snapshot.connection) {
+            "workspace_connection_changed"
+        }
+        return snapshot
+    }
+
+    private suspend fun refreshResult(selection: RealmSelection): Result<WorkspaceDavSnapshot> {
         recovery.awaitReady()
         val identity = identity(selection)
         val task = sessions.withSelectedRealmSelection(selection) {
@@ -210,7 +223,7 @@ internal class RemoteWorkspaceService(
                     current = old ?: State(identity, null)
                     _summary.value = old?.let(::project)?.copy(status = RemoteWorkspaceStatus.CHECKING)
                     _queryState.value = RemoteWorkspaceQueryState(selection, refreshing = true)
-                    tracked<Unit>(selection, null) {
+                    tracked<Result<WorkspaceDavSnapshot>>(selection, null) {
                         try {
                             val projection = platform.read((selection.access as RealmAccess.Enterprise).sessionId) { connection, token ->
                                 check(connection == identity.connection) { "workspace_connection_changed" }
@@ -220,7 +233,8 @@ internal class RemoteWorkspaceService(
                             synchronized(monitor) {
                                 if (generation == stamp) {
                                     publishProjectionLocked(identity, projection)
-                                }
+                                    Result.success(WorkspaceDavSnapshot(selection.access as RealmAccess.Enterprise, identity.connection, projection))
+                                } else Result.failure(IllegalStateException("workspace_status_changed"))
                             }
                         } catch (cancelled: CancellationException) { throw cancelled }
                         catch (unsupported: WorkspaceProtocolUnavailableException) {
@@ -237,6 +251,7 @@ internal class RemoteWorkspaceService(
                                 }
                             }
                             android.util.Log.i("RemoteWorkspace", "Optional workspace protocol unavailable: ${unsupported.message}")
+                            Result.failure(unsupported)
                         }
                         catch (error: Exception) {
                             android.util.Log.e("RemoteWorkspace", "Status query failed", error)
@@ -247,6 +262,7 @@ internal class RemoteWorkspaceService(
                                     _queryState.value = RemoteWorkspaceQueryState(selection, refreshing = false, diagnostic = diagnostic)
                                 }
                             }
+                            Result.failure(error)
                         }
                     }.also { task ->
                         refreshing = identity to task
@@ -265,7 +281,7 @@ internal class RemoteWorkspaceService(
                 }
             }
         }
-        task.await()
+        return task.await()
     }
 
     private fun publishProjectionLocked(identity: Identity, projection: PlatformWorkspaceProjection) {

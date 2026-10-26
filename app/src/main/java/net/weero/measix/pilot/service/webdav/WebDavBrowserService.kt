@@ -57,7 +57,6 @@ internal class WebDavBrowserService(
         override suspend fun open(): FileBrowserSession {
             cleanupBeforeOpen()
             val original = requireNotNull(selection)
-            if (original.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) dav.refresh(original)
             val handle = dav.open(original, _targetId.value)
             _targetId.value = handle.target.id
             return Session(handle, changes)

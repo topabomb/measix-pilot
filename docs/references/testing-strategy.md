@@ -221,7 +221,10 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 同组还覆盖企业 SAF 导出完成时远端单独换绑的拒绝和目标清理、成功发布后的取消不回滚、写入确认后的晚到撤权不改报
 普通失败、取消等待前已登记未知写结果，以及备份/恢复确认后的外层检查不会改写完成态。
 `MediaPreviewDataSourceTest` 验证慢段收缩、增长上限、seek 重置，以及 30 秒无响应后的取消与重开。
-`RemoteWorkspaceServiceTest` 验证独立 DAV 查询与状态刷新的迟到发布隔离。
+`RemoteWorkspaceServiceTest` 验证独立 DAV 查询与状态刷新的迟到发布隔离、普通刷新与 DAV 首开共享一次结果、原始失败与旧 Core
+诊断保全、等待者取消隔离、撤销等待清理，以及真实 `WebDavBrowserService` 首开只调用一次状态接口。
+`EnterpriseWebDavServiceTest` 另验证后台读写在 token 后只远端核对一次、状态查询等待后的本地身份复验，以及完整附件上传/下载
+各四次状态查询；通过本机真实 DAV HTTP 核对 ETag、原路径和最终换绑拒绝/未发布附件回滚，不以请求数替代这些行为断言。
 `MediaPreviewAndroidTest.throttledDavReportsRangeLatencyPlaybackAndSeek` 通过 `mediaDavBenchmarkRoot` 显式启用，
 使用专用受控 DAV 下的 `video.mp4`（至少 60 秒、大小超过 9 MiB），对比固定 8 MiB 与 seek 首窗口读取延迟，
 记录连续播放、卡顿次数、暂停拖动后的解码画面及关闭证据到 `media-dav-performance.json`。
@@ -231,6 +234,7 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 它只读比较同一目录的 Files/DAV 完整调用、原始 DAV 请求和缓存命中；未指定视频时最多检查八个目录寻找候选。
 `rounds` 限制为 3–8（默认 5），额外对照原始 Files、独立状态请求及响应头、正文读完与 EOF 时序；
 同进程交替执行普通 DAV 列表和前后补回状态校验的列表，核对目录集合一致，用于隔离额外往返与部署、预热变化。
+也交替测量一次检查打开会话和补回一次状态刷新的打开会话；每次关闭临时会话，不把首次冷打开与重复打开样本混为同一指标。
 记录原始目录差异及排除根 `.agent-space` 管理项后的可见集合一致性，不记录凭据或文件正文。
 证据位于 `workspace-read-performance.json`，不写凭据。设备接入后用保留数据安装及直接 instrumentation，不能再运行会卸载应用的设备门禁。
 `ImagePreviewDialogTest` 另验证反复打开信息面板复用元信息，以及权限失效后不展示缓存信息。

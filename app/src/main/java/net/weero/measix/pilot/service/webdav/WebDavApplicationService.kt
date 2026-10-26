@@ -92,17 +92,20 @@ internal class WebDavApplicationService(
     suspend fun currentTarget(access: RealmAccess, configuration: ResolvedConfiguration): WebDavTarget? =
         observeTarget(access, configuration)?.target
 
-    private suspend fun observeTarget(access: RealmAccess, configuration: ResolvedConfiguration): ObservedTarget? {
+    private suspend fun observeTarget(access: RealmAccess, configuration: ResolvedConfiguration,
+        selection: RealmSelection? = null): ObservedTarget? {
         if (access == RealmAccess.Personal) return configuration.personalWebDavConnections.singleOrNull {
             it.id == configuration.currentPersonalWebDavConnectionId
         }?.let { ObservedTarget(WebDavTarget.Personal(it)) }
         val definitions = configuration.enterpriseConfiguration?.webdav.orEmpty().filter { it.enabled }
         if (definitions.isEmpty()) return null
-        val original = remoteWorkspace.readDavProjection(access as RealmAccess.Enterprise)
+        val enterprise = access as RealmAccess.Enterprise
+        val original = if (selection != null) remoteWorkspace.refreshDavProjection(selection)
+            else remoteWorkspace.readDavProjection(enterprise)
         val projection = original.projection ?: return null
         val definition = definitions.singleOrNull { it.id == projection.fileExchangeWebdavResourceId } ?: return null
         val binding = projection.webdav?.takeIf { it.resourceId == definition.id }
-        return ObservedTarget(WebDavTarget.Enterprise(access, original.connection, definition, projection.agentSpaceId,
+        return ObservedTarget(WebDavTarget.Enterprise(enterprise, original.connection, definition, projection.agentSpaceId,
             binding?.bindingRevision, binding?.accessMode), original)
     }
 
@@ -122,9 +125,9 @@ internal class WebDavApplicationService(
         val observed = if (access == RealmAccess.Personal && id != null) {
             configuration.personalWebDavConnections.singleOrNull { it.id.toString() == id }
                 ?.let { ObservedTarget(WebDavTarget.Personal(it)) }
-        } else observeTarget(access, configuration)?.takeIf { id == null || it.target.id == id }
+        } else observeTarget(access, configuration, selection)?.takeIf { id == null || it.target.id == id }
         val original = observed ?: error("webdav_resource_unavailable")
-        return captureTarget(access, original.target, selection, original.snapshot.takeIf { selection != null })
+        return captureTarget(access, original.target, selection, original.snapshot)
     }
 
     /** The caller supplies the START target; execution never reselects today's current resource. */
@@ -282,7 +285,7 @@ internal class WebDavApplicationService(
                 failure is PlatformHttpException && failure.problem?.forwarded == false
             if (sent && !definiteRejection) synchronized(monitor) { uncertain.getOrPut(handle.identity()) { mutableSetOf() }.addAll(paths) }
         }) {
-            validate(handle, writing = true)
+            validateLocal(handle, writing = true)
             synchronized(monitor) {
                 check(uncertain[handle.identity()].orEmpty().none { unknown -> paths.any {
                     it == unknown || it.startsWith("$unknown/") || unknown.startsWith("$it/")
@@ -299,26 +302,21 @@ internal class WebDavApplicationService(
         onFailure: (Throwable) -> Unit = {}, block: suspend () -> T): T = coroutineScope {
         val registration = Active(handle, currentCoroutineContext().job)
         synchronized(monitor) { check(!handle.closed.get()) { "webdav_access_closed" }; active += registration }
-        try { validateOperationAccess(handle); block().also { if (verifyAfter) validateOperationAccess(handle) } }
+        try { validateLocal(handle); block().also { if (verifyAfter) validateLocal(handle) } }
         catch (failure: Throwable) { onFailure(failure); throw failure }
         finally { synchronized(monitor) { active -= registration } }
     }
 
-    // Core authorizes each DAV request and revokes active leases on binding changes. Browsers
-    // reuse the original selection's published projection; background work has no such projection.
-    // A same-resource/space revision change is detected when that projection is next refreshed.
-    private suspend fun validateOperationAccess(handle: WebDavHandle, writing: Boolean = false) =
-        validateAccess(handle, writing, local = handle.selection != null)
-
     internal suspend fun validate(handle: WebDavHandle, writing: Boolean = false) = validateAccess(handle, writing, local = false)
 
-    /** Cache hits must retain authorization without turning each decoder read into platform IO. */
-    internal suspend fun validateLocal(handle: WebDavHandle) = validateAccess(handle, writing = false, local = true)
+    /** Background work checks its own Session and definition, never another page's projection. */
+    internal suspend fun validateLocal(handle: WebDavHandle, writing: Boolean = false) = validateAccess(handle, writing, local = true)
 
     private suspend fun validateAccess(handle: WebDavHandle, writing: Boolean, local: Boolean,
         observed: WorkspaceDavSnapshot? = null) {
         synchronized(monitor) { check(handle.access !in changingConnections) { "webdav_connection_change_in_progress" } }
         check(!handle.closed.get()) { "webdav_access_closed" }
+        if (writing) check(handle.writable) { "webdav_read_only" }
         handle.selection?.let { queries.requireSelection(it) }
         val configuration = queries.read(handle.access)
         when (val target = handle.target) {
@@ -329,17 +327,20 @@ internal class WebDavApplicationService(
                 check(configuration.enterpriseConfiguration?.webdav?.any { it.enabled && it.copy(name = target.definition.name) == target.definition } == true) {
                     "webdav_connection_changed"
                 }
-                val current = observed ?: if (local) remoteWorkspace.readPublishedDavProjection(requireNotNull(handle.selection))
+                check(sessions.platformContext(target.access.sessionId).platform.connection == target.connection) { "webdav_identity_changed" }
+                val current = observed ?: if (local) handle.selection?.let { remoteWorkspace.readPublishedDavProjection(it) }
                     else remoteWorkspace.readDavProjection(target.access)
-                check(current.access == target.access) { "webdav_identity_changed" }
-                current.diagnostic?.let { throw java.io.IOException(it) }
-                val projection = current.projection
-                val binding = projection?.webdav
-                check(current.connection == target.connection && projection?.fileExchangeWebdavResourceId == target.id &&
-                    projection.agentSpaceId == target.space && target.space != null && binding?.resourceId == target.id &&
-                    binding.bindingRevision == target.bindingRevision && target.bindingRevision != null) { "webdav_binding_changed" }
-                if (!binding.available || binding.accessMode == null) throw java.io.IOException("webdav_unavailable: ${binding.reason}")
-                if (writing) check(binding.accessMode == PlatformDAVAccessMode.FULL) { "webdav_read_only" }
+                if (current != null) {
+                    check(current.access == target.access) { "webdav_identity_changed" }
+                    current.diagnostic?.let { throw java.io.IOException(it) }
+                    val projection = current.projection
+                    val binding = projection?.webdav
+                    check(current.connection == target.connection && projection?.fileExchangeWebdavResourceId == target.id &&
+                        projection.agentSpaceId == target.space && target.space != null && binding?.resourceId == target.id &&
+                        binding.bindingRevision == target.bindingRevision && target.bindingRevision != null) { "webdav_binding_changed" }
+                    if (!binding.available || binding.accessMode == null) throw java.io.IOException("webdav_unavailable: ${binding.reason}")
+                    if (writing) check(binding.accessMode == PlatformDAVAccessMode.FULL) { "webdav_read_only" }
+                }
             }
         }
         check(!handle.closed.get()) { "webdav_access_closed" }
@@ -356,7 +357,13 @@ internal class WebDavApplicationService(
             val token = platform.accessToken(target.access.sessionId, target.connection)
             // Token acquisition can suspend. Recheck the original identity and write permission
             // before sending; a selected browser does not need another workspace status request.
-            validateOperationAccess(handle, writing)
+            validateLocal(handle, writing)
+            // One fresh check per background request or mutation, after any token wait. Core
+            // owns in-flight authorization; final publication retains its separate fresh check.
+            if (writing || handle.selection == null) {
+                validate(handle, writing)
+                validateLocal(handle, writing)
+            }
             return try { action(enterpriseClient, "Bearer ${token.value}") }
             catch (failure: PlatformHttpException) {
                 if (failure.problem?.forwarded == false) onRejected()
@@ -366,6 +373,7 @@ internal class WebDavApplicationService(
                 catch (cancelled: CancellationException) { throw cancelled }
                 catch (refreshFailure: Exception) { failure.addSuppressed(refreshFailure); throw failure }
                 validate(handle, writing)
+                validateLocal(handle, writing)
                 // PUT input may already have been consumed; refresh credentials without replaying its body.
                 if (!replay) throw failure
                 action(enterpriseClient, "Bearer ${replacement.value}")

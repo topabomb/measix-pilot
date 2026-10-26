@@ -84,7 +84,8 @@ class WorkspaceReadPerformanceLiveAndroidTest {
                 val davService = requireNotNull(dav)
                 report.put("platformOrigin", expectedOrigin).put("deploymentId", access.scope.authority.deploymentId)
                 val files = measure("files.open") { RemoteWorkspaceBrowserSource(remote, selection).open() }.also { filesBrowser = it }
-                val webdav = measure("dav.open") { koin.get<WebDavBrowserService>().source(selection).open() }.also { davBrowser = it }
+                val browserService = koin.get<WebDavBrowserService>()
+                val webdav = measure("dav.open") { browserService.source(selection).open() }.also { davBrowser = it }
                 val handle = davService.open(selection).also { rawHandle = it }
                 val target = handle.target as WebDavTarget.Enterprise
                 val token = platform.accessToken(access.sessionId, target.connection)
@@ -161,6 +162,15 @@ class WorkspaceReadPerformanceLiveAndroidTest {
                 report.put("resourceId", target.id).put("agentSpaceId", target.space)
                 val path = input.optString("directory", "")
                 val consistency = JSONArray().also { report.put("directoryComparisons", it) }
+                suspend fun openWithStatusChecks() = measure("dav.open.withStatusChecks", path) {
+                    davService.refresh(selection)
+                    browserService.source(selection).open().close()
+                }
+                repeat(input.optInt("rounds", 5).coerceIn(3, 8)) { round ->
+                    if (round % 2 == 0) openWithStatusChecks()
+                    measure("dav.open.singleCheck", path) { browserService.source(selection).open().close() }
+                    if (round % 2 != 0) openWithStatusChecks()
+                }
                 // Reconstruct the former network-check sequence in the same process and transport.
                 // Alternate its order against the optimized read to reduce deployment/warmup bias.
                 suspend fun readWithStatusChecks() = measure("dav.list.withStatusChecks", path) {

@@ -45,26 +45,31 @@ internal class WebDavBrowserService(
         }
         cleaned = true
     }
-    fun source(selection: RealmSelection?) = Source(selection)
+    fun source(selection: RealmSelection?) = Source(this, selection)
 
-    inner class Source internal constructor(override val selection: RealmSelection?) : FileBrowserSource {
+    // Compose consumes this concrete type in WebDavFileVM. A regular nested class emits the static
+    // stability field required by that consumer; an inner class does not.
+    class Source internal constructor(
+        private val browser: WebDavBrowserService,
+        override val selection: RealmSelection?,
+    ) : FileBrowserSource {
         private val _targetId = MutableStateFlow<String?>(null)
         val targetId = _targetId.asStateFlow()
-        override val changes: Flow<Unit> = merge(queries.observeWebDavConfiguration().map { },
-            queries.observeSelectedRealmSelection().map { })
+        override val changes: Flow<Unit> = merge(browser.queries.observeWebDavConfiguration().map { },
+            browser.queries.observeSelectedRealmSelection().map { })
         fun choose(id: String) { _targetId.value = id }
-        override suspend fun refresh() { dav.refresh(requireNotNull(selection)) }
+        override suspend fun refresh() { browser.dav.refresh(requireNotNull(selection)) }
         override suspend fun open(): FileBrowserSession {
-            cleanupBeforeOpen()
+            browser.cleanupBeforeOpen()
             val original = requireNotNull(selection)
-            val handle = dav.open(original, _targetId.value)
+            val handle = browser.dav.open(original, _targetId.value)
             _targetId.value = handle.target.id
-            return Session(handle, changes)
+            return browser.Session(handle, changes)
         }
         override fun discardExport(destination: BrowserExportDestination, onFailure: (Throwable) -> Unit) {
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            browser.scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 withContext(NonCancellable + Dispatchers.IO) {
-                    try { deleteExport(destination) }
+                    try { browser.deleteExport(destination) }
                     catch (failure: Exception) { onFailure(failure) }
                 }
             }

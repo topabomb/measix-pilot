@@ -16,13 +16,155 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 
 /** Black-box consumers of the installed shipping APK; never installs or substitutes a target. */
 @RunWith(AndroidJUnit4::class)
 class ReleaseConsumers {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
+
+    @Test
+    fun webDavDrawerOpensAfterBackAndProcessRestart() {
+        val target = shippingTarget()
+        val marker = "release-dav-${UUID.randomUUID()}"
+        var saveAttempted = false
+        var failure: Throwable? = null
+        LoopbackDav(marker).use { server ->
+            try {
+                restartShippingApp(target)
+                openSettingsEntry(target, "WebDAV", By.text("Add server"))
+                // A dedicated personal baseline avoids changing any existing current server or realm.
+                await(By.text("No current WebDAV. Add or select a server."))
+                check(!device.hasObject(By.text("Edit")) && !device.hasObject(By.text("Delete"))) {
+                    "This consumer requires an empty personal DAV list"
+                }
+                click(By.text("Add server"))
+                val editors = device.findObjects(By.clazz("android.widget.EditText"))
+                    .sortedBy { it.visibleBounds.top }
+                check(editors.size >= 2) { "WebDAV server editor missing" }
+                editors[0].text = marker
+                editors[1].text = "http://127.0.0.1:${server.port}/"
+                saveAttempted = true
+                click(By.text("Save"))
+                assertTrue("WebDAV editor did not close", device.wait(Until.gone(By.text("Save")), 10_000))
+                await(By.text(marker))
+                // The first saved server becomes current through the real configuration command.
+                await(By.text("Currently in use"))
+                device.pressBack()
+                device.pressBack()
+
+                repeat(3) { round ->
+                    if (round == 2) restartShippingApp(target)
+                    click(By.desc("Open conversation navigation"))
+                    click(By.desc("WebDAV file manager"))
+                    await(By.text("$marker.txt"))
+                    assertTrue(device.hasObject(By.text("WebDAV file manager")))
+                    device.pressBack()
+                    await(By.desc("Open conversation navigation"))
+                }
+                assertTrue("Expected a fresh browser session on each entry", server.listings.get() >= 3)
+                server.checkHealthy()
+            } catch (error: Throwable) {
+                failure = error
+                captureFailure(marker, error)
+                throw error
+            } finally {
+                if (saveAttempted) {
+                    try {
+                        restartShippingApp(target)
+                        openSettingsEntry(target, "WebDAV", By.text("Add server"))
+                        device.findObject(By.text(marker))?.let { label ->
+                            var card = label
+                            while (!card.hasObject(By.text("Delete"))) card = requireNotNull(card.parent)
+                            requireNotNull(card.findObject(By.text("Delete"))).click()
+                            await(By.text("Remove $marker? Server files will be kept. Any selection using this server will become unavailable."))
+                            click(By.clickable(true).hasDescendant(By.text("Delete")))
+                        }
+                        assertTrue("Temporary DAV configuration remains", device.wait(Until.gone(By.text(marker)), 10_000))
+                        await(By.text("No current WebDAV. Add or select a server."))
+                    } catch (cleanup: Throwable) {
+                        captureFailure("$marker-cleanup", cleanup)
+                        if (failure != null) failure.addSuppressed(cleanup) else throw cleanup
+                    }
+                }
+            }
+        }
+    }
+
+    /** A bounded read-only DAV endpoint in the independent consumer process. */
+    private class LoopbackDav(marker: String) : AutoCloseable {
+        private val listener = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"))
+        private val executor = Executors.newSingleThreadExecutor()
+        private val active = AtomicReference<Socket?>()
+        private val failure = AtomicReference<Throwable?>()
+        @Volatile private var closed = false
+        val listings = AtomicInteger()
+        val port: Int get() = listener.localPort
+        private val body = """<?xml version="1.0" encoding="UTF-8"?>
+            <d:multistatus xmlns:d="DAV:">
+              <d:response><d:href>/</d:href><d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+              <d:response><d:href>/$marker.txt</d:href><d:propstat><d:prop><d:resourcetype/><d:getcontentlength>5</d:getcontentlength><d:getetag>"v1"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+            </d:multistatus>""".trimIndent().toByteArray(Charsets.UTF_8)
+
+        init {
+            executor.execute {
+                try {
+                    while (!closed) listener.accept().use { socket ->
+                        active.set(socket)
+                        if (closed) return@use
+                        socket.soTimeout = 5_000
+                        val input = socket.getInputStream().buffered()
+                        fun line(): String = buildString {
+                            while (true) {
+                                val byte = input.read()
+                                check(byte >= 0) { "Unexpected DAV request end" }
+                                if (byte == 10) break
+                                if (byte != 13) append(byte.toChar())
+                                check(length < 8192)
+                            }
+                        }
+                        check(line() == "PROPFIND / HTTP/1.1") { "Only directory reads are accepted" }
+                        var length = 0
+                        var headers = 0
+                        while (true) {
+                            val header = line()
+                            if (header.isEmpty()) break
+                            check(++headers < 100)
+                            if (header.startsWith("Content-Length:", true)) length = header.substringAfter(':').trim().toInt()
+                        }
+                        require(length in 0..4096)
+                        repeat(length) { check(input.read() >= 0) }
+                        socket.getOutputStream().apply {
+                            write("HTTP/1.1 207 Multi-Status\r\nContent-Type: application/xml; charset=utf-8\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray(Charsets.US_ASCII))
+                            write(body)
+                            flush()
+                        }
+                        listings.incrementAndGet()
+                        active.compareAndSet(socket, null)
+                    }
+                } catch (error: Exception) {
+                    if (!closed) failure.set(error)
+                }
+            }
+        }
+
+        fun checkHealthy() { failure.get()?.let { throw AssertionError("Loopback DAV failed", it) } }
+        override fun close() {
+            closed = true
+            listener.close()
+            active.getAndSet(null)?.close()
+            executor.shutdownNow()
+            check(executor.awaitTermination(5, TimeUnit.SECONDS)) { "Loopback DAV did not stop" }
+        }
+    }
 
     @Test
     fun shippingUiRetainsFiveLanguagesAndRegionalFallbacks() {

@@ -286,7 +286,7 @@ internal class WebDavApplicationService(
         var sent = false
         try {
             request(handle, replay, onRejected = { sent = false }, writing = true) { transport, auth -> block(transport, auth) { sent = true } }
-            validate(handle)
+            validateOperationAccess(handle)
         }
         catch (failure: Throwable) {
             val definiteRejection = failure is DavHttpException && failure.status in setOf(400, 401, 403, 404, 405, 409, 412, 415, 423, 501) ||
@@ -299,9 +299,15 @@ internal class WebDavApplicationService(
     private suspend fun <T> operation(handle: WebDavHandle, block: suspend () -> T): T = coroutineScope {
         val registration = Active(handle, currentCoroutineContext().job)
         synchronized(monitor) { check(!handle.closed.get()) { "webdav_access_closed" }; active += registration }
-        try { validate(handle); block().also { validate(handle) } }
+        try { validateOperationAccess(handle); block().also { validateOperationAccess(handle) } }
         finally { synchronized(monitor) { active -= registration } }
     }
+
+    // Core authorizes each DAV request and revokes active leases on binding changes. Browsers
+    // reuse the original selection's published projection; background work has no such projection.
+    // A same-resource/space revision change is detected when that projection is next refreshed.
+    private suspend fun validateOperationAccess(handle: WebDavHandle, writing: Boolean = false) =
+        validateAccess(handle, writing, local = handle.selection != null)
 
     internal suspend fun validate(handle: WebDavHandle, writing: Boolean = false) = validateAccess(handle, writing, local = false)
 
@@ -347,10 +353,9 @@ internal class WebDavApplicationService(
         try {
             check(lease.access == target.access && lease.context.platform.connection == target.connection) { "webdav_identity_changed" }
             val token = platform.accessToken(target.access.sessionId, target.connection)
-            // operation refreshes authority before and after IO. Token acquisition can suspend,
-            // so recheck the selected session's published identity without a third status request.
-            // Background tools have no selected projection and retain the remote check.
-            validateAccess(handle, writing, local = handle.selection != null)
+            // Token acquisition can suspend. Recheck the original identity and write permission
+            // before sending; a selected browser does not need another workspace status request.
+            validateOperationAccess(handle, writing)
             return try { action(enterpriseClient, "Bearer ${token.value}") }
             catch (failure: PlatformHttpException) {
                 if (failure.problem?.forwarded == false) onRejected()

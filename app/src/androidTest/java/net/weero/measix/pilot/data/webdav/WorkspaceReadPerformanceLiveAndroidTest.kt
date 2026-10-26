@@ -161,12 +161,20 @@ class WorkspaceReadPerformanceLiveAndroidTest {
                 report.put("resourceId", target.id).put("agentSpaceId", target.space)
                 val path = input.optString("directory", "")
                 val consistency = JSONArray().also { report.put("directoryComparisons", it) }
-                repeat(input.optInt("rounds", 5).coerceIn(3, 8)) {
+                // Reconstruct the former network-check sequence in the same process and transport.
+                // Alternate its order against the optimized read to reduce deployment/warmup bias.
+                suspend fun readWithStatusChecks() = measure("dav.list.withStatusChecks", path) {
+                    davService.validate(handle)
+                    webdav.list(path).also { davService.validate(handle) }
+                }
+                repeat(input.optInt("rounds", 5).coerceIn(3, 8)) { round ->
                     measure("workspace.status", path) { remote.readDavProjection(access) }
                     measure("files.refresh", path) { files.refresh() }
                     val fileList = measure("files.list", path) { files.list(path) }
                     measure("dav.refresh", path) { webdav.refresh() }
+                    val checkedBefore = if (round % 2 == 0) readWithStatusChecks() else null
                     val davList = measure("dav.list", path) { webdav.list(path) }
+                    val checkedDavList = checkedBefore ?: readWithStatusChecks()
                     val rawFiles = measure("files.transport.list", path) {
                         filesTransport.list(target.connection, token.value, requireNotNull(target.space), path)
                     }
@@ -174,6 +182,7 @@ class WorkspaceReadPerformanceLiveAndroidTest {
                     measure("workspace.transport.status", path) { filesTransport.state(target.connection, token.value) }
                     val paths = fileList.files.map { entry -> entry.path }.toSet()
                     val davPaths = davList.files.map { entry -> entry.path }.toSet()
+                    check(checkedDavList.files.map { it.path }.toSet() == davPaths) { "dav_status_check_comparison_changed" }
                     val rawFilePaths = rawFiles.entries.map { entry -> entry.path }.toSet()
                     val rawDavPaths = rawDav.files.map { entry -> entry.path }.toSet()
                     fun visible(values: Set<String>) = values.filterNot { path.isEmpty() && it == ".agent-space" }.toSet()

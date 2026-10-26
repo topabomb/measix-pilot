@@ -1,15 +1,16 @@
 # 工作区 Files 与 WebDAV 请求效率调研
 
-企业 Files 和企业下发 WebDAV 最终可以访问同一个 Runcove 文件系统，但客户端请求数量和 Core 中间处理并不相同。本次确认 Android 普通 DAV 网络读取比 Files 多两次串行状态请求，同时验证了 Core Relay DAV XML 转换的短写和 flush 放大。Runcove 两条入口共用同一后端处理路径，没有 Files 专用快路。
+企业 Files 和企业下发 WebDAV 最终可以访问同一个 Runcove 文件系统，但客户端请求数量和 Core 中间处理并不相同。最初测量确认 Android 普通 DAV 网络读取比 Files 多两次串行状态请求，同时验证了 Core Relay DAV XML 转换的短写和 flush 放大。Runcove 两条入口共用同一后端处理路径，没有 Files 专用快路。
 
-Android 已精简首次捕获目标时的一次重复状态查询。普通 IO 的两次状态往返仍保留，因为现有 DAV 协议不能表达旧句柄期待的绑定版本；进一步消除它们需要服务端条件准入支持。Core 和 Runcove 仅做只读调研，未修改或部署。
+Android 已精简首次捕获目标时的一次重复状态查询，并结合 Core 逐请求校验，将选中浏览器普通读取的两次状态往返收敛为已有本地投影检查；写入保留一次新鲜前置查询。这里接受同资源、同空间的新 DAV 版本在投影刷新前按 Core 当前绑定读取，不能把前后查询描述成原子保证。Core 和 Runcove 仅做只读调研，未修改或部署。
 
 ## 范围与版本
 
 | 对象 | 本次依据 |
 | --- | --- |
-| Android | 本轮 `3a70812db`、`b94b545d0` 及后续审查修复 |
+| Android | `3a70812db`、`b94b545d0`、`f823fd6c1` 及本次浏览器查询简化 |
 | Core | `D:/RustProject/measix/measix-platform-core`，`9cb59da3c38d6d02c3c0f8e7d73b51738e27a069` |
+| Core 简化时复核 | 性能代码 `d46f699904309f4ea3c3279002dd48dc36a78697`，随后为文档提交 `33a4c63e8ab50eb9fe8b71da722f38bccb1090c9`；准入代码未变、工作树干净，本任务只读 |
 | Runcove | Ubuntu `/home/hualei/msb_demo`，`f1643e2fea3549a2d26f40261582fc7f065fb279`；入口按该仓库 README、WebDAV 和架构文档核对 |
 | 真实读取 | 已接入的专用 `Pilot_Verification_API36` 模拟器，同一账号、资源、空间和平台；只读目录及状态 |
 | 隔离验证 | Android 构建报告目录中的标准库 Go 程序、本机 HTTP/1.1、合成 UTF-8 XML，Go 1.26.4 |
@@ -52,18 +53,18 @@ Files 使用 `GET /api/client/v1/workspace/files?agentSpaceId=…&path=…`；�
 
 | 操作 | Files | 企业 DAV |
 | --- | --- | --- |
-| 已开会话的一次列表、HEAD 或 Range | 1 次文件请求；原身份在本地复验 | 1 次 DAV 加前后 2 次状态 GET |
-| 首次打开并列目录 | 通常 1 次状态加 1 次列表 | 修复前 5 次状态加 1 次 DAV；修复后 4 次状态加 1 次 DAV |
-| 已开页面下拉刷新 | 1 次状态加 1 次列表 | 3 次状态加 1 次 DAV |
+| 已开浏览会话的一次列表、HEAD 或 Range | 1 次文件请求；原身份在本地复验 | 1 次 DAV；原身份及已发布绑定在本地复验，原来额外 2 次状态 GET 已移除 |
+| 首次打开并列目录 | 通常 1 次状态加 1 次列表 | 通常 2 次状态加 1 次 DAV；初版为 5 次，上轮修复后为 4 次 |
+| 已开页面下拉刷新 | 1 次状态加 1 次列表 | 1 次状态加 1 次 DAV |
 | 目录、文本或媒体缓冲命中 | 本地原句柄复验 | 本地原句柄及已发布 DAV 投影复验 |
 
-Android `WebDavApplicationService.operation` 在 IO 前后调用 `validate`，经 `RemoteWorkspaceService.readDavProjection` 发起 Hub `/workspace` GET；Files 的 `RemoteWorkspaceService.operation` 使用已发布原会话投影，不为每次文件请求另查状态。Hub 状态接口读取 Core 状态，不另向 Runcove 发 DAV 请求。
+Android `WebDavApplicationService.operation` 原先在 IO 前后调用 `validate`，经 `RemoteWorkspaceService.readDavProjection` 发起 Hub `/workspace` GET；现在选中浏览器通过 `validateOperationAccess` 读取原 owner 的已发布投影。Files 本来就使用已发布原会话投影。Hub 状态接口读取 Core 状态，不另向 Runcove 发 DAV 请求。
 
-本次修复在 `WebDavApplicationService.observeTarget/captureTarget` 保留同次新鲜响应，首次选中页面捕获目标时复用一次，随后仍校验当前配置、原 selection 和已发布投影。若已有较新绑定，旧观察不能覆盖它。观察不跨操作保存，不引入授权 TTL；旧 Turn 目标、后台 capture、普通 IO 前后及 401 恢复仍走原远端复验。
+`WebDavApplicationService.observeTarget/captureTarget` 保留同次新鲜响应，首次选中页面捕获目标时复用一次，随后仍校验当前配置、原 selection 和已发布投影。若已有较新绑定，旧观察不能覆盖它。旧 Turn 目标、显式刷新、401 恢复、下载最终发布及未知写入核实仍走远端复验；无选中投影的后台任务保持原路径，不新增 TTL、轮询或第二份授权缓存。
 
-对应行为测试验证首次捕获只读一次状态、旧目标拒绝新版本，以及较新的已发布绑定拒绝旧观察。这里减少的是打开阶段的重复查询，不能写成“普通 DAV IO 的两次状态往返已经移除”。
+选中页面写入原有四次状态查询收敛为写前一次，成功后使用本地检查，并在已发送后观察到变化时保留未知写结果。Core 仍独立执行权限与活动租约撤销，成功响应不再因额外写后状态 GET 失败而改报失败。对应测试覆盖多个媒体窗口无额外查询、原 URL、Core 拒绝、token 等待期间变化及下载/恢复发布边界。
 
-## 生产分层测量
+## 简化前的生产分层测量
 
 在同一生产空间分别读取根目录和一个普通子目录，各按相同顺序交替五轮；冷启动首项保留，表中使用中位数。原始传输对照使用独立诊断 client，其两种协议共享 probe pool 以减小建连差异；产品 client 保持原池。原始调用仅用于分层测量，产品继续使用原应用服务。
 
@@ -94,9 +95,33 @@ Files 在根目录过滤精确 `.agent-space` 管理项，标准 DAV 保留；�
 
 本次约 150 ms 的额外正文等待主要出现在正数据读取期间，不能全部归因于最后数据后的同步统计尾处理。剩余约 130 ms 的 raw Files/DAV 差距仍可能混合 Relay XML 转换、响应分块、入口转发与后端调度；当前没有逐请求服务端阶段记录来精确分摊。
 
-## Core 已验证的 XML 放大
+## 简化后的同进程对照
 
-Relay `backend/internal/relay/runtime/webdav_xml.go::mapDAVXML` 逐 token 写出，`rewriteDAVXML` 直接连接无缓冲 `io.PipeWriter` 并将 ContentLength 置为 -1。Go `httputil.ReverseProxy` 对未知长度响应立即 flush。既有 32 KiB copy buffer 代表最大单次读取容量，并不会自动把 Pipe 的每次短写聚合成大块。
+在同一已接入专用模拟器、同一进程和产品 DAV 连接池中，交替读取普通目录与“前后补回状态检查”的目录。
+后者是在相同产品读取前后调用 `validate`，重建旧网络检查序列，不是再次运行旧 APK。每组五轮，保留首轮及慢样本；
+两支的目录集合必须一致，Files 与 DAV 同时进行原始传输对照。
+
+| 目录 | Files 列表中位数 | 简化后 DAV | 补回两次检查 | 同轮差值中位数 |
+| --- | --- | --- | --- | --- |
+| 普通子目录，6 项完全一致 | 431 ms | 434 ms | 1,118 ms | 647 ms |
+| 根目录，Files 4 项 / DAV 5 项 | 413 ms | 439 ms | 1,141 ms | 686 ms |
+
+根目录差异只有原 Files 保护规则过滤的 `.agent-space`；五轮可见集合均一致。
+同轮差值是每轮“补回检查减去简化读取”的差值中位数，不是两列中位数相减。结果与状态查询约 303–325 ms 的两次往返相符，
+仍包含本地复验、网络抖动和正文读取的差异，不能当作纯网络时延分摊。
+旧、新 APK 的独立顺序比较另测得 DAV 1,247 → 437 ms，但同期 raw DAV 也从 561 → 408 ms，不能将全部差值归因于 Android。
+当前小目录样本中的 Files 与 DAV 延迟已经接近；不据此保证所有目录、视频吞吐或不同部署均相同。
+
+本轮新增验证覆盖 83 项相关单元测试，其中包含两个真实 Range 窗口无需状态查询、Core 拒绝传播、成功写入不依赖写后状态请求、
+传输期间本地绑定变化保留未知结果、token 等待变化，以及 401 恢复后换绑禁止重试。恢复发布的原换绑拒绝与清理测试继续通过。
+Debug、Release 和 lint 均通过；独立子代理审查实现、测试及同进程对照未发现阻塞问题。
+两份五轮配对证据为 `app/build/reports/preview/dav-validation-live-paired-subdir.json` 与
+`dav-validation-live-paired-root.json`；汇总、构建和单元测试日志使用同目录的 `dav-validation-*` 文件。
+本轮没有修改生产权限或绑定、未重新播放真实视频，也没有重跑无关的全量单元测试。
+
+## 初次调研中 Core 原实现的 XML 放大
+
+初次调研的 `9cb59da` 中，Relay `backend/internal/relay/runtime/webdav_xml.go::mapDAVXML` 逐 token 写出，`rewriteDAVXML` 直接连接无缓冲 `io.PipeWriter` 并将 ContentLength 置为 -1。Go `httputil.ReverseProxy` 对未知长度响应立即 flush。既有 32 KiB copy buffer 代表最大单次读取容量，并不会自动把 Pipe 的每次短写聚合成大块。
 
 隔离程序复现该转换和标准库反代，只将对照组的 Pipe 前输出改为 32 KiB `bufio.Writer`，成功结束时 Flush。每组交替三轮，18 个输出均与直接转换逐字节一致。
 
@@ -106,7 +131,7 @@ Relay `backend/internal/relay/runtime/webdav_xml.go::mapDAVXML` 逐 token 写出
 | 200 | 95,884 | 5,803 | 5,603 / 5,604 | 3 / 3 / 4 |
 | 2000 | 958,084 | 58,003 | 56,003 / 56,004 | 30 / 30 / 31 |
 
-计数是逻辑 ResponseWriter 调用，不能等同 TCP 包或 syscall；合成本机计时不用于预计生产加速比例。该机制可确定为当前 Core 版本的目录协议处理效率问题，生产影响还取决于部署版本、目录规模及入口代理。GET/HEAD 视频正文不经过 XML 重写，不能用此机制解释全部视频等待。
+计数是逻辑 ResponseWriter 调用，不能等同 TCP 包或 syscall；合成本机计时不用于预计生产加速比例。该机制证明的是原实现的目录协议效率问题；后续 Core `d46f699` 源码已增加 32 KiB 输出聚合和 Flush。生产影响还取决于实际部署版本、目录规模及入口代理。GET/HEAD 视频正文不经过 XML 重写，不能用此机制解释全部视频等待。
 
 Relay 还有一个需要分段取证的尾部候选：`serveDAV` 返回前同步执行统计记录和 spool 持久化，未知长度正文可能等待 handler 结束。需要分别记录最后数据、EOF、proxy copy 结束和统计写入阶段，才能判断其对当前尾延迟的贡献。
 
@@ -118,25 +143,25 @@ Relay 还有一个需要分段取证的尾部候选：`serveDAV` 返回前同步
 
 这些成本会让多发一次 HEAD、PROPFIND 或 Range 更贵，但相同后端请求集合会共同支付，不能单独解释 Files 与 DAV 的相对差距。本次优先处理 Android 请求数量和 Core XML 写出方式，Runcove 优化应由单请求分段 profile 决定。
 
-## 服务端修复建议
+## 服务端调整状态与边界
 
-### 优先聚合 Relay XML 写出
+### Core 已实施 Relay XML 写出聚合
 
-在原 `rewriteDAVXML` goroutine 内，把 `mapDAVXML` 输出接到 32 KiB `bufio.Writer`，成功尾部 Flush；转换或 Flush 失败继续交给原 `CloseWithError`。保留原上游及 Pipe 关闭、取消、UTF-16/gzip 处理、href 校验和现有限额，不收集完整目录，也不增加目录缓存。
+原建议是在 `rewriteDAVXML` goroutine 内，把 `mapDAVXML` 输出接到 32 KiB `bufio.Writer`，成功尾部 Flush；转换或 Flush 失败继续交给原 `CloseWithError`。Core `d46f699` 已落实该机制并复用 href 路径。相关服务端实现、构建和部署归 Core 任务，本任务保持只读；这不改变 Android 的 XML/207 解析契约。
 
-应验证 10、200、2000 项目录输出与原实现等价，Write/Flush 随字节块数增长；同时覆盖错误 XML、gzip、UTF-16、慢下游、取消和原 goroutine 实际退出。随后在固定部署对同一目录做原始 DAV 对照。
+服务端应覆盖 10、200、2000 项目录输出等价、Write/Flush 随字节块数增长，以及错误 XML、gzip、UTF-16、慢下游、取消和原 goroutine 实际退出。这些是服务端改动的验证要求，不表示本任务执行过 Core 测试。
 
-### 为 DAV 增加期待绑定版本条件
+### 期待绑定版本条件暂不实施
 
 Relay 当前会核对 JWT、当前 binding、URL 的资源与空间，并在 binding 变化时取消已准入请求。但 URL 没有期待的 binding revision；同资源、同空间的新版本已生效后，迟到的旧句柄请求仍会按新版本准入。
 
-若要进一步消除 Android 普通 IO 的两次状态 RTT，应定义可协商的期待绑定版本条件，在原 `Store.Register` 锁内比较并准入。版本不符使用稳定拒绝码且不转发请求；不复用文件 ETag/DAV If 条件。服务端支持且经过准入竞态测试后，Android 才能将这两次远端查询收敛到本地复验加服务端原子条件。
+这不妨碍客户端依赖已有 Core 准入减少浏览读取查询；两次状态 GET 本来也无法提供原子保证。只有将来确实要求每次 IO 都必须匹配旧句柄的精确 DAV 版本，才需要在原 `Store.Register` 边界增加期待版本条件及准入竞态验证，不复用文件 ETag/DAV If 条件。本轮不新增跨端协议。
 
-### 其他项先测量再调整
+### 其他服务端项暂不调整
 
 Relay transport 有按超时配置复用的连接池；Hub Files adapter 反而每操作创建 clone transport。因此当前源码不支持“DAV 每次新建 Android client 或没有连接池”的解释。Hub transport 复用可作为 Files 自身优化，不能用来解释当前 DAV 较慢。
 
-Runcove 的 Python alive、运行锁和 guest 建连应先测分段耗时。若共同成本占主导，在 SessionManager 原 owner 内收敛重复检查，并保留原空间、runtime generation、撤权和取消约束；不优先引入跨身份连接池。
+Runcove 的 Python alive、运行锁和 guest 建连没有独立收益证据，本轮保持存活检查、连接方式和 PROPFIND 输出，不新增共享探测、连接池或长期阶段计时。源码中的共同成本不能直接作为立即修改的依据。
 
 ## 验证证据与边界
 
@@ -146,9 +171,9 @@ Runcove 的 Python alive、运行锁和 guest 建连应先测分段耗时。若�
 
 入口 `X-Request-Id` 与 Core `X-Measix-Request-Id` 分开记录；本次成功响应没有可用于跨 hop 串联的已采集入口 ID，不能据此推断 Core 没有内部 ID。Core 成功 DAV 响应尚未统一返回其问题响应所用的关联头。
 
-本轮 Android 验证包括 118 项定向单元测试、75 项设备用例、Debug/Release 构建和 lint，以及根目录、普通子目录各五轮生产只读比较。Core 隔离基准保留 18 份原始输出校验。没有构建、修改或部署 Core/Runcove；Release APK 仅构建，未代替真机安装验收。
+前轮审查验证包括 118 项定向单元测试、75 项设备用例、Debug/Release 构建和 lint，以及根目录、普通子目录各五轮生产只读比较。Core 隔离基准保留 18 份原始输出校验；本次简化的 83 项定向、401 场景重跑及配对设备验证见前面的“简化后的同进程对照”。两个 Android 任务均没有构建、修改或部署 Core/Runcove；Release APK 仅构建，未代替真机安装验收。
 
-## 同轮审查修复
+## 前轮审查修复
 
 - 目录加载过渡使用临时滚动状态，缓存失效后的空列表测量不再将原目录位置归零。旧 APK 已复现，新 APK 验证保持原位置。
 - `FileEditorBinding` 管理一个草稿的原生绑定，离页解除平台 watcher/filter 并保留正文、注解和草稿自身监听；新绑定先释放旧绑定，迟到关闭和滚动不回写新状态。旧 APK 已复现回调残留，新 APK 覆盖释放及 A→B 交接。

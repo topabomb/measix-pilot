@@ -201,7 +201,19 @@ class EnterpriseWebDavServiceTest {
             assertTrue(paths.all { it == "/runtime/v1/resources/$id/spaces/$space/dav/file" })
             coVerify(exactly = 1) { f.platform.recoverWorkspaceAccessToken(access, f.connection, f.first) }
             coVerify(exactly = 1) { f.lease.release() }
-            coVerify(exactly = 3) { f.remote.readDavProjection(access) }
+            coVerify(exactly = 1) { f.remote.readDavProjection(access) }
+
+            headers.clear()
+            paths.clear()
+            f.projection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+            val rejected = ByteArrayOutputStream()
+            try { f.service.download(handle, "file", rejected); fail("Changed binding retried after authentication recovery") }
+            catch (failure: IllegalStateException) { assertEquals("webdav_binding_changed", failure.message) }
+            assertEquals(listOf("Bearer first-token"), headers)
+            assertEquals(0, rejected.size())
+            coVerify(exactly = 2) { f.remote.readDavProjection(access) }
+            coVerify(exactly = 2) { f.lease.release() }
+            f.service.close(handle)
         } finally { server.stop(0) }
     }
 
@@ -239,8 +251,82 @@ class EnterpriseWebDavServiceTest {
         } finally { server.stop(0) }
     }
 
+    @Test fun `browser reads keep the captured root and honor Core rejection without status probes`() = runTest {
+        val paths = CopyOnWriteArrayList<String>()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { request -> request.use {
+                paths += it.requestURI.path
+                if (paths.size == 1) {
+                    it.sendResponseHeaders(200, 4); it.responseBody.write("data".toByteArray())
+                } else {
+                    val body = problem(403, "resource_not_allowed", false).toByteArray()
+                    it.responseHeaders.set("Content-Type", "application/problem+json")
+                    it.sendResponseHeaders(403, body.size.toLong()); it.responseBody.write(body)
+                }
+            } }; start()
+        }
+        try {
+            val f = Fixture(backgroundScope, "http://127.0.0.1:${server.address.port}")
+            val handle = f.service.open(selection)
+            clearMocks(f.remote, answers = false)
+            coEvery { f.remote.readDavProjection(access) } throws IOException("status unavailable")
+            val output = ByteArrayOutputStream()
+            assertEquals(4L, f.service.download(handle, "file", output))
+            assertEquals("data", output.toString())
+            try { f.service.download(handle, "file", ByteArrayOutputStream()); fail("Core rejection hidden") }
+            catch (failure: PlatformHttpException) {
+                assertEquals(403, failure.status)
+                assertEquals("resource_not_allowed", failure.problem?.code)
+            }
+            assertEquals(List(2) { "/runtime/v1/resources/$id/spaces/$space/dav/file" }, paths)
+            coVerify(exactly = 0) { f.remote.readDavProjection(any()) }
+            coVerify(exactly = 0) { f.platform.recoverWorkspaceAccessToken(any(), any(), any()) }
+            coVerify(exactly = 2) { f.lease.release() }
+            f.service.close(handle)
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `browser writes check fresh status once and observed in flight changes retain unknown outcome`() = runTest {
+        val beforeResponse = java.util.concurrent.atomic.AtomicReference<() -> Unit>({})
+        val requests = AtomicInteger()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { request -> request.use {
+                requests.incrementAndGet()
+                it.requestBody.readBytes()
+                beforeResponse.get().invoke()
+                if (it.requestMethod == "PUT") it.sendResponseHeaders(201, -1)
+                else { it.sendResponseHeaders(200, 4); it.responseBody.write("data".toByteArray()) }
+            } }; start()
+        }
+        try {
+            for (kind in listOf("write-success", "write-changed", "read-changed")) {
+                val f = Fixture(backgroundScope, "http://127.0.0.1:${server.address.port}")
+                val handle = f.service.open(selection)
+                clearMocks(f.remote, answers = false)
+                beforeResponse.set {
+                    // The remote status endpoint can fail after a successful DAV response. Ordinary
+                    // IO must not depend on another status fetch to acknowledge that response.
+                    coEvery { f.remote.readDavProjection(access) } throws IOException("status unavailable")
+                    if (kind != "write-success")
+                        f.publishedProjection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+                }
+                val result = runCatching {
+                    if (kind.startsWith("write")) f.service.upload(handle, "file", 4, { "data".byteInputStream() })
+                    else f.service.download(handle, "file", ByteArrayOutputStream())
+                }
+                if (kind == "write-success") assertTrue(result.isSuccess)
+                else assertEquals("webdav_binding_changed", result.exceptionOrNull()?.message)
+                assertEquals(if (kind == "write-changed") setOf("file") else emptySet<String>(), f.service.unknownPaths(handle))
+                coVerify(exactly = if (kind.startsWith("write")) 1 else 0) { f.remote.readDavProjection(access) }
+                coVerify(exactly = 1) { f.lease.release() }
+                f.service.close(handle)
+            }
+            assertEquals(3, requests.get())
+        } finally { server.stop(0) }
+    }
+
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-    @Test fun `buffered video reads do not query the remote workspace again`() = runTest {
+    @Test fun `browser media metadata ranges and buffered reads reuse published access`() = runTest {
         val rangeRequests = AtomicInteger()
         val size = 1024 * 1024
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
@@ -267,14 +353,12 @@ class EnterpriseWebDavServiceTest {
             coEvery { f.remote.refresh(selection) } returns Unit
             val browser = WebDavBrowserService(f.service, f.queries, ApplicationRecoveryGate().apply { ready() }, backgroundScope, root)
             val session = browser.source(selection).open()
+            clearMocks(f.remote, answers = false)
             val source = session.mediaSource(net.weero.measix.pilot.service.files.BrowserFile("video.mp4", false, size.toLong(), null, "\"media-v1\""))
             val data = MediaPreviewDataSource(source)
             try {
                 data.open(DataSpec.Builder().setUri(Uri.parse("workspace-media:/video")).build())
-                clearMocks(f.remote, answers = false)
                 assertEquals(1, data.read(ByteArray(1), 0, 1))
-                coVerify(exactly = 2) { f.remote.readDavProjection(access) }
-                clearMocks(f.remote, answers = false)
                 repeat(32) {
                     val bytes = ByteArray(1024)
                     assertEquals(bytes.size, data.read(bytes, 0, bytes.size))
@@ -282,11 +366,16 @@ class EnterpriseWebDavServiceTest {
                 }
                 assertEquals(1, rangeRequests.get())
                 coVerify(exactly = 0) { f.remote.readDavProjection(any()) }
+                val restOfWindow = ByteArray(512 * 1024 - 1 - 32 * 1024)
+                assertEquals(restOfWindow.size, data.read(restOfWindow, 0, restOfWindow.size))
+                assertEquals(1, data.read(ByteArray(1), 0, 1))
+                assertEquals(2, rangeRequests.get())
+                coVerify(exactly = 0) { f.remote.readDavProjection(any()) }
                 f.publishedProjection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
                 val denied = ByteArray(1) { -1 }
                 org.junit.Assert.assertThrows(IOException::class.java) { data.read(denied, 0, 1) }
                 assertArrayEquals(byteArrayOf(-1), denied)
-                assertEquals(1, rangeRequests.get())
+                assertEquals(2, rangeRequests.get())
                 coVerify(exactly = 0) { f.remote.readDavProjection(any()) }
             } finally { data.close(); source.close(); session.close() }
         } finally { server.stop(0); root.deleteRecursively() }

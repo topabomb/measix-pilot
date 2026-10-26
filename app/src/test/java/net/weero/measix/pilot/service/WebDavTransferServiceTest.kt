@@ -26,7 +26,7 @@ class WebDavTransferServiceTest {
 
     init {
         coEvery { dav.captureExpected(access, target) } returns handle
-        coEvery { dav.withResource<OwnedArtifact>(handle, any()) } coAnswers { secondArg<suspend () -> OwnedArtifact>().invoke() }
+        coEvery { dav.withResource<OwnedArtifact>(handle, any(), any()) } coAnswers { thirdArg<suspend () -> OwnedArtifact>().invoke() }
         coEvery { dav.publishDownload<OwnedArtifact>(handle, any()) } coAnswers { secondArg<suspend () -> OwnedArtifact>().invoke() }
         every { dav.unknownPaths(handle) } returns emptySet()
     }
@@ -168,8 +168,8 @@ class WebDavTransferServiceTest {
         coEvery { artifacts.createFromStream(any(), any(), any(), any()) } coAnswers {
             arg<(OwnedArtifact) -> Unit>(3).invoke(owned); owned
         }
-        coEvery { dav.withResource<OwnedArtifact>(handle, any()) } coAnswers {
-            secondArg<suspend () -> OwnedArtifact>().invoke()
+        coEvery { dav.withResource<OwnedArtifact>(handle, any(), any()) } coAnswers {
+            thirdArg<suspend () -> OwnedArtifact>().invoke()
             throw failure
         }
         coEvery { artifacts.discardUnpublished(owned) } returns ArtifactDeleteResult.Completed(1)

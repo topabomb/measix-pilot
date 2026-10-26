@@ -131,6 +131,61 @@ class WebDavBrowserServiceTest {
         session.close()
     }
 
+    @Test fun `completed export must pass final publication and rolls back only its owned destination`() = runTest {
+        val f = Fixture(backgroundScope)
+        val session = f.source.open()
+        var outputClosed = false
+        var deletes = 0
+        val target = object : BrowserExportDestination {
+            override val description = "owned export"
+            override fun open() = object : ByteArrayOutputStream() { override fun close() { outputClosed = true } }
+            override fun delete(): Boolean { deletes++; return true }
+        }
+        coEvery { f.dav.download(any(), any(), any(), any(), any(), any()) } coAnswers {
+            thirdArg<java.io.OutputStream>().write("data".toByteArray()); 4L
+        }
+        coEvery { f.dav.publishDownload<Unit>(f.handle, any()) } throws IllegalStateException("webdav_binding_changed")
+        try { session.exportCreated(file, { target }); fail("Export must not bypass final publication") }
+        catch (failure: IllegalStateException) { assertEquals("webdav_binding_changed", failure.message) }
+        assertTrue(outputClosed)
+        assertEquals(1, deletes)
+        session.close()
+    }
+
+    @Test fun `export committed before cancellation is no longer owned by the browser`() = runTest {
+        val f = Fixture(backgroundScope)
+        val session = f.source.open()
+        var deletes = 0
+        val target = object : BrowserExportDestination {
+            override val description = "completed export"
+            override fun open() = ByteArrayOutputStream()
+            override fun delete(): Boolean { deletes++; return true }
+        }
+        coEvery { f.dav.download(any(), any(), any(), any(), any(), any()) } returns 4L
+        coEvery { f.dav.publishDownload<Unit>(f.handle, any()) } coAnswers {
+            secondArg<suspend () -> Unit>().invoke()
+            currentCoroutineContext().cancel()
+        }
+        val task = launch { session.exportCreated(file, { target }) }
+        task.join()
+        assertTrue(task.isCancelled)
+        assertEquals(0, deletes)
+        session.close()
+    }
+
+    @Test fun `browser does not reclassify an acknowledged write after later access revocation`() = runTest {
+        val f = Fixture(backgroundScope)
+        val session = f.source.open()
+        coEvery { f.dav.upload(f.handle, file.path, 4L, any(), file.etag, any()) } coAnswers {
+            coEvery { f.dav.validateLocal(f.handle) } throws IllegalStateException("webdav_binding_changed")
+            Unit
+        }
+        every { f.dav.unknownPaths(f.handle) } returns emptySet()
+        val result = session.upload(file.path, file.etag, 4, { "data".byteInputStream() })
+        assertEquals(BrowserOutcome.SUCCEEDED, result.outcome)
+        session.close()
+    }
+
     @Test fun `startup cleans abandoned previews and expired shares while new share survives closing`() = runTest {
         val root = temporary.newFolder()
         val abandoned = File(root, "preview-old").apply { writeText("abandoned") }

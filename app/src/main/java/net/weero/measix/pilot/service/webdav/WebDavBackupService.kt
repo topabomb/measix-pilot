@@ -58,7 +58,7 @@ internal class WebDavBackupService(
         }.sortedByDescending { it.lastModified }
     }
 
-    suspend fun backup(target: WebDavBackupTarget) = dav.withResource(target.handle) {
+    suspend fun backup(target: WebDavBackupTarget) = dav.withResource(target.handle, verifyAfter = false) {
         dav.validate(target.handle, writing = true)
         ownedFile({ archives.prepare(target.preferences.selection()) }) { file ->
             val parts = target.preferences.path.split('/').filter(String::isNotEmpty)
@@ -73,7 +73,7 @@ internal class WebDavBackupService(
         }
     }
 
-    suspend fun restore(item: WebDavBackupItem) = dav.withResource(item.target.handle) {
+    suspend fun restore(item: WebDavBackupItem) = dav.withResource(item.target.handle, verifyAfter = false) {
         ownedFile({ File.createTempFile("webdav-restore-", ".zip", cache) }) { file ->
             file.outputStream().use { output ->
                 dav.download(item.target.handle, item.path, output, item.etag?.takeIf(WebDavClient::strongEtag))
@@ -85,7 +85,7 @@ internal class WebDavBackupService(
         }
     }
 
-    suspend fun delete(item: WebDavBackupItem) = dav.withResource(item.target.handle) {
+    suspend fun delete(item: WebDavBackupItem) = dav.withResource(item.target.handle, verifyAfter = false) {
         val tag = requireNotNull(item.etag) { "webdav_strong_etag_required" }
         WebDavClient.requireStrongEtag(tag)
         dav.mutate(item.target.handle, item.path, "DELETE", sourceEtag = tag)

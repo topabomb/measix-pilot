@@ -45,7 +45,7 @@ class WebDavBackupServiceTest {
             every { currentPersonalWebDavConnectionId } returns current.id
         }
         coEvery { dav.open(selection, connection.id.toString()) } returns handle
-        coEvery { dav.withResource<Any?>(handle, any()) } coAnswers { secondArg<suspend () -> Any?>().invoke() }
+        coEvery { dav.withResource<Any?>(handle, any(), any()) } coAnswers { thirdArg<suspend () -> Any?>().invoke() }
     }
 
     @After fun cleanUp() { cache.deleteRecursively() }

@@ -100,10 +100,11 @@ internal class WebDavBrowserService(
             dav.validateLocal(handle)
         }
 
-        private suspend fun <T> operation(onFailure: suspend (Throwable) -> Unit = {}, action: suspend () -> T): T {
+        private suspend fun <T> operation(onFailure: suspend (Throwable) -> Unit = {}, verifyAfter: Boolean = true,
+            action: suspend () -> T): T {
             val job = currentCoroutineContext().job
             synchronized(monitor) { jobs += job }
-            try { currentCoroutineContext().ensureActive(); checkAccess(); return action().also { checkAccess() } }
+            try { currentCoroutineContext().ensureActive(); checkAccess(); return action().also { if (verifyAfter) checkAccess() } }
             catch (failure: Throwable) { onFailure(failure); throw failure }
             finally { synchronized(monitor) { jobs -= job } }
         }
@@ -160,7 +161,9 @@ internal class WebDavBrowserService(
             }
         }
         private suspend fun writeResult(path: String, action: suspend () -> Unit): BrowserOperationResult = cache.writing { try {
-            operation { action() }
+            // The application service owns write acknowledgement and UNKNOWN classification.
+            // A later browser access change must not reinterpret an already settled write.
+            operation(verifyAfter = false) { action() }
             BrowserOperationResult(path, BrowserOutcome.SUCCEEDED)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
@@ -255,7 +258,7 @@ internal class WebDavBrowserService(
                 withContext(NonCancellable + Dispatchers.IO) {
                     owned?.let { try { deleteExport(it) } catch (cleanup: Exception) { failure.addSuppressed(cleanup) } }
                 }
-            }) {
+            }, verifyAfter = false) {
                 withContext(Dispatchers.IO) {
                     if (owned == null) owned = create()
                     ensureActive()
@@ -263,6 +266,10 @@ internal class WebDavBrowserService(
                     requireNotNull(owned).open().use {
                         dav.download(handle, file.path, it, file.etag.takeIf { file.versioned }, progress)
                     }
+                }
+                dav.publishDownload(handle) {
+                    check(!closed.get() && !handle.closed.get()) { "webdav_access_closed" }
+                    owned = null
                 }
             }
         }

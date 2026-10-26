@@ -381,6 +381,84 @@ class EnterpriseWebDavServiceTest {
         } finally { server.stop(0); root.deleteRecursively() }
     }
 
+    @Test fun `enterprise export checks fresh binding at handoff and cleans an unpublished destination`() = runTest {
+        val beforeResponse = java.util.concurrent.atomic.AtomicReference<() -> Unit>({})
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { request -> request.use {
+                beforeResponse.get().invoke()
+                it.sendResponseHeaders(200, 4); it.responseBody.write("data".toByteArray())
+            } }; start()
+        }
+        val root = Files.createTempDirectory("enterprise-dav-export").toFile()
+        try {
+            for (changed in listOf(false, true)) {
+                val f = Fixture(backgroundScope, "http://127.0.0.1:${server.address.port}")
+                every { f.queries.observeWebDavConfiguration() } returns flowOf(
+                    WebDavConfigurationReadState.Available(selection, emptyList(), null))
+                coEvery { f.queries.withEnterpriseWebDavAccess<Unit>(access, selection, definition(id), f.connection, any()) } coAnswers {
+                    arg<suspend () -> Unit>(4).invoke()
+                }
+                val browser = WebDavBrowserService(f.service, f.queries, ApplicationRecoveryGate().apply { ready() }, backgroundScope, root)
+                val session = browser.source(selection).open()
+                beforeResponse.set {
+                    if (changed) f.projection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+                }
+                clearMocks(f.remote, answers = false)
+                var closed = false
+                var deleted = false
+                val output = object : ByteArrayOutputStream() { override fun close() { closed = true } }
+                val destination = object : net.weero.measix.pilot.service.files.BrowserExportDestination {
+                    override val description = "owned document"
+                    override fun open() = output
+                    override fun delete(): Boolean { deleted = true; return true }
+                }
+                try {
+                    val result = runCatching {
+                        session.exportCreated(net.weero.measix.pilot.service.files.BrowserFile("file", false, 4, null, null), { destination })
+                    }
+                    if (changed) assertEquals("webdav_binding_changed", result.exceptionOrNull()?.message)
+                    else assertTrue(result.isSuccess)
+                    assertTrue(closed)
+                    assertEquals("data", output.toString())
+                    assertEquals(changed, deleted)
+                    coVerify(exactly = 1) { f.remote.readDavProjection(access) }
+                    coVerify(exactly = if (changed) 0 else 1) {
+                        f.queries.withEnterpriseWebDavAccess<Unit>(access, selection, definition(id), f.connection, any())
+                    }
+                } finally { session.close() }
+            }
+        } finally { server.stop(0); root.deleteRecursively() }
+    }
+
+    @Test fun `background write has one final outcome check covering status failure after transmission`() = runTest {
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { request -> request.use {
+                it.requestBody.readBytes(); completed.set(true); it.sendResponseHeaders(201, -1)
+            } }; start()
+        }
+        try {
+            for (failFinalStatus in listOf(false, true)) {
+                completed.set(false)
+                val f = Fixture(backgroundScope, "http://127.0.0.1:${server.address.port}")
+                val handle = f.service.capture(access)
+                clearMocks(f.remote, answers = false)
+                coEvery { f.remote.readDavProjection(access) } answers {
+                    if (failFinalStatus && completed.get()) throw IOException("status unavailable after write")
+                    WorkspaceDavSnapshot(access, f.connection, ready)
+                }
+                val result = runCatching { f.service.upload(handle, "file", 4, { "data".byteInputStream() }) }
+                if (failFinalStatus) assertEquals("status unavailable after write", result.exceptionOrNull()?.message)
+                else assertTrue(result.isSuccess)
+                assertEquals(if (failFinalStatus) setOf("file") else emptySet<String>(), f.service.unknownPaths(handle))
+                coVerify(exactly = 4) { f.remote.readDavProjection(access) }
+                coVerify(exactly = 0) { f.remote.readPublishedDavProjection(any()) }
+                coVerify(exactly = 1) { f.lease.release() }
+                f.service.close(handle)
+            }
+        } finally { server.stop(0) }
+    }
+
     @Test fun `PUT rejection refreshes credentials without replay and unknown writes block subsequent attempts`() = runTest {
         for ((status, code, forwarded) in listOf(Triple(401, "invalid_session", false), Triple(502, "workspace_credential_unavailable", true))) {
             val requests = CopyOnWriteArrayList<String>()
@@ -446,6 +524,29 @@ class EnterpriseWebDavServiceTest {
         } finally { cleanupRelease.complete(Unit); serverRelease.countDown(); server.stop(0) }
     }
 
+    @Test fun `connection change waits for cancelled write uncertainty before admitting the change`() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+            createContext("/") { request -> request.use {
+                it.requestBody.readBytes()
+                entered.complete(Unit)
+                release.await(20, java.util.concurrent.TimeUnit.SECONDS)
+            } }; start()
+        }
+        try {
+            val f = Fixture(backgroundScope, "http://127.0.0.1:${server.address.port}")
+            val handle = f.service.open(selection)
+            val write = async { runCatching { f.service.upload(handle, "file", 4, { "data".byteInputStream() }) } }
+            entered.await()
+            f.service.changeConnection(access) {
+                assertEquals(setOf("file"), f.service.unknownPaths(handle))
+                coVerify(exactly = 1) { f.lease.release() }
+            }
+            assertTrue(write.await().isFailure)
+        } finally { release.countDown(); server.stop(0) }
+    }
+
     @Test fun `enterprise backup requires an explicit bound resource and sends archive through enterprise DAV`() = runTest {
         val cache = Files.createTempDirectory("enterprise-dav-backup").toFile()
         val context = mockk<Context> {
@@ -479,7 +580,14 @@ class EnterpriseWebDavServiceTest {
             try {
                 assertEquals(id, target.handle.target.id)
                 assertEquals(access, target.handle.access)
-                val archive = File(cache, "backup_owned.zip").apply { writeText("archive bytes") }
+                val archive = object : File(cache, "backup_owned.zip") {
+                    override fun delete(): Boolean {
+                        val removed = super.delete()
+                        // Upload has already been acknowledged before temporary cleanup runs.
+                        f.publishedProjection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+                        return removed
+                    }
+                }.apply { writeText("archive bytes") }
                 coEvery { archives.prepare(BackupSelection(false, false)) } returns archive
                 backup.backup(target)
                 assertEquals(listOf(listOf("PUT", "/runtime/v1/resources/$id/spaces/$space/dav/backup_owned.zip",
@@ -558,6 +666,19 @@ class EnterpriseWebDavServiceTest {
                 assertTrue(cache.listFiles()!!.isEmpty())
                 coVerify(exactly = 1) { archives.stageRestore(any(), BackupSelection(false, false), any()) }
                 coVerify(exactly = 1) { f.lease.release() }
+
+                f.projection = ready
+                coEvery { f.queries.withEnterpriseWebDavAccess<Unit>(access, selection, definition(id), f.connection, any()) } coAnswers {
+                    arg<suspend () -> Unit>(4).invoke()
+                }
+                coEvery { archives.stageRestore(any(), BackupSelection(false, false), any()) } coAnswers {
+                    staged = firstArg<File>()
+                    thirdArg<suspend (suspend () -> Unit) -> Unit>().invoke { published = true }
+                    f.publishedProjection = ready.copy(webdav = ready.webdav!!.copy(bindingRevision = 4))
+                }
+                backup.restore(item)
+                assertTrue(published)
+                assertFalse(staged!!.exists())
             } finally { backup.close(target) }
         } finally { server.stop(0); cache.deleteRecursively() }
     }

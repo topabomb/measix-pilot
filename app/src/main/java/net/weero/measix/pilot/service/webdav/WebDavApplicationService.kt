@@ -221,7 +221,9 @@ internal class WebDavApplicationService(
                 "webdav_identity_changed", "webdav_connection_change_in_progress")) false else throw failure
     }
 
-    internal suspend fun <T> withResource(handle: WebDavHandle, block: suspend () -> T): T = operation(handle, block)
+    /** A settled write or publication owns its final access check; keep the surrounding job tracked. */
+    internal suspend fun <T> withResource(handle: WebDavHandle, verifyAfter: Boolean = true, block: suspend () -> T): T =
+        operation(handle, verifyAfter = verifyAfter, block = block)
 
     suspend fun <T> publishDownload(handle: WebDavHandle, publish: suspend () -> T): T {
         val guarded: suspend () -> T = {
@@ -273,33 +275,32 @@ internal class WebDavApplicationService(
     }
 
     private suspend fun write(handle: WebDavHandle, paths: Set<String>, replay: Boolean = true,
-        block: suspend (WebDavClient, String, sent: () -> Unit) -> Unit) = operation(handle) {
-        validate(handle, writing = true)
-        synchronized(monitor) {
-            check(uncertain[handle.identity()].orEmpty().none { unknown -> paths.any {
-                it == unknown || it.startsWith("$unknown/") || unknown.startsWith("$it/")
-            } }) { "webdav_result_requires_verification" }
-            verified.filterKeys { it.identity() == handle.identity() }.values.forEach { checked ->
-                checked.removeAll { prior -> paths.any { it == prior || it.startsWith("$prior/") || prior.startsWith("$it/") } }
-            }
-        }
+        block: suspend (WebDavClient, String, sent: () -> Unit) -> Unit) {
         var sent = false
-        try {
-            request(handle, replay, onRejected = { sent = false }, writing = true) { transport, auth -> block(transport, auth) { sent = true } }
-            validateOperationAccess(handle)
-        }
-        catch (failure: Throwable) {
+        operation(handle, onFailure = { failure ->
             val definiteRejection = failure is DavHttpException && failure.status in setOf(400, 401, 403, 404, 405, 409, 412, 415, 423, 501) ||
                 failure is PlatformHttpException && failure.problem?.forwarded == false
             if (sent && !definiteRejection) synchronized(monitor) { uncertain.getOrPut(handle.identity()) { mutableSetOf() }.addAll(paths) }
-            throw failure
+        }) {
+            validate(handle, writing = true)
+            synchronized(monitor) {
+                check(uncertain[handle.identity()].orEmpty().none { unknown -> paths.any {
+                    it == unknown || it.startsWith("$unknown/") || unknown.startsWith("$it/")
+                } }) { "webdav_result_requires_verification" }
+                verified.filterKeys { it.identity() == handle.identity() }.values.forEach { checked ->
+                    checked.removeAll { prior -> paths.any { it == prior || it.startsWith("$prior/") || prior.startsWith("$it/") } }
+                }
+            }
+            request(handle, replay, onRejected = { sent = false }, writing = true) { transport, auth -> block(transport, auth) { sent = true } }
         }
     }
 
-    private suspend fun <T> operation(handle: WebDavHandle, block: suspend () -> T): T = coroutineScope {
+    private suspend fun <T> operation(handle: WebDavHandle, verifyAfter: Boolean = true,
+        onFailure: (Throwable) -> Unit = {}, block: suspend () -> T): T = coroutineScope {
         val registration = Active(handle, currentCoroutineContext().job)
         synchronized(monitor) { check(!handle.closed.get()) { "webdav_access_closed" }; active += registration }
-        try { validateOperationAccess(handle); block().also { validateOperationAccess(handle) } }
+        try { validateOperationAccess(handle); block().also { if (verifyAfter) validateOperationAccess(handle) } }
+        catch (failure: Throwable) { onFailure(failure); throw failure }
         finally { synchronized(monitor) { active -= registration } }
     }
 

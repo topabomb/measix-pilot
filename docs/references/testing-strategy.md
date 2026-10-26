@@ -218,6 +218,8 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 并验证选中浏览器的 HEAD、多个范围窗口及缓冲命中均不增加状态查询，Core 拒绝仍原样传播；写入只做一次新鲜前置查询，
 传输期间已发布绑定变化拒绝正常结果交付并保留未知写入状态。token 挂起期间切域、绑定变化、只读变化不会发送写请求，
 401 恢复保留新鲜校验，最终下载与备份恢复发布仍拒绝换绑。
+同组还覆盖企业 SAF 导出完成时远端单独换绑的拒绝和目标清理、成功发布后的取消不回滚、写入确认后的晚到撤权不改报
+普通失败、取消等待前已登记未知写结果，以及备份/恢复确认后的外层检查不会改写完成态。
 `MediaPreviewDataSourceTest` 验证慢段收缩、增长上限、seek 重置，以及 30 秒无响应后的取消与重开。
 `RemoteWorkspaceServiceTest` 验证独立 DAV 查询与状态刷新的迟到发布隔离。
 `MediaPreviewAndroidTest.throttledDavReportsRangeLatencyPlaybackAndSeek` 通过 `mediaDavBenchmarkRoot` 显式启用，

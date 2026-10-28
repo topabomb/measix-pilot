@@ -2,20 +2,13 @@ package me.rerere.search
 
 import me.rerere.common.configuration.ConfigurationReference
 import android.content.Context
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.util.KeyRoulette
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.OkHttpClient
-import okhttp3.Response
-import okhttp3.internal.closeQuietly
-import okio.IOException
 import java.util.concurrent.TimeUnit
-import kotlin.coroutines.resumeWithException
 
 class SearchHttpException(val provider: String, val statusCode: Int) :
     IllegalStateException("$provider returned HTTP $statusCode")
@@ -173,23 +166,5 @@ enum class SearchProviderType(val displayName: String) {
         BING -> SearchServiceOptions.BingLocalOptions()
         TAVILY -> SearchServiceOptions.TavilyOptions()
         SEARXNG -> SearchServiceOptions.SearXNGOptions()
-    }
-}
-
-internal suspend fun Call.await(): Response {
-    return suspendCancellableCoroutine { continuation ->
-        enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (continuation.isActive) {
-                    continuation.resumeWithException(e)
-                }
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                continuation.resume(response) { cause, _, _ ->
-                    response.closeQuietly()
-                }
-            }
-        })
     }
 }

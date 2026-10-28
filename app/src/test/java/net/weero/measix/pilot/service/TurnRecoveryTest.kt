@@ -90,8 +90,8 @@ class TurnRecoveryTest {
                 parentConversationId = masterId.toString(),
             ),
         )
-        coEvery { repository.getConversationById(masterId) } returns master
-        coEvery { repository.getConversationById(childId) } returns child
+        coEvery { repository.getConversationSnapshotById(masterId) } returns master.toSnapshot()
+        coEvery { repository.getConversationSnapshotById(childId) } returns child.toSnapshot()
         coEvery { repository.getTurnExecutions(childId) } returns listOf(execution)
 
         val error = try {
@@ -281,9 +281,7 @@ class TurnRecoveryTest {
                 parentConversationId = masterId.toString(),
             ),
         )
-        coEvery { repository.getConversationById(masterId) } returns master
         coEvery { repository.getConversationSnapshotById(masterId) } returns master.toSnapshot()
-        coEvery { repository.getConversationById(childId) } returns child
         coEvery { repository.getConversationSnapshotById(childId) } returns child.toSnapshot()
         coEvery { repository.getTurnExecutions(childId) } returns listOf(execution)
         coEvery { repository.getToolExecutions(turnId.toString()) } returns listOf(startedToolExecution)

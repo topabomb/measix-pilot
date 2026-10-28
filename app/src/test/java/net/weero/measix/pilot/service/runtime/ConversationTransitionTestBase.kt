@@ -170,7 +170,6 @@ internal abstract class ConversationTransitionTestBase {
             runtimeState = ToolRuntimeState(ToolOutputPolicy.REGENERABLE_TEXT),
         )
         val sourceMessage = assistant(activeId, listOf(tool))
-        val sourceMessages = started.currentMessages().dropLast(1) + sourceMessage
         val durableNode = started.nodes.last().let { node ->
             node.copy(messages = node.messages.toMutableList().apply {
                 set(node.selectIndex, sourceMessage)

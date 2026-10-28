@@ -147,6 +147,20 @@ class AttachmentResolverTest {
     }
 
     @Test
+    fun `owner read diagnostics survive inspection and delegation mapping`() = runTest {
+        val paths = listOf("/upload/abc123.png")
+        val detail = "java.io.IOException: payload read failed\nCaused by: java.lang.IllegalStateException: storage unavailable"
+        coEvery { store.withUploadImages<AttachmentResolveResult>(ConfigurationScope.Personal, paths, any()) } coAnswers {
+            thirdArg<suspend (ArtifactImageReadResult) -> AttachmentResolveResult>()(
+                ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.READ_FAILED, detail),
+            )
+        }
+        val expected = AttachmentResolveResult.Failure(AttachmentFailureReasons.ATTACHMENT_READ_FAILED, detail)
+        assertEquals(expected, resolver.readImages(ConfigurationScope.Personal, paths))
+        assertEquals(expected, resolver.withImages(ConfigurationScope.Personal, paths) { it })
+    }
+
+    @Test
     fun `owner cancellation propagates unchanged`() = runTest {
         val cancelled = CancellationException("cancel read")
         coEvery { store.withUploadImages<AttachmentResolveResult>(ConfigurationScope.Personal, any(), any()) } throws cancelled

@@ -25,6 +25,7 @@ import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import kotlin.uuid.Uuid
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 
 internal sealed interface EnterpriseState {
     data object Loading : EnterpriseState
@@ -35,7 +36,7 @@ internal sealed interface EnterpriseState {
         val configurationError: Exception? = null,
         val snapshotSchemaVersion: Long? = null,
     ) : EnterpriseState
-    data class Failed(val reason: String) : EnterpriseState
+    data class Failed(val reason: String, val detail: String? = null) : EnterpriseState
 }
 
 internal data class EnterpriseExitRequest(val access: RealmAccess.Enterprise, val selection: RealmSelection)
@@ -248,12 +249,6 @@ internal class EnterpriseSessionController(
         })
     }
 
-    suspend fun platformSessionAccess(sessionId: String): RealmAccess.Enterprise? = mutex.withLock {
-        ensureLoaded().manifest.session?.takeIf { it.id == sessionId && it.platform != null }?.let {
-            RealmAccess.Enterprise(it.identity.scope, it.id)
-        }
-    }
-
     /** Admission and registration are one Session-owner operation; CLOSING rejects every new request. */
     suspend fun capturePlatformOperation(sessionId: String): EnterprisePlatformOperationLease = mutex.withLock {
         val context = platformContextLocked(sessionId)
@@ -459,7 +454,8 @@ internal class EnterpriseSessionController(
             throw cancelled
         } catch (error: Exception) {
             loaded = null
-            publishState(EnterpriseState.Failed(safeReason(error)))
+            logDiagnosticFailure("EnterpriseSessionController", "enterprise storage recovery failed", error)
+            publishState(EnterpriseState.Failed(safeReason(error), error.userVisibleDiagnostic()))
         }
         state.value
     }
@@ -1103,6 +1099,4 @@ internal class EnterpriseSessionController(
 
     private fun fail(reason: String): Nothing = throw EnterpriseConfigurationException(reason)
 
-    companion object {
-    }
 }

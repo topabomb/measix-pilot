@@ -152,6 +152,7 @@ SDK 提前进入终态或断开 Client 引用不能代替实际清理；原 tran
 拒绝 fragment／userinfo。已保存 `authorizedResource` 用原值刷新，旧字段缺失按旧 HttpUrl 规范值恢复，
 成功 CAS 后才物化；不同 resource 先要求重新授权，不向新资源发送旧 refresh token。非法旧 URL 的编辑可保存修复，但不保留凭据。
 元数据只有 404／410 表示未提供并继续发现；认证、网络、5xx 或 JSON 错误保留诊断，不吞错降级。
+well-known 元数据地址通过 HttpUrl 保留原 authority（包括 IPv6 方括号与非默认端口）及编码后的资源路径，不手工拼接 host。
 
 OAuth 回调使用 loopback：
 `McpOAuthCallbackServer` 每次授权绑定 OS 分配的 ephemeral loopback 端口，redirect path 固定为 `/callback`，

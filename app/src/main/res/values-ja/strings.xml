@@ -365,7 +365,6 @@
   <string name="copy">コピー</string>
   <string name="copy_all">全てコピー</string>
   <string name="create_fork">フォークを作成</string>
-  <string name="db_migrating">データベースを移行しています…</string>
   <string name="deep_thinking">深く考える</string>
   <string name="deep_thinking_seconds">%1$.1f 秒間思考中</string>
   <string name="delete">削除</string>

@@ -36,8 +36,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.utils.logDiagnosticFailure
 import kotlinx.serialization.SerializationException
@@ -53,11 +51,9 @@ import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.FileImport
 import me.rerere.hugeicons.stroke.Share08
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.model.Assistant
+import net.weero.measix.pilot.service.workspace.WorkspaceDocumentDestination
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
-import me.rerere.workspace.WorkspaceStorageArea
 import org.koin.compose.koinInject
-import java.io.File
 
 private const val DEFAULT_VISIBLE_COUNT = 3
 private val WORKSPACE_FILE_TOOL_NAMES = setOf("workspace_write_file", "workspace_edit_file")
@@ -66,9 +62,9 @@ private val WORKSPACE_FILE_TOOL_NAMES = setOf("workspace_write_file", "workspace
 @Composable
 internal fun EditedFilesList(
     editedFiles: List<String>,
-    assistant: Assistant?,
 ) {
-    val workspaceId = assistant?.workspaceId?.toString() ?: return
+    val source = (net.weero.measix.pilot.ui.components.richtext.LocalRenderedContentSource.current as?
+        net.weero.measix.pilot.service.RenderedContentSource.Conversation)?.message ?: return
     if (editedFiles.isEmpty()) return
 
     val context = LocalContext.current
@@ -76,7 +72,7 @@ internal fun EditedFilesList(
     val workspaceApplicationService: WorkspaceApplicationService = koinInject()
 
     var selectedPath by remember { mutableStateOf<String?>(null) }
-    var pendingExport by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var pendingExport by remember { mutableStateOf<Pair<net.weero.measix.pilot.service.ConversationMessageResourceSource, String>?>(null) }
     var operationFailure by remember { mutableStateOf<Exception?>(null) }
     fun reportFailure(error: Exception) {
         logDiagnosticFailure("WorkspaceEditedFiles", "Export/share failed", error)
@@ -89,20 +85,14 @@ internal fun EditedFilesList(
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*"),
     ) { uri ->
-        val (capturedWorkspace, path) = pendingExport.also { pendingExport = null }
-            ?: return@rememberLauncherForActivityResult
+        val request = pendingExport.also { pendingExport = null }
         selectedPath = null
         if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) {
             try {
-                val (area, relativePath) = resolveWorkspacePath(path)
-                withContext(Dispatchers.IO) {
-                    val outputStream = context.contentResolver.openOutputStream(uri)
-                        ?: throw java.io.IOException("Document provider did not open output: $uri")
-                    outputStream.use { output ->
-                        workspaceApplicationService.exportFile(capturedWorkspace, area, relativePath, output)
-                    }
-                }
+                workspaceApplicationService.exportMessageFile(
+                    request?.first, request?.second, uri, WorkspaceDocumentDestination(context.contentResolver),
+                )
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -182,7 +172,7 @@ internal fun EditedFilesList(
                 Card(
                     onClick = {
                         val p = selectedPath ?: return@Card
-                        pendingExport = workspaceId to p
+                        pendingExport = source to p
                         exportLauncher.launch(p.substringAfterLast('/'))
                     },
                     shape = MaterialTheme.shapes.medium,
@@ -211,8 +201,7 @@ internal fun EditedFilesList(
                         selectedPath = null
                         scope.launch {
                             try {
-                                val (area, relativePath) = resolveWorkspacePath(p)
-                                workspaceApplicationService.shareFile(workspaceId, area, relativePath, p.substringAfterLast('/')) { file ->
+                                workspaceApplicationService.shareMessageFile(source, p) { file ->
                                     val uri = FileProvider.getUriForFile(
                                         context,
                                         "${context.packageName}.fileprovider",
@@ -293,13 +282,4 @@ private fun successfulWorkspaceFilePath(tool: UIMessagePart.Tool): String? {
         else -> false
     }
     return path.takeIf { succeeded }
-}
-
-private fun resolveWorkspacePath(path: String): Pair<WorkspaceStorageArea, String> {
-    val trimmed = path.trimEnd('/')
-    return if (trimmed == "/workspace" || trimmed.startsWith("/workspace/")) {
-        WorkspaceStorageArea.FILES to trimmed.removePrefix("/workspace").trimStart('/')
-    } else {
-        WorkspaceStorageArea.LINUX to trimmed.trimStart('/')
-    }
 }

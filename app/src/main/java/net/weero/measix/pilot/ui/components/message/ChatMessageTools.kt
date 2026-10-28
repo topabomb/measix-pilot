@@ -142,9 +142,8 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             ToolOutputProjection.Archived(
                 characters = archive.characters,
                 lines = archive.lines,
-                terminalStatus = displayTool.resultStatus?.wireName ?: "completed",
             )
-        } ?: ToolOutputProjection.Inline(displayTool.output)
+        } ?: ToolOutputProjection.Inline
     }
     val toolConversationId = net.weero.measix.pilot.ui.components.message.tools.LocalToolConversationId.current
     val context = remember(displayTool, resolvedPhase, parsedArguments, outputProjection, toolConversationId, locator) {

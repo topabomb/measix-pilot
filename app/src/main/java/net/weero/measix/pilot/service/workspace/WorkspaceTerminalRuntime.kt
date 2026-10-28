@@ -2,7 +2,6 @@ package net.weero.measix.pilot.service.workspace
 
 import android.content.Context
 import android.os.Looper
-import android.util.Log
 import com.termux.view.TerminalView
 import java.util.UUID
 import java.io.ByteArrayOutputStream
@@ -13,6 +12,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.AppScope
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -138,10 +139,10 @@ class WorkspaceTerminalRuntime internal constructor(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
                 if (error !is EnterpriseConfigurationException) {
-                    Log.w(TAG, "Terminal input failed", error)
+                    logDiagnosticFailure(TAG, "Terminal input failed", error)
                     try {
                         beginClose(entry)
-                        publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+                        publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected, error.userVisibleDiagnostic())
                     } finally { entry.writing?.cancel() }
                 }
             }
@@ -161,7 +162,7 @@ class WorkspaceTerminalRuntime internal constructor(
         }
         try {
             beginClose(entry)
-            publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+            publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected, "workspace_terminal_input_limit")
         } finally {
             entry.writing?.cancel(CancellationException("workspace_terminal_input_limit"))
         }
@@ -196,8 +197,8 @@ class WorkspaceTerminalRuntime internal constructor(
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                Log.w(TAG, "Terminal writer failed", error)
-                publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+                logDiagnosticFailure(TAG, "Terminal writer failed", error)
+                publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected, error.userVisibleDiagnostic())
             } finally {
                 withContext(NonCancellable + Dispatchers.Main.immediate) {
                     entry.inputAvailable.cancel()
@@ -240,14 +241,14 @@ class WorkspaceTerminalRuntime internal constructor(
                                 retireViewport(entry)
                                 if (entry.writing == null) remove(entry) else publish(entry.owner)
                                 if (unexpectedExit) {
-                                    Log.w(TAG, "Terminal process exited with status=${finishedSession.exitStatus}")
-                                    publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+                                    publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected, "Terminal process exited with status=${finishedSession.exitStatus}")
                                 }
                             }
+                            catch (cancelled: CancellationException) { throw cancelled }
                             catch (error: Exception) {
                                 entry.readiness = WorkspaceTerminalReadiness.CLOSING
-                                publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
-                                Log.w(TAG, "Terminal viewport cleanup failed", error)
+                                publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected, error.userVisibleDiagnostic())
+                                logDiagnosticFailure(TAG, "Terminal viewport cleanup failed", error)
                             }
                         })
                     val session = terminalHost.create(context, entry.owner.root, client)
@@ -268,12 +269,14 @@ class WorkspaceTerminalRuntime internal constructor(
                     catch (cleanup: Exception) { if (cleanup !== error) error.addSuppressed(cleanup) }
                     withContext(Dispatchers.Main.immediate) {
                         if (entry.live == null) remove(entry) else removeIfStopped(entry)
-                        publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected)
+                        if (error !is CancellationException) {
+                            publishFailure(entry.owner, WorkspaceTerminalFailureReason.Unexpected, error.userVisibleDiagnostic())
+                        }
                     }
                 }
             }
             if (error is CancellationException) throw error
-            Log.w(TAG, "Terminal creation failed", error)
+            logDiagnosticFailure(TAG, "Terminal creation failed", error)
         } finally {
             withContext(NonCancellable + Dispatchers.Main.immediate) { entry.creation = null }
         }
@@ -357,9 +360,9 @@ class WorkspaceTerminalRuntime internal constructor(
             selected?.takeIf { id -> tabs.any { it.id == id } } ?: tabs.lastOrNull()?.id, failure))
     }
 
-    private fun publishFailure(owner: WorkspaceTerminalOwner, reason: WorkspaceTerminalFailureReason) {
+    private fun publishFailure(owner: WorkspaceTerminalOwner, reason: WorkspaceTerminalFailureReason, detail: String? = null) {
         val current = mutableWorkspaces.value[owner] ?: WorkspaceTerminalWorkspaceState()
-        mutableWorkspaces.value += owner to current.copy(lastFailure = WorkspaceTerminalFailure(UUID.randomUUID().toString(), reason))
+        mutableWorkspaces.value += owner to current.copy(lastFailure = WorkspaceTerminalFailure(UUID.randomUUID().toString(), reason, detail))
     }
 
     private class TerminalEntry(val id: String, val owner: WorkspaceTerminalOwner, val number: Int) {
@@ -418,6 +421,7 @@ data class WorkspaceTerminalWorkspaceState(
 data class WorkspaceTerminalFailure(
     val id: String,
     val reason: WorkspaceTerminalFailureReason,
+    val detail: String? = null,
 )
 
 sealed interface WorkspaceTerminalFailureReason {

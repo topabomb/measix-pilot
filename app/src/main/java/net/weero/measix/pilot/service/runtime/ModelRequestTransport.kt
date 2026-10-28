@@ -15,7 +15,6 @@ import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
-import net.weero.measix.pilot.data.configuration.ModelSelectionRole
 import kotlin.uuid.Uuid
 
 internal suspend fun ModelRequestTarget.streamText(
@@ -31,9 +30,7 @@ internal suspend fun ModelRequestTarget.generateText(
     providers: ProviderManager,
     messages: List<ModelRequestMessage>,
     params: TextGenerationParams,
-    role: ModelSelectionRole = ModelSelectionRole.CHAT,
 ): MessageChunk {
-    @Suppress("UNUSED_VARIABLE") val purpose = role
     return when (this) {
         is ModelRequestTarget.Remote -> if (credentials is RequestCredentials.Routed) {
             collectRoutedText(streamText(providers, messages, params), params)

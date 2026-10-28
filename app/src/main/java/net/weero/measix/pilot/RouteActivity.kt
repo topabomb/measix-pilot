@@ -24,7 +24,6 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -76,8 +75,6 @@ import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import kotlinx.serialization.Serializable
 import me.rerere.workspace.WorkspaceStorageArea
 import net.weero.measix.pilot.data.datastore.SettingsStore
-import net.weero.measix.pilot.data.db.DatabaseMigrationTracker
-import net.weero.measix.pilot.data.db.MigrationState
 import net.weero.measix.pilot.data.event.AppEvent
 import net.weero.measix.pilot.data.event.AppEventBus
 import net.weero.measix.pilot.service.ApplicationRecoveryCoordinator
@@ -290,7 +287,6 @@ class RouteActivity : ComponentActivity() {
                 }
             }
         }
-        val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
 
         val backStack = rememberNavBackStack(Screen.Startup(intent.getStringExtra("conversationId")))
         val toastState = androidx.compose.runtime.key(backStack.lastOrNull()) { rememberToasterState() }
@@ -602,38 +598,6 @@ class RouteActivity : ComponentActivity() {
                     }
                     if (recoveryState !is ApplicationRecoveryState.Ready || backStack.lastOrNull() !is Screen.Chat) {
                         TTSController()
-                    }
-                    AnimatedVisibility(
-                        visible = migrationState is MigrationState.Migrating,
-                        enter = fadeIn(),
-                        exit = fadeOut(),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        val state = migrationState as? MigrationState.Migrating
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
-                                CircularProgressIndicator()
-                                Text(
-                                    text = stringResource(R.string.db_migrating),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
-                                if (state != null) {
-                                    Text(
-                                        text = "v${state.from} → v${state.to}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
                     }
                     Toaster(state = toastState, modifier = Modifier
                         .align(Alignment.TopCenter)

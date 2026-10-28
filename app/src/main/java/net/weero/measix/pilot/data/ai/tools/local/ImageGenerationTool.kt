@@ -279,6 +279,7 @@ private suspend fun executeGenerateImage(
                     put("requested", background.requested)
                     put("updated", background.updated)
                     background.reason?.let { put("reason", it) }
+                    background.detail?.let { put("detail", it) }
                     if (background.cleanupPending) put("cleanup_pending", true)
                 })
             }.toString()

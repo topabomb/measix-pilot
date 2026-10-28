@@ -120,9 +120,6 @@ fun scriptedProviderManager(provider: Provider<ProviderSetting.OpenAI>): Provide
 
 fun textDelta(text: String): MessageChunk = deltaChunk(listOf(UIMessagePart.Text(text)))
 
-fun reasoningDelta(reasoning: String): MessageChunk =
-    deltaChunk(listOf(UIMessagePart.Reasoning(reasoning)))
-
 fun toolCallDelta(
     callId: String,
     name: String,

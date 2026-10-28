@@ -482,7 +482,6 @@ class SubAssistantRunCoordinatorTest {
             runtimeRegistry = runtimeRegistry,
             commandCoordinator = commandCoordinator,
             toolSetFactory = toolSetFactory,
-            settingsStore = settingsStore,
             memoryService = memoryService,
             configurations = configurations ?: net.weero.measix.pilot.service.ConfigurationQueryService(settingsStore, sessions, gate, mockk()),
             modelExecutions = net.weero.measix.pilot.test.testModelExecutionService(settingsStore, sessions, gate),

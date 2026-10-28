@@ -16,7 +16,6 @@ import net.weero.measix.pilot.data.ai.subassistant.computeSubAssistantPreview
 import net.weero.measix.pilot.data.ai.subassistant.getSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.mergeSubAssistantCallMetadata
 import net.weero.measix.pilot.data.ai.subassistant.parseAssistantCallExtrasFromInput
-import net.weero.measix.pilot.data.model.Conversation
 import net.weero.measix.pilot.data.model.MessageNode
 import kotlin.uuid.Uuid
 
@@ -162,26 +161,6 @@ internal fun resolveValidChildSnapshotLineage(
     val child = childrenById[childId] ?: return null
     if (child.header.parentConversationId != masterId || child.header.assistantId != targetId) return null
     val hasSelectedTask = child.nodes.any { node ->
-        node.selectIndex in node.messages.indices &&
-            node.currentMessage.id == taskId &&
-            node.currentMessage.role == MessageRole.USER
-    }
-    return child.takeIf { hasSelectedTask }
-}
-
-internal fun resolveValidChildLineage(
-    masterId: Uuid,
-    metadata: SubAssistantCallMetadata,
-    childrenById: Map<Uuid, Conversation>,
-): Conversation? {
-    val childId = metadata.childConversationId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-        ?: return null
-    val targetId = runCatching { ConfigurationReference.parse(metadata.targetAssistantId) }.getOrNull() ?: return null
-    val taskId = metadata.childTaskNodeId?.let { runCatching { Uuid.parse(it) }.getOrNull() }
-        ?: return null
-    val child = childrenById[childId] ?: return null
-    if (child.parentConversationId != masterId || child.assistantId != targetId) return null
-    val hasSelectedTask = child.messageNodes.any { node ->
         node.selectIndex in node.messages.indices &&
             node.currentMessage.id == taskId &&
             node.currentMessage.role == MessageRole.USER

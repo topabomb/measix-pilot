@@ -36,6 +36,53 @@ class ProviderSettingsVMTest {
     fun tearDown() = Dispatchers.resetMain()
 
     @Test
+    fun `save failure preserves diagnostic and retry clears it without reporting success early`() = runTest(dispatcher) {
+        val service = mockk<ProviderSettingsApplicationService>()
+        val provider = ProviderSetting.OpenAI()
+        every { service.observeProvider(provider.id) } returns flowOf(provider)
+        coEvery { service.saveConfiguration(provider.id, provider) } throws
+            IllegalStateException("settings document write failed", java.io.IOException("disk unavailable"))
+        val vm = ProviderSettingsVM(provider.id, service)
+        var successes = 0
+
+        vm.saveConfiguration(provider) { successes++ }
+        advanceUntilIdle()
+
+        assertEquals(0, successes)
+        assertTrue(vm.state.value.mutationError != null)
+        val failure = vm.state.value.toString()
+        assertTrue(failure.contains("IllegalStateException"))
+        assertTrue(failure.contains("settings document write failed"))
+        assertTrue(failure.contains("IOException"))
+        assertTrue(failure.contains("disk unavailable"))
+
+        coEvery { service.saveConfiguration(provider.id, provider) } returns Unit
+        vm.saveConfiguration(provider) { successes++ }
+        advanceUntilIdle()
+
+        assertEquals(1, successes)
+        assertEquals(null, vm.state.value.mutationError)
+        assertFalse(vm.state.value.toString().contains("disk unavailable"))
+    }
+
+    @Test
+    fun `cancelled save does not report mutation failure or success`() = runTest(dispatcher) {
+        val service = mockk<ProviderSettingsApplicationService>()
+        val provider = ProviderSetting.OpenAI()
+        every { service.observeProvider(provider.id) } returns flowOf(provider)
+        coEvery { service.saveConfiguration(provider.id, provider) } throws
+            kotlinx.coroutines.CancellationException("leave page")
+        val vm = ProviderSettingsVM(provider.id, service)
+        var successes = 0
+
+        vm.saveConfiguration(provider) { successes++ }
+        advanceUntilIdle()
+
+        assertEquals(0, successes)
+        assertEquals(null, vm.state.value.mutationError)
+    }
+
+    @Test
     fun `all probes publish typed results for one run`() = runTest(dispatcher) {
         val service = mockk<ProviderSettingsApplicationService>()
         val model = Model(modelId = "test")

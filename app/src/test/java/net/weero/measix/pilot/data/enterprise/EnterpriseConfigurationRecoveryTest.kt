@@ -15,6 +15,38 @@ import org.robolectric.annotation.Config
 class EnterpriseConfigurationRecoveryTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test
+    fun `identity storage failure retains diagnostics while personal access stays available`() = runTest {
+        val store = io.mockk.mockk<EnterpriseAppliedStore>()
+        io.mockk.every { store.readManifest() } throws java.io.IOException(
+            "manifest read failed Authorization: Bearer secret-recovery-token",
+            IllegalStateException("storage device unavailable"),
+        )
+        val controller = EnterpriseSessionController(store, EnterpriseDataResetStore(temporary.newFolder()))
+        val failure = controller.recover() as EnterpriseState.Failed
+        assertEquals("enterprise_storage_unavailable", failure.reason)
+        assertTrue(failure.detail.orEmpty().contains("IOException: manifest read failed"))
+        assertTrue(failure.detail.orEmpty().contains("Caused by: IllegalStateException: storage device unavailable"))
+        assertFalse(failure.detail.orEmpty().contains("secret-recovery-token"))
+        assertTrue(controller.withRealmAccess(RealmAccess.Personal) { true })
+        assertEquals(RealmAccess.Personal, controller.readPresentation().selection?.access)
+    }
+
+    @Test
+    fun `identity storage cancellation propagates without publishing a failure`() = runTest {
+        val store = io.mockk.mockk<EnterpriseAppliedStore>()
+        val cancelled = kotlinx.coroutines.CancellationException("stop recovery")
+        io.mockk.every { store.readManifest() } throws cancelled
+        val controller = EnterpriseSessionController(store, EnterpriseDataResetStore(temporary.newFolder()))
+        try {
+            controller.recover()
+            fail("Recovery cancellation was swallowed")
+        } catch (actual: kotlinx.coroutines.CancellationException) {
+            assertEquals(cancelled.message, actual.message)
+        }
+        assertEquals(EnterpriseState.Loading, controller.state.value)
+    }
+
     @Test fun `MCP binding meaning follows the persisted snapshot format after restart`() = runTest {
         for (schema in listOf(4L, 5L)) {
             val root = temporary.newFolder()

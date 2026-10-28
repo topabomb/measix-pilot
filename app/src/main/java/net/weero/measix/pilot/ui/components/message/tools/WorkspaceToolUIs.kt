@@ -27,7 +27,6 @@ import androidx.compose.ui.unit.sp
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.metadataAs
 import me.rerere.common.http.jsonObjectOrNull
@@ -342,7 +341,9 @@ object ShellToolUI : ToolUIRenderer {
     @Composable
     override fun Preview(context: ToolUIContext, onDismissRequest: () -> Unit) {
         val content = context.content
-        if (content == null) {
+        if (content == null || listOf("exitCode", "stdout", "stderr", "timedOut").none {
+                it in content.jsonObjectOrNull.orEmpty()
+            }) {
             DefaultToolPreview(context = context)
             return
         }
@@ -421,10 +422,6 @@ private fun JsonElement?.boolean(key: String): Boolean? =
 /** 从工具输出 JSON 读取整型字段 */
 private fun JsonElement?.int(key: String): Int? =
     this?.jsonObjectOrNull?.get(key)?.jsonPrimitiveOrNull?.intOrNull
-
-/** 从工具输出 JSON 读取长整型字段 */
-private fun JsonElement?.long(key: String): Long? =
-    this?.jsonObjectOrNull?.get(key)?.jsonPrimitiveOrNull?.longOrNull
 
 private const val FILE_SUMMARY_MAX_LINES = 10
 

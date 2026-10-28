@@ -17,6 +17,7 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -135,5 +136,5 @@ class ShareSheetState {
 
 @Composable
 fun rememberShareSheetState(): ShareSheetState {
-    return ShareSheetState()
+    return remember { ShareSheetState() }
 }

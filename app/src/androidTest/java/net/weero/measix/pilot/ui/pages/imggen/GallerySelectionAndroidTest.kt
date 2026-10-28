@@ -108,6 +108,26 @@ class GallerySelectionAndroidTest {
         } finally { fixture.koin.close() }
     }
 
+    @Test fun singleDeleteRetainsTheOriginalFailureThroughTheExistingBatchResult() {
+        val fixture = Fixture()
+        var requested: Set<Int>? = null
+        coEvery { fixture.vm.deleteGallerySelection(any(), any(), any()) } coAnswers {
+            requested = secondArg()
+            thirdArg<(GeneratedImageBatchItemResult) -> Unit>()(GeneratedImageBatchItemResult.Failed(
+                ManagedFileKey.Generated(1, fixture.selection.value), java.io.IOException("original single image failure")))
+        }
+        try {
+            show(fixture)
+            compose.onAllNodesWithContentDescription(compose.activity.getString(R.string.imggen_page_delete))[0].performClick()
+            compose.onNode(hasText(compose.activity.getString(R.string.imggen_page_delete)) and hasAnyAncestor(isDialog())).performClick()
+            button(R.string.chat_conversation_diagnostics).assertIsDisplayed().performClick()
+            compose.onNode(hasText("IOException: original single image failure") and
+                hasAnyAncestor(hasAnyDescendant(hasContentDescription(compose.activity.getString(R.string.update_card_close)))))
+                .assertIsDisplayed()
+            compose.runOnIdle { assertEquals(setOf(1), requested) }
+        } finally { fixture.koin.close() }
+    }
+
     private fun button(resource: Int) = compose.onNodeWithText(compose.activity.getString(resource))
     private fun selectLoaded() {
         button(R.string.gallery_batch_select).performClick()
@@ -118,7 +138,8 @@ class GallerySelectionAndroidTest {
     }
     private fun show(fixture: Fixture, active: () -> Boolean = { true }) {
         compose.setContent { KoinIsolatedContext(fixture.koin) {
-            CompositionLocalProvider(LocalToaster provides rememberToasterState()) {
+            CompositionLocalProvider(LocalToaster provides rememberToasterState(),
+                net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo()) {
                 MaterialTheme { ImageGalleryScreen(fixture.vm, active()) }
             }
         } }

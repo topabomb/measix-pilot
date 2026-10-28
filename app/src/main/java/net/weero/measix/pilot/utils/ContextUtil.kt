@@ -65,9 +65,8 @@ fun Context.writeClipboardText(text: String) {
         getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     runCatching {
         clipboardManager.setPrimaryClip(android.content.ClipData.newPlainText("text", text))
-        Log.i(TAG, "writeClipboardText: $text")
     }.onFailure {
-        Log.e(TAG, "writeClipboardText: $text", it)
+        logDiagnosticFailure(TAG, "Unable to write clipboard text", it)
         Toast.makeText(this, "Failed to write text into clipboard", Toast.LENGTH_SHORT).show()
     }
 }

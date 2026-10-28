@@ -579,7 +579,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                                         *error?.arguments.orEmpty().toTypedArray()),
                                     color = MaterialTheme.colorScheme.error,
                                 )
-                                listOfNotNull(error?.detail, state?.failure, state?.exitFailure?.reason,
+                                listOfNotNull(error?.detail, state?.failure, state?.failureDetail, state?.exitFailure?.reason,
                                     pageRecoveryFailure, state?.recoveryLogoutFailure)
                                     .distinct()
                                     .takeIf { it.isNotEmpty() }?.joinToString("\n\n")?.let { detail ->

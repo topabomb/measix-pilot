@@ -23,6 +23,32 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 internal class ArtifactDeletionTest : ArtifactStoreLifecycleTestBase() {
     @Test
+    fun `folder cleanup retains each original failure and retries pending deletion`() = runTest {
+        val folder = folder()
+        val path = "$folder/pending.bin"
+        val id = database.artifactDao().insert(entity(path, folder, ArtifactState.DELETING, null))
+        val expected = java.io.IOException("storage unavailable", IllegalStateException("device unavailable"))
+        var fail = true
+        val payload = io.mockk.spyk(payloadStore)
+        io.mockk.coEvery { payload.deleteFinal(path) } coAnswers { if (fail) throw expected else true }
+        val deleting = ArtifactStore(
+            payload, database.artifactDao(), database.artifactReferenceDao(), database.systemMetaDao(),
+            database.conversationDao(), database.messageNodeDao(), database.conversationModelContextDao(),
+            ArtifactSettingsCoordinator(mockArtifactSettings({ Settings() }) { }),
+            net.weero.measix.pilot.data.db.RoomDatabaseTransactionRunner(database),
+        )
+        val failed = deleting.deleteUserRequestedFolderCreatedBefore(ConfigurationScope.Personal, folder, Long.MAX_VALUE)
+        assertEquals(1, failed.cleanupPending)
+        assertTrue(failed.failures.single().cause === expected)
+        assertEquals(ArtifactState.DELETING.name, database.artifactDao().getById(id)?.state)
+        fail = false
+        val retry = deleting.deleteUserRequestedFolderCreatedBefore(ConfigurationScope.Personal, folder, Long.MAX_VALUE)
+        assertEquals(1, retry.deleted)
+        assertTrue(retry.failures.isEmpty())
+        assertNull(database.artifactDao().getById(id))
+    }
+
+    @Test
     fun `folder deletion resumes mixed active and creating lifecycle states`() = runTest {
         val folder = folder()
         settingsFlow.value = Settings(assistants = listOf(Assistant()))

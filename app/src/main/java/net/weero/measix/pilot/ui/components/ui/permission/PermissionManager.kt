@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui.permission
+package net.weero.measix.pilot.ui.components.ui.permission
 
 import androidx.compose.runtime.Composable
 
@@ -30,10 +30,6 @@ fun PermissionManager(
                 permissionState.proceedFromRationale()
             },
             onCancel = {
-                permissionState.cancelPermissionRequest()
-            },
-            onOpenSettings = {
-                permissionState.openAppSettings()
                 permissionState.cancelPermissionRequest()
             }
         )

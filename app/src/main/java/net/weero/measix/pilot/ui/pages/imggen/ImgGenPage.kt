@@ -132,13 +132,12 @@ fun ImageGenPage(
     val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
 
-    // error Toast 收集器放在 Page 顶层: 停在 Gallery 页(第 1 页)时生成页不组合,
-    // 收集器若留在 ImageGenScreen 会漏掉删除失败等错误提示
+    // Page owns feedback so failures remain accessible while the gallery is selected.
     val error by vm.error.collectAsStateWithLifecycle()
-    val errorMessage = imageGenerationErrorMessage(error)
+    val errorMessage = imageGenerationErrorMessage(error?.reason)
     val pageToaster = LocalToaster.current
     LaunchedEffect(error) {
-        error?.let {
+        error?.takeIf { it.detail == null }?.let {
             pageToaster.show(message = errorMessage, type = ToastType.Error)
             vm.clearError()
         }
@@ -182,15 +181,22 @@ fun ImageGenPage(
             BottomBar(pagerState, scope)
         },
     ) { innerPadding ->
-        HorizontalPager(
-            state = pagerState,
-            modifier = modifier
+        Column(
+            modifier = modifier.fillMaxSize()
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
-        ) { page ->
-            when (page) {
-                0 -> ImageGenScreen(vm = vm)
-                1 -> ImageGalleryScreen(vm = vm, active = pagerState.currentPage == 1 && pagerState.settledPage == 1)
+        ) {
+            error?.detail?.let { detail ->
+                net.weero.measix.pilot.ui.components.ui.ErrorNotice(
+                    detail = detail, title = errorMessage, onDismiss = vm::clearError,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+            }
+            HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
+                when (page) {
+                    0 -> ImageGenScreen(vm = vm)
+                    1 -> ImageGalleryScreen(vm = vm, active = pagerState.currentPage == 1 && pagerState.settledPage == 1)
+                }
             }
         }
     }
@@ -938,10 +944,16 @@ internal fun ImageGalleryScreen(
                         val target = snapshotItems.firstOrNull { it.image == imageUrl }
                         if (target == null) {
                             ImagePreviewDeleteResult.Failed(imageDeleteFailed)
-                        } else if (vm.deleteImage(target)) {
-                            ImagePreviewDeleteResult.Deleted
                         } else {
-                            ImagePreviewDeleteResult.Failed(imageDeleteFailed)
+                            var outcome: GeneratedImageBatchItemResult? = null
+                            vm.deleteGallerySelection(target.selection, setOf(target.id)) { outcome = it }
+                            when (val result = outcome) {
+                                is GeneratedImageBatchItemResult.Failed -> ImagePreviewDeleteResult.Failed(result.cause.userVisibleDiagnostic())
+                                is GeneratedImageBatchItemResult.CleanupPending -> ImagePreviewDeleteResult.Failed(result.cause.userVisibleDiagnostic())
+                                is GeneratedImageBatchItemResult.Deleted,
+                                is GeneratedImageBatchItemResult.AlreadyAbsent -> ImagePreviewDeleteResult.Deleted
+                                else -> ImagePreviewDeleteResult.Failed(imageDeleteFailed)
+                            }
                         }
                     },
                 ),
@@ -970,11 +982,7 @@ internal fun ImageGalleryScreen(
                 TextButton(
                     onClick = {
                         pendingDelete = null
-                        scope.launch {
-                            if (!vm.deleteImage(target)) {
-                                toaster.show(imageDeleteFailed, type = ToastType.Error)
-                            }
-                        }
+                        runBatch(true, setOf(target.id))
                     }
                 ) {
                     Text(stringResource(R.string.imggen_page_delete))

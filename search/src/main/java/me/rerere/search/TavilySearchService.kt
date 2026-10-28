@@ -1,5 +1,6 @@
 package me.rerere.search
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -12,6 +13,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.common.http.readResponse
 import me.rerere.ai.core.InputSchema
 import me.rerere.search.SearchResult.SearchResultItem
 import me.rerere.search.SearchService.Companion.httpClient
@@ -84,28 +86,25 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                 .post(body.toString().toRequestBody())
                 .addHeader("Authorization", "Bearer $apiKey")
                 .build()
-            val response = httpClient.newCall(request).await()
-            if (response.isSuccessful) {
+            httpClient.newCall(request).readResponse { response ->
+                if (!response.isSuccessful) throw SearchHttpException("Tavily", response.code)
                 val response = response.body.string().let {
                     json.decodeFromString<SearchResponse>(it)
                 }
 
-                return@withContext Result.success(
-                    SearchResult(
-                        answer = response.answer.takeIf { serviceOptions.includeAnswer },
-                        items = response.results.map {
-                            SearchResultItem(
-                                title = it.title,
-                                url = it.url,
-                                text = it.content
-                            )
-                        },
-                        images = response.images,
-                    ))
-            } else {
-                throw SearchHttpException("Tavily", response.code)
+                SearchResult(
+                    answer = response.answer.takeIf { serviceOptions.includeAnswer },
+                    items = response.results.map {
+                        SearchResultItem(
+                            title = it.title,
+                            url = it.url,
+                            text = it.content
+                        )
+                    },
+                    images = response.images,
+                )
             }
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     override suspend fun scrape(
@@ -126,25 +125,21 @@ object TavilySearchService : SearchService<SearchServiceOptions.TavilyOptions> {
                 .post(body.toString().toRequestBody())
                 .addHeader("Authorization", "Bearer $apiKey")
                 .build()
-            val response = httpClient.newCall(request).await()
-            if (response.isSuccessful) {
+            httpClient.newCall(request).readResponse { response ->
+                if (!response.isSuccessful) throw SearchHttpException("Tavily", response.code)
                 val response = response.body.string().let {
                     json.decodeFromString<ScrapeResponse>(it)
                 }
-                return@withContext Result.success(
-                    ScrapedResult(
-                        urls = response.results.map {
-                            ScrapedResultUrl(
-                                url = it.url,
-                                content = it.rawContent,
-                            )
-                        }
-                    )
+                ScrapedResult(
+                    urls = response.results.map {
+                        ScrapedResultUrl(
+                            url = it.url,
+                            content = it.rawContent,
+                        )
+                    }
                 )
-            } else {
-                throw SearchHttpException("Tavily", response.code)
             }
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     @Serializable

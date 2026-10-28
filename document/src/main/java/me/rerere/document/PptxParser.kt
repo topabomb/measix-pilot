@@ -4,7 +4,8 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.File
 import java.io.InputStream
-import java.util.zip.ZipEntry
+import java.io.IOException
+import java.net.URI
 import java.util.zip.ZipFile
 
 private data class SlideContent(
@@ -15,46 +16,82 @@ private data class SlideContent(
 
 object PptxParser {
     fun parse(file: File): String {
-        return try {
-            ZipFile(file).use { zipFile ->
-                val slides = mutableListOf<SlideContent>()
-
-                // Find all slide XML files and sort them by number
-                val slideEntries = zipFile.entries().toList()
-                    .filter { it.name.matches(Regex("ppt/slides/slide\\d+\\.xml")) }
-                    .sortedBy { entry ->
-                        entry.name.substringAfter("slide").substringBefore(".xml").toIntOrNull() ?: 0
-                    }
-
-                if (slideEntries.isEmpty()) {
-                    return "No slides found in PPTX file"
-                }
-
-                // Parse each slide
-                slideEntries.forEachIndexed { index, entry ->
-                    val slideNumber = index + 1
-                    val slideContent = zipFile.getInputStream(entry).use { stream ->
-                        parseSlideXml(stream)
-                    }
-
-                    // Try to get notes for this slide
-                    val notesEntry = zipFile.getEntry("ppt/notesSlides/notesSlide${slideNumber}.xml")
-                    val notes = if (notesEntry != null) {
-                        zipFile.getInputStream(notesEntry).use { stream ->
-                            parseNotesXml(stream)
+        return ZipFile(file).use { zipFile ->
+            val presentation = relatedParts(zipFile, "", "officeDocument").values.singleOrNull()
+                ?: throw IOException("PPTX requires one presentation relationship")
+            val slidePaths = relatedParts(zipFile, presentation, "slide")
+            val presentationEntry = zipFile.getEntry(presentation)
+                ?: throw IOException("PPTX presentation is missing: $presentation")
+            val orderedPaths = zipFile.getInputStream(presentationEntry).use { stream ->
+                val parser = XmlPullParserFactory.newInstance().apply { isNamespaceAware = true }.newPullParser()
+                parser.setInput(stream, "UTF-8")
+                val paths = mutableListOf<String>()
+                var inSlideList = false
+                while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+                    if (parser.eventType == XmlPullParser.START_TAG) {
+                        if (parser.name == "sldIdLst") inSlideList = true
+                        if (inSlideList && parser.name == "sldId") {
+                            val id = RELATIONSHIP_NAMESPACES.firstNotNullOfOrNull { parser.getAttributeValue(it, "id") }
+                                ?: throw IOException("PPTX slide has no relationship id")
+                            paths += slidePaths[id] ?: throw IOException("PPTX slide relationship is missing: $id")
                         }
-                    } else ""
-
-                    slides.add(SlideContent(slideNumber, slideContent, notes))
+                    } else if (parser.eventType == XmlPullParser.END_TAG && parser.name == "sldIdLst") inSlideList = false
+                    parser.next()
                 }
-
-                // Format output
-                formatOutput(slides)
+                paths
             }
-        } catch (e: Exception) {
-            "Error parsing PPTX file: ${e.message}"
+            if (orderedPaths.isEmpty()) throw IOException("PPTX contains no presentation slides")
+            val slides = orderedPaths.mapIndexed { index, path ->
+                val entry = zipFile.getEntry(path) ?: throw IOException("PPTX slide is missing: $path")
+                val content = zipFile.getInputStream(entry).use(::parseSlideXml)
+                val notes = relatedParts(zipFile, path, "notesSlide").values.let { paths ->
+                    if (paths.size > 1) throw IOException("PPTX slide has multiple notes relationships: $path")
+                    paths.singleOrNull()?.let { notesPath ->
+                        val notesEntry = zipFile.getEntry(notesPath) ?: throw IOException("PPTX notes are missing: $notesPath")
+                        zipFile.getInputStream(notesEntry).use(::parseNotesXml)
+                    }.orEmpty()
+                }
+                SlideContent(index + 1, content, notes)
+            }
+            formatOutput(slides)
         }
     }
+
+    /** Package relationships own slide order and notes identity; ZIP order and numeric filenames do not. */
+    private fun relatedParts(zip: ZipFile, source: String, kind: String): Map<String, String> {
+        val parent = source.substringBeforeLast('/', "")
+        val relationsPath = (if (parent.isEmpty()) "" else "$parent/") + "_rels/${source.substringAfterLast('/')}.rels"
+        val entry = zip.getEntry(relationsPath) ?: return emptyMap()
+        return zip.getInputStream(entry).use { stream ->
+            val parser = XmlPullParserFactory.newInstance().apply { isNamespaceAware = true }.newPullParser()
+            parser.setInput(stream, "UTF-8")
+            val paths = linkedMapOf<String, String>()
+            while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+                if (parser.eventType == XmlPullParser.START_TAG && parser.name == "Relationship" &&
+                    parser.getAttributeValue(null, "Type") in RELATIONSHIP_NAMESPACES.map { "$it/$kind" }) {
+                    val id = parser.getAttributeValue(null, "Id")?.takeIf { it.isNotBlank() }
+                        ?: throw IOException("PPTX $kind relationship has no id")
+                    val target = parser.getAttributeValue(null, "Target")?.takeIf { it.isNotBlank() }
+                        ?: throw IOException("PPTX $kind relationship has no target")
+                    if (parser.getAttributeValue(null, "TargetMode") == "External") throw IOException("PPTX external $kind relationship is unsupported")
+                    val resolved = URI(null, null, "/$source", null).resolve(target).normalize()
+                    val path = resolved.path.orEmpty()
+                    if (resolved.isAbsolute || resolved.rawAuthority != null || resolved.rawQuery != null || resolved.rawFragment != null ||
+                        !path.startsWith('/') || path.startsWith("/../") || path == "/.." || '\\' in path) {
+                        throw IOException("PPTX $kind relationship must target a package part")
+                    }
+                    if (paths.put(id, path.removePrefix("/")) != null) throw IOException("PPTX duplicate relationship id: $id")
+                }
+                parser.next()
+            }
+            paths
+        }
+    }
+
+    private val RELATIONSHIP_NAMESPACES = listOf(
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+        "http://purl.oclc.org/ooxml/officeDocument/relationships",
+    )
 
     private fun formatOutput(slides: List<SlideContent>): String {
         val result = StringBuilder()
@@ -75,30 +112,26 @@ object PptxParser {
     }
 
     private fun parseSlideXml(inputStream: InputStream): String {
-        return try {
-            val factory = XmlPullParserFactory.newInstance()
-            factory.isNamespaceAware = true
-            val parser = factory.newPullParser()
-            parser.setInput(inputStream, "UTF-8")
+        val factory = XmlPullParserFactory.newInstance()
+        factory.isNamespaceAware = true
+        val parser = factory.newPullParser()
+        parser.setInput(inputStream, "UTF-8")
 
-            val result = StringBuilder()
+        val result = StringBuilder()
 
-            while (parser.eventType != XmlPullParser.END_DOCUMENT) {
-                when (parser.eventType) {
-                    XmlPullParser.START_TAG -> {
-                        when (parser.name) {
-                            "sp" -> processShape(parser, result)  // Text box/shape
-                            "graphicFrame" -> processGraphicFrame(parser, result)  // Table
-                        }
+        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+            when (parser.eventType) {
+                XmlPullParser.START_TAG -> {
+                    when (parser.name) {
+                        "sp" -> processShape(parser, result)  // Text box/shape
+                        "graphicFrame" -> processGraphicFrame(parser, result)  // Table
                     }
                 }
-                parser.next()
             }
-
-            result.toString()
-        } catch (e: Exception) {
-            "Error parsing slide XML: ${e.message}\n"
+            parser.next()
         }
+
+        return result.toString()
     }
 
     private fun processShape(parser: XmlPullParser, result: StringBuilder) {
@@ -369,42 +402,36 @@ object PptxParser {
     }
 
     private fun parseNotesXml(inputStream: InputStream): String {
-        return try {
-            val factory = XmlPullParserFactory.newInstance()
-            factory.isNamespaceAware = true
-            val parser = factory.newPullParser()
-            parser.setInput(inputStream, "UTF-8")
+        val factory = XmlPullParserFactory.newInstance()
+        factory.isNamespaceAware = true
+        val parser = factory.newPullParser()
+        parser.setInput(inputStream, "UTF-8")
 
-            val result = StringBuilder()
-            var inNotesShape = false
+        val result = StringBuilder()
 
-            while (parser.eventType != XmlPullParser.END_DOCUMENT) {
-                when (parser.eventType) {
-                    XmlPullParser.START_TAG -> {
-                        when (parser.name) {
-                            "sp" -> {
-                                // Check if this is a notes text shape (not the slide preview)
-                                inNotesShape = isNotesTextShape(parser)
-                                if (inNotesShape) {
-                                    extractShapeText(parser, result)
-                                }
+        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+            when (parser.eventType) {
+                XmlPullParser.START_TAG -> {
+                    when (parser.name) {
+                        "sp" -> {
+                            // Check if this is a notes text shape (not the slide preview)
+                            val shapeStartDepth = parser.depth
+                            if (isNotesTextShape(parser)) {
+                                extractShapeText(parser, result, shapeStartDepth)
                             }
                         }
                     }
                 }
-                parser.next()
             }
-
-            result.toString().trim()
-        } catch (e: Exception) {
-            ""
+            parser.next()
         }
+
+        return result.toString().trim()
     }
 
     private fun isNotesTextShape(parser: XmlPullParser): Boolean {
         // Notes text typically has ph type="body"
         val currentDepth = parser.depth
-        val originalPosition = parser
 
         while (parser.next() != XmlPullParser.END_DOCUMENT) {
             when (parser.eventType) {
@@ -425,9 +452,7 @@ object PptxParser {
         return false
     }
 
-    private fun extractShapeText(parser: XmlPullParser, result: StringBuilder) {
-        val shapeStartDepth = parser.depth
-
+    private fun extractShapeText(parser: XmlPullParser, result: StringBuilder, shapeStartDepth: Int) {
         while (parser.next() != XmlPullParser.END_DOCUMENT) {
             when (parser.eventType) {
                 XmlPullParser.START_TAG -> {

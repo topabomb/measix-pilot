@@ -68,9 +68,9 @@ Core Snapshot、manifest 和共享 cases 的来源见 [配置架构](android-con
 
 ### 静态架构边界
 
-`ArchitectureDependencyTest` 锁定 UI/application/query 依赖方向和唯一写入职责；`RetiredSurfaceContractTest` 防止已移除接口回归；
+`ArchitectureDependencyTest` 锁定 UI/application/query 依赖方向、唯一写入职责和禁止服务定位器的边界；
 `TurnStepProtocolContractTest` 限制 Turn 对 Workspace 输出路径和恢复对 render overlay 的依赖。
-三者复用 `ArchitectureSources.kt`，只约束 owner、依赖方向和退休接口；不复制源码片段或代码行顺序来证明 CAS、取消或 UI 行为。
+两者复用 `ArchitectureSources.kt`，只约束 owner 和依赖方向；不维护历史符号黑名单，也不复制源码片段或代码行顺序来证明 CAS、取消或 UI 行为。
 失败信息应定位被破坏的约定，避免同一禁令散落到多份扫描测试。
 
 ## 3. 确定性与测试取舍

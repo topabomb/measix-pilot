@@ -194,14 +194,14 @@ fun ChatMessage(
                 )
             }
         }
-        ProvideTextStyle(textStyle) {
-            if (originLabel != null && !(showHeader && (message.role == MessageRole.USER || settings.showModelName))) {
-                Text(originLabel, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            net.weero.measix.pilot.ui.components.richtext.MessageRichTextHost(
-                detailSource, contextConversationId, message.id, hasRenderableParts,
-            ) {
+        net.weero.measix.pilot.ui.components.richtext.MessageRichTextHost(
+            detailSource, contextConversationId, message.id, hasRenderableParts,
+        ) {
+            ProvideTextStyle(textStyle) {
+                if (originLabel != null && !(showHeader && (message.role == MessageRole.USER || settings.showModelName))) {
+                    Text(originLabel, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 MessagePartsBlock(
                     detailSource = detailSource,
                     assistant = assistant,
@@ -219,69 +219,68 @@ fun ChatMessage(
                     onContextUpdate = { contextRequestId = it },
                 )
             }
-        }
 
-        message.terminalStatus?.let { terminalStatus ->
-            MessageTerminalStatusNotice(
-                message = message,
-                status = terminalStatus,
-                onShowTerminalError = onShowTerminalError,
-            )
-        }
+            message.terminalStatus?.let { terminalStatus ->
+                MessageTerminalStatusNotice(
+                    message = message,
+                    status = terminalStatus,
+                    onShowTerminalError = onShowTerminalError,
+                )
+            }
 
-        val showActions = if (readOnly) {
-            false
-        } else if (lastMessage) {
-            !loading
-        } else {
-            hasVisibleMessage
-        }
-        val editedFiles = remember(message.parts) {
-            editedWorkspaceFilePaths(message.parts)
-        }
-        val showEditedFiles = assistant?.workspaceId != null && editedFiles.isNotEmpty()
-        // 完整门禁由 ChatMessageNerdLine 自己完成，这里只做轻量判断避免重复投影。
-        val showUsage = settings.showTokenUsage && message.usage != null
+            val showActions = if (readOnly) {
+                false
+            } else if (lastMessage) {
+                !loading
+            } else {
+                hasVisibleMessage
+            }
+            val editedFiles = remember(message.parts) {
+                editedWorkspaceFilePaths(message.parts)
+            }
+            val showEditedFiles = editedFiles.isNotEmpty()
+            // 完整门禁由 ChatMessageNerdLine 自己完成，这里只做轻量判断避免重复投影。
+            val showUsage = settings.showTokenUsage && message.usage != null
 
-        if (showActions || showEditedFiles || showUsage) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                AnimatedVisibility(
-                    visible = showActions,
-                    enter = slideInVertically { it / 2 } + fadeIn(),
-                    exit = slideOutVertically { it / 2 } + fadeOut()
-                ) {
-                    Column(
-                        modifier = Modifier.animateContentSize()
+            if (showActions || showEditedFiles || showUsage) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    AnimatedVisibility(
+                        visible = showActions,
+                        enter = slideInVertically { it / 2 } + fadeIn(),
+                        exit = slideOutVertically { it / 2 } + fadeOut()
                     ) {
-                        ChatMessageActionButtons(
-                            message = message,
-                            onRegenerate = onRegenerate,
-                            canRegenerate = contextSummary?.origin !=
-                                net.weero.measix.pilot.service.ConversationContextCategory.HISTORY_SUMMARY,
-                            node = node,
-                            onUpdate = onUpdate,
-                            onOpenActionSheet = {
-                                showActionsSheet = true
-                            }
+                        Column(
+                            modifier = Modifier.animateContentSize()
+                        ) {
+                            ChatMessageActionButtons(
+                                message = message,
+                                onRegenerate = onRegenerate,
+                                canRegenerate = contextSummary?.origin !=
+                                    net.weero.measix.pilot.service.ConversationContextCategory.HISTORY_SUMMARY,
+                                node = node,
+                                onUpdate = onUpdate,
+                                onOpenActionSheet = {
+                                    showActionsSheet = true
+                                }
+                            )
+                        }
+                    }
+
+                    if (showEditedFiles) {
+                        EditedFilesList(
+                            editedFiles = editedFiles,
                         )
                     }
-                }
 
-                if (showEditedFiles) {
-                    EditedFilesList(
-                        editedFiles = editedFiles,
-                        assistant = assistant,
-                    )
-                }
-
-                if (showUsage) {
-                    ProvideTextStyle(textStyle) {
-                        ChatMessageNerdLine(message = message, turnFinished = turnFinished)
+                    if (showUsage) {
+                        ProvideTextStyle(textStyle) {
+                            ChatMessageNerdLine(message = message, turnFinished = turnFinished)
+                        }
                     }
                 }
             }
-        }
 
+        }
     }
     if (showActionsSheet) {
         ChatMessageActionsSheet(

@@ -233,7 +233,7 @@ class WorkspaceExportLifecycleAndroidTest {
         showPage(files.source)
         val originalVm = observedVm.get()
         val request = WorkspaceExportRequest(files.source, WorkspaceStorageArea.FILES, listOf("second.txt"))
-        val delegate = WorkspaceDocumentTreeDestination(files.context.contentResolver, files.targetTree)
+        val delegate = WorkspaceDocumentDestination(files.context.contentResolver, files.targetTree)
         val written = CountDownLatch(1)
         val releaseWrite = CountDownLatch(1)
         val created = AtomicInteger()
@@ -302,7 +302,7 @@ class WorkspaceExportLifecycleAndroidTest {
         val activity = compose.activity
         val request = WorkspaceExportRequest(files.source, WorkspaceStorageArea.FILES,
             listOf("first.txt", "second.txt", "third.txt"))
-        val delegate = WorkspaceDocumentTreeDestination(files.context.contentResolver, files.targetTree)
+        val delegate = WorkspaceDocumentDestination(files.context.contentResolver, files.targetTree)
         val written = CountDownLatch(1)
         val releaseWrite = CountDownLatch(1)
         val interrupted = CountDownLatch(1)
@@ -401,7 +401,7 @@ class WorkspaceExportLifecycleAndroidTest {
             val picker = showPage(files.source)
             val pageVm = requireNotNull(observedVm.get()).also { vm = it }
             val request = WorkspaceExportRequest(files.source, WorkspaceStorageArea.FILES, sourceBodies.keys.toList())
-            val delegate = WorkspaceDocumentTreeDestination(files.context.contentResolver, tree)
+            val delegate = WorkspaceDocumentDestination(files.context.contentResolver, tree)
             val created = linkedMapOf<String, Uri>()
             val destination = object : WorkspaceExportDestination {
                 override fun create(name: String): Uri = delegate.create(name).also { created[name] = it }

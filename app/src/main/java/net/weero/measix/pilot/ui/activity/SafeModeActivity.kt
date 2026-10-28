@@ -58,7 +58,6 @@ import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
 import net.weero.measix.pilot.ui.context.LocalToaster
-import net.weero.measix.pilot.ui.hooks.writeStringPreference
 import net.weero.measix.pilot.ui.theme.MeasixTheme
 import net.weero.measix.pilot.ui.theme.WindowSystemBars
 import net.weero.measix.pilot.utils.CrashHandler
@@ -194,7 +193,7 @@ class SafeModeActivity : ComponentActivity() {
                             onAssistantSelected = { assistant ->
                                 scope.launch {
                                     try {
-                                        settingsStore.updateLocal { current -> current.copy(assistantId = assistant.id) }
+                                        settingsStore.selectPersonalAssistantForRecovery(assistant.id)
                                     } catch (error: SettingsLockedException) {
                                         Toast.makeText(
                                             context,
@@ -203,7 +202,6 @@ class SafeModeActivity : ComponentActivity() {
                                         ).show()
                                         return@launch
                                     }
-                                    context.writeStringPreference("lastConversationId", null)
                                     showAssistantPicker = false
                                 }
                             },

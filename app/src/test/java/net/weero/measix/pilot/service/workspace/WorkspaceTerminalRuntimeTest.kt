@@ -270,7 +270,7 @@ class WorkspaceTerminalRuntimeTest {
     fun `session creation failure removes the tab and publishes an unexpected reason`() = runTest(dispatcher) {
         val context = mockk<Context>()
         every { context.applicationContext } returns context
-        val expected = IllegalStateException("pty failed")
+        val expected = IllegalStateException("pty failed", java.io.IOException("device unavailable; token=secret-value"))
         val host = mockk<WorkspaceTerminalHost>()
         every { host.prepare(context, "workspace") } returns true
         every { host.create(context, "workspace", any()) } throws expected
@@ -284,6 +284,25 @@ class WorkspaceTerminalRuntimeTest {
 
         assertTrue(runtime.workspaces.value.getValue(owner).tabs.isEmpty())
         assertEquals(WorkspaceTerminalFailureReason.Unexpected, failure?.reason)
+        val detail = failure?.detail.orEmpty()
+        assertTrue(detail.contains("IllegalStateException: pty failed"))
+        assertTrue(detail.contains("IOException"))
+        assertTrue(detail.contains("device unavailable"))
+        assertTrue(!detail.contains("secret-value"))
+    }
+
+    @Test
+    fun `session creation cancellation removes owned tab without publishing failure`() = runTest(dispatcher) {
+        val context = mockk<Context>()
+        every { context.applicationContext } returns context
+        val host = mockk<WorkspaceTerminalHost>()
+        every { host.prepare(context, "workspace") } returns true
+        every { host.create(context, "workspace", any()) } throws kotlinx.coroutines.CancellationException("creation cancelled")
+        val runtime = WorkspaceTerminalRuntime(context, AppScope(dispatcher), sessionOwner(), host)
+        runtime.createForTest("workspace")
+        advanceUntilIdle()
+        awaitRuntime { runtime.workspaces.first { it[owner]?.tabs.orEmpty().isEmpty() } }
+        assertEquals(null, runtime.workspaces.value[owner]?.lastFailure)
     }
 
 }

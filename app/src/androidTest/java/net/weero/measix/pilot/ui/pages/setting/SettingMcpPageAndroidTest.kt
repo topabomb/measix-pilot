@@ -45,6 +45,53 @@ import org.koin.dsl.module
 class SettingMcpPageAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun oauthCredentialWriteFailureRetainsOriginalCauseAndDoesNotAuthorize() {
+        val config = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "OAuth write",
+            oauth = McpOAuthState(enabled = true, clientId = "client-original")), url = "https://example.test/mcp")
+        val commands = mockk<McpApplicationService>()
+        coEvery { commands.setOAuthClientCredentials(config.id, "client-original", null) } throws
+            java.io.IOException("credential persistence failed", IllegalStateException("original storage cause"))
+        showOAuthFailurePage(config, McpStatus.NeedsAuthorization, commands)
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_oauth_server_config)).performScrollTo().performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_oauth_authorize_with_credentials)).performScrollTo().performClick()
+        assertOAuthFailure("original storage cause")
+        io.mockk.verify(exactly = 0) { commands.authorize(any(), any()) }
+        compose.onNodeWithText("client-original").assertExists()
+    }
+
+    @Test fun oauthRevocationWriteFailureRemainsVisibleForTheSameServer() {
+        val config = McpServerConfig.StreamableHTTPServer(commonOptions = McpCommonOptions(name = "OAuth revoke",
+            oauth = McpOAuthState(enabled = true, accessToken = "fixture-token")), url = "https://example.test/mcp")
+        val commands = mockk<McpApplicationService>()
+        coEvery { commands.clearAuthorization(config.id) } throws java.io.IOException("original revocation storage cause")
+        showOAuthFailurePage(config, McpStatus.Idle, commands)
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_oauth_clear)).performScrollTo().performClick()
+        assertOAuthFailure("original revocation storage cause")
+        coVerify(exactly = 1) { commands.clearAuthorization(config.id) }
+        compose.onNodeWithText(config.commonOptions.name).assertExists()
+    }
+
+    private fun showOAuthFailurePage(config: McpServerConfig, status: McpStatus, commands: McpApplicationService) {
+        val row = config.toPresentation(McpRuntimeCapability.EMPTY).copy(status = status)
+        val query = mockk<McpQueryService>()
+        every { query.userServers } returns MutableStateFlow(listOf(row))
+        every { query.catalog } returns MutableStateFlow<McpCatalogUiModel?>(McpCatalogUiModel(
+            RealmSelection(RealmAccess.Personal, 1), McpCatalogReadState.Available(listOf(row))))
+        compose.setContent { McpTestTheme {
+            CompositionLocalProvider(LocalToaster provides rememberToasterState(),
+                LocalNavController provides Navigator(mutableListOf<NavKey>(Screen.Startup()))) {
+                SettingMcpPage(commands, query, mockk())
+            }
+        } }
+    }
+
+    private fun assertOAuthFailure(cause: String) {
+        compose.onNodeWithText(compose.activity.getString(R.string.chat_conversation_diagnostics)).performScrollTo().performClick()
+        compose.onNode(hasText(cause, substring = true) and
+            hasAnyAncestor(hasAnyDescendant(hasContentDescription(compose.activity.getString(R.string.update_card_close)))))
+            .assertIsDisplayed()
+    }
+
     @Test
     fun managedOnlyPageRefreshRetainsFailureAndRetriesToTheUpdatedCount() {
         val authority = EnterpriseAuthority("refresh-ui")

@@ -326,6 +326,38 @@ class WorkspaceRepositoryDeleteTest {
         } finally { rootDir.deleteRecursively() }
     }
 
+    @Test
+    fun `startup compensation cancellation propagates without reporting recovery success`() = runTest {
+        val workspaceId = Uuid.random()
+        val assistantId = ConfigurationReference.random()
+        val rootDir = Files.createTempDirectory("workspace-cancel-recovery").toFile()
+        try {
+            val dao = mockk<WorkspaceDAO>()
+            val manager = mockk<WorkspaceManager>()
+            val settingsStore = mockk<SettingsStore>()
+            val workspace = WorkspaceEntity(workspaceId.toString(), "Workspace", "root",
+                shellStatus = WorkspaceShellStatus.BROKEN.name, createdAt = 1, updatedAt = 1)
+            coEvery { dao.getAll() } returns listOf(workspace)
+            coEvery { dao.updateShellStatus(workspace.id, WorkspaceShellStatus.BROKEN.name, any()) } returns 1
+            every { manager.readWorkspaceDeletionJournal("root") } returns (
+                "{\"shellStatus\":\"READY\",\"phase\":\"PREPARED\",\"assistantWorkspaces\":{\"$assistantId\":\"$workspaceId\"}}"
+            ).encodeToByteArray()
+            every { manager.hasStagedWorkspaceDeletion("root") } returns true
+            every { manager.workspaceDir("root") } returns rootDir
+            coEvery { settingsStore.updateLocal(any()) } throws kotlinx.coroutines.CancellationException("stop compensation")
+
+            val failure = runCatching {
+                WorkspaceRepository(dao, manager, mockk<RootfsInstaller>(), settingsStore).checkIntegrity()
+            }.exceptionOrNull()
+
+            assertTrue(failure is kotlinx.coroutines.CancellationException)
+            assertEquals("stop compensation", failure?.message)
+            coVerify(exactly = 0) { manager.recoverStagedWorkspaceDeletion("root") }
+            coVerify(exactly = 0) { manager.clearWorkspaceDeletionJournal("root") }
+            coVerify(exactly = 0) { dao.deleteById(any()) }
+        } finally { rootDir.deleteRecursively() }
+    }
+
     private fun fixture(
         staged: Boolean = true,
         filesDeleted: Boolean,

@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.spyk
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.uuid.Uuid
@@ -89,6 +90,41 @@ internal class ArtifactRecoveryTest : ArtifactStoreLifecycleTestBase() {
 
         assertNull(database.artifactDao().getById(owned.entity.id))
         assertFalse(store.file(owned.entity).exists())
+    }
+
+    @Test
+    fun `startup cleanup failure retains original cause and retries each owned recovery phase`() = runTest {
+        for (phase in listOf("creating", "deleting", "settings")) {
+            val folder = folder()
+            val state = if (phase == "creating") ArtifactState.CREATING else ArtifactState.DELETING
+            val relativePath = "$folder/recovery.bin"
+            val id = database.artifactDao().insert(entity(relativePath, folder, state, null))
+            val expected = java.io.IOException("$phase storage unavailable", IllegalStateException("device unavailable"))
+            var fail = true
+            val payload = spyk(payloadStore)
+            coEvery { payload.deleteFinal(relativePath) } coAnswers {
+                if (fail && phase != "settings") throw expected
+                true
+            }
+            val settings = mockArtifactSettings({
+                if (fail && phase == "settings") throw expected
+                Settings()
+            }) { }
+            val recovering = ArtifactStore(
+                payload, database.artifactDao(), database.artifactReferenceDao(), database.systemMetaDao(),
+                database.conversationDao(), database.messageNodeDao(), database.conversationModelContextDao(),
+                ArtifactSettingsCoordinator(settings), RoomDatabaseTransactionRunner(database),
+            )
+
+            val failure = runCatching { recovering.reconcileStartup() }.exceptionOrNull()
+            assertTrue("$phase must retain the original failure", failure?.cause === expected)
+            assertEquals("device unavailable", failure?.cause?.cause?.message)
+            assertEquals(state.name, database.artifactDao().getById(id)?.state)
+
+            fail = false
+            recovering.reconcileStartup()
+            assertNull(database.artifactDao().getById(id))
+        }
     }
 
     @Test

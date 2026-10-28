@@ -365,7 +365,6 @@
   <string name="copy">복사</string>
   <string name="copy_all">전체 복사</string>
   <string name="create_fork">포크 생성</string>
-  <string name="db_migrating">데이터베이스 마이그레이션 중...</string>
   <string name="deep_thinking">심층 사고</string>
   <string name="deep_thinking_seconds">%1$.1f 초 동안 생각했습니다</string>
   <string name="delete">삭제</string>

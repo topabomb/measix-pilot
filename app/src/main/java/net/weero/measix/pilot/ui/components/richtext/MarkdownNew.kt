@@ -606,7 +606,6 @@ private fun HtmlTable(element: Element, onClickCitation: (String) -> Unit) {
 
 @Composable
 private fun HtmlDetails(element: Element, onClickCitation: (String) -> Unit) {
-    // Delegate to the existing SimpleHtmlBlock details renderer via a mini-document
     val summaryElement = element.children().find { it.tagName().lowercase() == "summary" }
     val summaryText = summaryElement?.text() ?: "Details"
 

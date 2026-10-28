@@ -93,11 +93,15 @@ Rootfs 内的主要映射：
 
 `WorkspaceManager.exportFile` 复用 `WorkspaceDirectoryHandle.open` 的逐层 NOFOLLOW 与 regular-file 校验，关闭输入描述符，借用输出流；因此普通导出、Linux 文本预览、图片读取和消息文件分享都拒绝源路径中的符号链接。Repository 用 `runInterruptible` 调度复制，循环按块检查中断；任意外部 provider 的阻塞 IO 不保证即时结束。
 
-批量结果只有在输出 close 成功后才记为成功。取消停止后续项，保留已完成文档，只清理本项取得且未完成的 document；清理失败作为 suppressed 保留。单文件/分享由打开方关闭输出并展示原诊断。选择与 picker 请求保存在内存；重建后缺少原请求身份的回调被拒绝。运行中的批量任务由 WorkspaceDetailVM 持有，旋转可继续观察结果，离开其生命周期取消。
+单项与批量 SAF 导出共用 `WorkspaceApplicationService` 的输出提交和清理流程，只有输出 close 成功且操作仍有效后才记为成功。取消停止后续项，保留已完成文档，只清理本项取得且未完成的 document；清理失败作为 suppressed 保留。单项 picker 返回的已创建文档在首次挂起前交给应用服务，页面已取消或原请求在重建后丢失时仍清理该目标。选择与 picker 请求保存在内存，不根据返回时的新选择补填原请求。运行中的批量任务由 WorkspaceDetailVM 持有，旋转可继续观察结果，离开其生命周期取消。
 
 本地工作区与聊天文件分享共用 `WorkspaceApplicationService.shareFile`，系统交付前副本归本次调用；
 交接失败或取消清理未交付副本。成功交付后保留至少 24 小时，在后续分享入口回收过期文件，
 不沿用远程分享的启动清理协议。
+
+历史消息的已编辑文件通过查询签发的 `ConversationMessageResourceSource` 交给 `exportMessageFile` / `shareMessageFile`，
+沿原消息捕获的 workspace/root 读取，不使用助手当前的工作区配置。原页面授权在复制前后和交付前复验，
+原 root 在 Workspace gate 内校验；授权撤销或工作区被替换时拒绝交付并清理本次未完成目标。
 
 `WorkspaceDetailVM` 在恢复前台时刷新当前目录，避免外部修改后沿用旧大小和修改时间。文件图片通过 `WorkspaceApplicationService.imageSource` 绑定 workspace/area/entry，直接 stat 复验修订和实际字节上限，不依赖有数量上限的目录列表，不另建预览副本或缓存 owner。
 
@@ -213,11 +217,13 @@ Workspace 删除而消失时自动清除 pending，不发送无意义命令。
 
 Termux view 与 emulator 源码在既有 Workspace 模块维护，来源和修改见 `workspace/TERMINAL-SOURCE.md`。协议编码、屏幕更新与自动响应仍在 Main；`WorkspacePtySession.write(byte[], offset, count)` 是唯一字节交付边界，原条目复制字节并由串行 IO writer 排空。Main 使用单个字节缓冲区合并逐字符输入，以单个合并唤醒信号驱动 writer，不为每个字符保留队列节点。待交付总字节量包含正在写入的批次，超限明确关闭并提示失败。Session 锁不包住可能阻塞的 ByteQueue 写入；取消先停止 PTY 以释放阻塞写，再等待 writer 完成。已编码的输入和自动回复始终归原 PTY，不改投新域。
 
-Rootfs/PTY 异步失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只映射新 failure。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，不按历史 Workspace id 无限保留锁对象。
+Rootfs/PTY 异步失败由 runtime 在同一 Workspace projection 发布带唯一 id 的 typed `lastFailure`，VM 只映射新 failure。非预期异常沿该投影保留可展开的类型、message 与 cause 诊断并记录完整堆栈；取消只清理原条目，不发布失败。创建准备、模型工具执行和 `WorkspaceApplicationService` 的 UI 文件命令/install/delete 使用同一组固定条带 mutex，不按历史 Workspace id 无限保留锁对象。
 
 `WorkspaceApplicationService.installRootfs` 与 `deleteWorkspace` 必须在同一 Workspace command gate 内先 `closeWorkspace` 并等待全部创建 Job/PTY 退出，再调用 Repository。删除与故障恢复协议见下文“状态与删除”。
 
 shell 工具与交互终端都消费同一份 `ProotLaunchSpec`：executable、loader、kernel spoof、`/workspace` bind、应用级 `/skills`、内核文件系统以及 `PWD` 都来自该值对象。二者只把 spec 交给各自进程 adapter，不再手写第二套 argv/env/bind。Shell 另传单次调用的 `/upload` 副本挂载；全局挂载表与 PTY 均不包含应用上传目录。受管 Tool Output 不挂载到 Rootfs；模型只能使用 conversation-scoped `read_tool_output` / `grep_tool_output` 回查。
+
+`TerminalEmulator` 在解析边界忽略 XTGETTCAP 非法十六进制名称与 OSC 104 非法颜色索引，继续处理同一响应中的有效项和后续正文，避免进程输出使 Main 解析异常退出。SGR 鼠标响应的数字使用固定 ASCII 格式，不随设备语言变化。
 
 ## 8. Rootfs 安装与修补
 

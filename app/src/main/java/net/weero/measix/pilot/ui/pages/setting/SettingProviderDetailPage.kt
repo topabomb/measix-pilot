@@ -149,11 +149,6 @@ fun SettingProviderDetailPage(
     }
 
     val mutationFailedText = stringResource(R.string.setting_provider_page_mutation_failed)
-    LaunchedEffect(providerSettingsState.mutationFailed) {
-        if (!providerSettingsState.mutationFailed) return@LaunchedEffect
-        toaster.show(mutationFailedText, type = ToastType.Error)
-        providerSettingsVM.consumeMutationFailure()
-    }
 
     Scaffold(
         containerColor = CustomColors.topBarColors.containerColor,
@@ -213,6 +208,14 @@ fun SettingProviderDetailPage(
         }
     ) {
         Column(Modifier.padding(it).consumeWindowInsets(it)) {
+            providerSettingsState.mutationError?.let { detail ->
+                net.weero.measix.pilot.ui.components.ui.ErrorNotice(
+                    detail = detail,
+                    title = mutationFailedText,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    onDismiss = providerSettingsVM::consumeMutationFailure,
+                )
+            }
             HorizontalPager(
                 state = pager,
                 modifier = Modifier

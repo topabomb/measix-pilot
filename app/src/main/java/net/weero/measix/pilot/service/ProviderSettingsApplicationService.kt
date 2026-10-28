@@ -22,6 +22,8 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.utils.SimpleCache
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import java.security.MessageDigest
 import me.rerere.ai.util.toHeaders
 import java.util.concurrent.TimeUnit
@@ -126,7 +128,10 @@ class ProviderSettingsApplicationService(
                     emit(ProviderBalanceUiState.Loading)
                     try { emit(ProviderBalanceUiState.Available(getBalance(provider))) }
                     catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { emit(ProviderBalanceUiState.Unavailable) }
+                    catch (error: Exception) {
+                        logDiagnosticFailure("ProviderSettings", "Balance query failed", error)
+                        emit(ProviderBalanceUiState.Unavailable(error.userVisibleDiagnostic()))
+                    }
                 }
             }
 
@@ -135,7 +140,10 @@ class ProviderSettingsApplicationService(
         if (draft !is ProviderSetting.OpenAI || !draft.balanceOption.enabled) return ProviderBalanceUiState.Hidden
         return try { ProviderBalanceUiState.Available(getBalance(draft)) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { ProviderBalanceUiState.Unavailable }
+        catch (error: Exception) {
+            logDiagnosticFailure("ProviderSettings", "Balance preview failed", error)
+            ProviderBalanceUiState.Unavailable(error.userVisibleDiagnostic())
+        }
     }
 
     private suspend fun getBalance(setting: ProviderSetting.OpenAI): String {
@@ -263,5 +271,5 @@ sealed interface ProviderBalanceUiState {
     data object Hidden : ProviderBalanceUiState
     data object Loading : ProviderBalanceUiState
     data class Available(val value: String) : ProviderBalanceUiState
-    data object Unavailable : ProviderBalanceUiState
+    data class Unavailable(val detail: String) : ProviderBalanceUiState
 }

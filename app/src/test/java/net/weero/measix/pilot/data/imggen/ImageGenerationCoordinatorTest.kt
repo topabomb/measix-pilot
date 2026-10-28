@@ -300,6 +300,28 @@ class ImageGenerationCoordinatorTest {
     }
 
     @Test
+    fun `persistence failure retains diagnostic cause and next request can succeed`() = runTest {
+        val provider = mockk<Provider<ProviderSetting>>()
+        coEvery { provider.generateImage(any(), any()) } returns flowOf(pngItem())
+        val filesDir = tempDir("img-persist-fail")
+        try {
+            val repository = mockk<GenMediaRepository> { coEvery { existsByPath(any()) } returns false }
+            every { repository.insertMedia(any()) } throws java.io.IOException("gallery write failed", IllegalStateException("disk full"))
+            val coordinator = coordinator(this, GeneratedMediaStore(filesDir, repository, mockk(relaxed = true)))
+            val request = ImageGenerationRequest(
+                source = ImageGenerationSource.Tool(net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, available(provider)),
+                prompt = "image", size = "auto",
+            )
+            val failure = coordinator.enqueue(request) as ImageGenerationOutcome.Failure
+            assertEquals("persistence_error", failure.reason)
+            assertTrue(failure.detail.orEmpty().contains("IOException: gallery write failed"))
+            assertTrue(failure.detail.orEmpty().contains("Caused by: IllegalStateException: disk full"))
+            every { repository.insertMedia(any()) } returns 7L
+            assertTrue(coordinator.enqueue(request.copy(id = "retry")) is ImageGenerationOutcome.Success)
+        } finally { filesDir.deleteRecursively() }
+    }
+
+    @Test
     fun `provider HTTP policy and rate limit become distinct reasons`() = runTest {
         val policy = mockk<Provider<ProviderSetting>>()
         val limited = mockk<Provider<ProviderSetting>>()

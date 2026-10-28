@@ -28,6 +28,34 @@ import java.io.IOException
 
 class DocumentAsPromptTransformerTest {
     @Test
+    fun `invalid structured documents fail before publishing extracted document context`() = runTest {
+        val formats = listOf(
+            "docx" to "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "pptx" to "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "epub" to "application/epub+zip",
+        )
+        for ((extension, mime) in formats) {
+            val file = kotlin.io.path.createTempFile("invalid-document", ".$extension").toFile()
+            try {
+                file.writeText("This is not a valid ZIP document")
+                val ref = LocalArtifactRef(relativePath = "upload/${file.name}", mimeType = mime)
+                val document = UIMessagePart.Document(url = ref.fileUri(File("managed")), fileName = file.name, mime = mime)
+                val reads = mockk<ArtifactReadLease> {
+                    every { resolveUri(document.url) } returns ref
+                    every { file(ref) } returns file
+                }
+                var failure: Throwable? = null
+                try {
+                    DocumentAsPromptTransformer().transform(contextFor(reads),
+                        listOf(UIMessage(role = MessageRole.USER, parts = listOf(document))))
+                } catch (error: Exception) { failure = error }
+                assertTrue("$extension parser must fail rather than return error text as document content", failure != null)
+                assertTrue("$extension failure needs its original diagnostic", !failure?.message.isNullOrBlank())
+            } finally { file.delete() }
+        }
+    }
+
+    @Test
     fun `downloaded files remain references without automatic document body reads`() = runTest {
         val reads = mockk<ArtifactReadLease>()
         val text = document()

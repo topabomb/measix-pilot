@@ -494,7 +494,6 @@ class ToolBatchRunnerTest {
         )
         val assistant = Assistant(enableMemory = false)
         val toolEvents = mutableListOf<ToolExecutionFact>()
-        var toolSetBuilds = 0
         var executed = false
         val tool = Tool(
             name = "side_effect",
@@ -516,10 +515,6 @@ class ToolBatchRunnerTest {
                 )
             ),
         )
-        val frozenTools = run {
-            toolSetBuilds++
-            listOf(tool)
-        }
 
         val capture = TurnRunCapture()
         handler.run(
@@ -531,7 +526,7 @@ class ToolBatchRunnerTest {
                 messages = listOf(message),
                 assistant = assistant,
                 promptInputs = testPromptInputs(),
-                tools = frozenTools,
+                tools = listOf(tool),
                 maxSteps = 1,
                 onCheckpoint = { checkpoint ->
                     (checkpoint as? ToolExecutionCheckpoint)?.toolExecution?.let(toolEvents::add)
@@ -541,7 +536,6 @@ class ToolBatchRunnerTest {
         )
 
         assertFalse(executed)
-        assertEquals(1, toolSetBuilds)
         val toolResult = capture.streamDeltas.last().getTools().single()
         val outputText = (toolResult.output.single() as UIMessagePart.Text).text
         assertTrue(outputText.contains("tool_not_available"))

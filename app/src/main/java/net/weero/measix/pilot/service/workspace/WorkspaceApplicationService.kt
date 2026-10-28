@@ -57,7 +57,15 @@ class WorkspaceApplicationService internal constructor(
     private val activeShares = java.util.concurrent.ConcurrentHashMap.newKeySet<File>()
 
     /** System recipients may read handed-off files for 24 hours; failed handoffs own no cache. */
-    suspend fun shareFile(workspaceId: String, area: WorkspaceStorageArea, path: String, name: String, deliver: (File) -> Unit) {
+    suspend fun shareFile(workspaceId: String, area: WorkspaceStorageArea, path: String, name: String, deliver: (File) -> Unit) =
+        shareFile(name, copy = { exportFile(workspaceId, area, path, it) }, beforeDelivery = {}, deliver = deliver)
+
+    private suspend fun shareFile(
+        name: String,
+        copy: suspend (OutputStream) -> Unit,
+        beforeDelivery: suspend () -> Unit,
+        deliver: (File) -> Unit,
+    ) {
         var owned: File? = null
         var delivered = false
         var failure: Throwable? = null
@@ -71,11 +79,13 @@ class WorkspaceApplicationService internal constructor(
                 }
                 val extension = name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
                     .takeIf { it.matches(Regex("[a-z0-9]{1,16}")) }
-                val copy = File(directory, "share-${java.util.UUID.randomUUID()}${extension?.let { ".$it" }.orEmpty()}")
-                owned = copy
-                activeShares += copy
-                copy.outputStream().use { exportFile(workspaceId, area, path, it) }
+                val file = File(directory, "share-${java.util.UUID.randomUUID()}${extension?.let { ".$it" }.orEmpty()}")
+                owned = file
+                activeShares += file
+                file.outputStream().use { copy(it) }
             }
+            currentCoroutineContext().ensureActive()
+            beforeDelivery()
             currentCoroutineContext().ensureActive()
             deliver(requireNotNull(owned))
             delivered = true
@@ -94,6 +104,17 @@ class WorkspaceApplicationService internal constructor(
                 }
             }
         }
+    }
+
+    suspend fun shareMessageFile(
+        source: net.weero.measix.pilot.service.ConversationMessageResourceSource,
+        path: String,
+        deliver: (File) -> Unit,
+    ) {
+        shareFile(path.substringAfterLast('/'),
+            copy = { copyMessageFile(source, path, it) },
+            beforeDelivery = { requireMessageWorkspaceAccess(source) },
+            deliver = deliver)
     }
 
     suspend fun openDocument(root: String, path: String, mode: Int) =
@@ -162,6 +183,20 @@ class WorkspaceApplicationService internal constructor(
         output: OutputStream,
     ) = gated(workspaceId) { repository.exportFile(workspaceId, area, path, output) }
 
+    /** Takes ownership of a picker-created document before any suspension, including a lost source request. */
+    suspend fun exportFile(
+        request: WorkspaceExportRequest?,
+        document: Uri,
+        destination: WorkspaceExportDestination,
+    ) = exportOne(request, request?.paths?.singleOrNull(), destination, document)
+
+    suspend fun exportMessageFile(
+        source: net.weero.measix.pilot.service.ConversationMessageResourceSource?,
+        path: String?,
+        document: Uri,
+        destination: WorkspaceExportDestination,
+    ) = exportOne(null, path, destination, document, source)
+
     suspend fun exportFiles(
         request: WorkspaceExportRequest,
         destination: WorkspaceExportDestination,
@@ -184,27 +219,37 @@ class WorkspaceApplicationService internal constructor(
     }
 
     private suspend fun exportOne(
-        request: WorkspaceExportRequest,
-        path: String,
+        request: WorkspaceExportRequest?,
+        path: String?,
         destination: WorkspaceExportDestination,
+        createdDocument: Uri? = null,
+        message: net.weero.measix.pilot.service.ConversationMessageResourceSource? = null,
     ): WorkspaceExportItem.Exported {
-        var document: Uri? = null
+        var document: Uri? = createdDocument
         var output: OutputStream? = null
         var completed = false
         var failure: Throwable? = null
         try {
-            val entry = gated(request.workspaceId) { repository.statFile(request.workspaceId, request.area, path) }
+            currentCoroutineContext().ensureActive()
+            val requestedPath = requireNotNull(path) { "workspace_export_source_unavailable" }
+            val source = message?.let { messageWorkspaceRequest(it, requestedPath) }
+                ?: requireNotNull(request) { "workspace_export_source_unavailable" }
+            val sourcePath = if (message == null) requestedPath else source.paths.single()
+            message?.let { requireMessageWorkspaceAccess(it) }
+            val entry = gated(source.workspaceId) { repository.statFile(source.workspaceId, source.area, sourcePath) }
             require(!entry.isDirectory) { "Only files can be exported: $path" }
-            runInterruptible(Dispatchers.IO) { document = destination.create(entry.name) }
+            if (document == null) runInterruptible(Dispatchers.IO) { document = destination.create(entry.name) }
             val uri = requireNotNull(document)
             val name = runInterruptible(Dispatchers.IO) { destination.displayName(uri) }
             runInterruptible(Dispatchers.IO) { output = destination.open(uri) }
-            exportFile(request.workspaceId, request.area, path, requireNotNull(output))
+            if (message == null) exportFile(source.workspaceId, source.area, sourcePath, requireNotNull(output))
+            else copyMessageFile(message, requestedPath, requireNotNull(output))
             val closing = output.also { output = null }
             withContext(NonCancellable + Dispatchers.IO) { closing?.close() }
             currentCoroutineContext().ensureActive()
+            message?.let { requireMessageWorkspaceAccess(it) }
             completed = true
-            return WorkspaceExportItem.Exported(path, uri, name)
+            return WorkspaceExportItem.Exported(sourcePath, uri, name)
         } catch (error: Throwable) {
             failure = error
             throw error
@@ -297,6 +342,46 @@ class WorkspaceApplicationService internal constructor(
                 }.also { verify() }
             }
         } catch (failure: Throwable) { descriptor.close(); throw failure }
+    }
+
+    private suspend fun copyMessageFile(
+        source: net.weero.measix.pilot.service.ConversationMessageResourceSource,
+        path: String,
+        output: OutputStream,
+    ) {
+        source.requireAccess()
+        val request = messageWorkspaceRequest(source, path)
+        gated(request.workspaceId) {
+            requireMessageWorkspaceRoot(source)
+            repository.exportFile(request.workspaceId, request.area, request.paths.single(), output)
+            requireMessageWorkspaceRoot(source)
+        }
+        source.requireAccess()
+    }
+
+    private suspend fun requireMessageWorkspaceAccess(source: net.weero.measix.pilot.service.ConversationMessageResourceSource) {
+        source.requireAccess()
+        val origin = requireNotNull(source.workspace) { "message_workspace_origin_unknown" }
+        gated(origin.workspaceId) { requireMessageWorkspaceRoot(source) }
+        source.requireAccess()
+    }
+
+    private suspend fun requireMessageWorkspaceRoot(source: net.weero.measix.pilot.service.ConversationMessageResourceSource) {
+        val origin = requireNotNull(source.workspace) { "message_workspace_origin_unknown" }
+        check(repository.getById(origin.workspaceId)?.root == origin.root) { "message_workspace_unavailable" }
+    }
+
+    private fun messageWorkspaceRequest(
+        source: net.weero.measix.pilot.service.ConversationMessageResourceSource,
+        path: String,
+    ): WorkspaceExportRequest {
+        val origin = requireNotNull(source.workspace) { "message_workspace_origin_unknown" }
+        val guest = RootfsPath.parse(path)
+        require(!guest.isUpload) { "message_workspace_upload_requires_artifact" }
+        val files = guest.value.startsWith("/workspace/")
+        return WorkspaceExportRequest(origin.workspaceId,
+            if (files) WorkspaceStorageArea.FILES else WorkspaceStorageArea.LINUX,
+            listOf(if (files) guest.value.removePrefix("/workspace/") else guest.value.trimStart('/')))
     }
 
     /** Historical message paths use the original guest cwd; the query lease is checked outside the Workspace gate. */
@@ -548,9 +633,9 @@ interface WorkspaceExportDestination {
     fun delete(uri: Uri)
 }
 
-class WorkspaceDocumentTreeDestination(private val resolver: ContentResolver, tree: Uri) : WorkspaceExportDestination {
-    private val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
-    override fun create(name: String): Uri = DocumentsContract.createDocument(resolver, parent, "application/octet-stream", name)
+class WorkspaceDocumentDestination(private val resolver: ContentResolver, tree: Uri? = null) : WorkspaceExportDestination {
+    private val parent = tree?.let { DocumentsContract.buildDocumentUriUsingTree(it, DocumentsContract.getTreeDocumentId(it)) }
+    override fun create(name: String): Uri = DocumentsContract.createDocument(resolver, requireNotNull(parent) { "A tree grant is required to create a document" }, "application/octet-stream", name)
         ?: throw IOException("Document provider did not create '$name'")
     override fun displayName(uri: Uri): String = resolver.query(uri,
         arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->

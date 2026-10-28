@@ -570,6 +570,7 @@ internal data class EnterpriseOverview(
     val exitReason: EnterpriseExitReason? = null,
     val platformOrigin: String? = null,
     val configurationDetails: EnterpriseConfigurationDetailsUiModel? = null,
+    val failureDetail: String? = null,
 )
 
 /** Native enterprise UI commands share the existing source, Session, synchronization and exit owners. */
@@ -663,6 +664,7 @@ internal class EnterpriseApplicationService(
                 generation = manifest?.applied?.generation,
                 lastSyncMillis = manifest?.lastConfigurationSyncMillis,
                 failure = (presentation.state as? EnterpriseState.Failed)?.reason,
+                failureDetail = (presentation.state as? EnterpriseState.Failed)?.detail,
                 exitFailure = exitFailure,
                 switching = activeSwitch != null,
                 resetPath = when {

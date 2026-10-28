@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,9 +68,11 @@ import net.weero.measix.pilot.service.FileCleanupCategory
 import net.weero.measix.pilot.service.FileCleanupRange
 import net.weero.measix.pilot.service.FileManagementApplicationService
 import net.weero.measix.pilot.service.FileManagementQueryService
+import net.weero.measix.pilot.service.GeneratedImageBatchItemResult
 import net.weero.measix.pilot.service.ManagedFileKey
 import net.weero.measix.pilot.service.ManagedFileUiModel
 import net.weero.measix.pilot.ui.components.nav.BackButton
+import net.weero.measix.pilot.ui.components.ui.ErrorNotice
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDialog
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteAction
 import net.weero.measix.pilot.ui.components.ui.ImagePreviewDeleteResult
@@ -78,6 +81,9 @@ import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.CustomColors
+import net.weero.measix.pilot.utils.UiState
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.utils.fileSizeToString
 import net.weero.measix.pilot.utils.toLocalDateTime
 import org.koin.compose.koinInject
@@ -88,7 +94,7 @@ private enum class FileCategory {
     GENERATED_IMAGES,
 }
 
-/** 上传文件删除流程状态机（防重入；Confirming → Executing → Idle） */
+/** 上传文件删除防重入；失败保留原目标，允许重新确认后重试。 */
 private sealed interface UploadDeleteState {
     data object Idle : UploadDeleteState
     data class Confirming(val target: ManagedFileUiModel) : UploadDeleteState
@@ -130,7 +136,6 @@ private fun FileDirectoryContent(
     val resources = LocalResources.current
 
     val deletedToast = stringResource(R.string.setting_files_page_deleted_toast)
-    val deleteFailedToast = stringResource(R.string.setting_files_page_delete_failed_toast)
     val deleteInProgressToast = stringResource(R.string.setting_files_page_delete_in_progress_toast)
     val deleteAlreadyDeletedToast = stringResource(R.string.setting_files_page_delete_already_deleted_toast)
     val cleanedToast = stringResource(R.string.setting_files_page_cleaned_toast)
@@ -139,13 +144,9 @@ private fun FileDirectoryContent(
 
     var selectedCategory by remember { mutableStateOf(FileCategory.UPLOAD) }
     var uploadDeleteState by remember { mutableStateOf<UploadDeleteState>(UploadDeleteState.Idle) }
-    var pendingUploadDeleteImpact by remember {
-        mutableStateOf<ArtifactDeleteImpactUiModel?>(null)
-    }
-    var pendingGeneratedDeleteKey by remember { mutableStateOf<ManagedFileKey.Generated?>(null) }
+    var pendingGeneratedDelete by remember { mutableStateOf<ManagedFileUiModel?>(null) }
     var cleanupCategory by remember { mutableStateOf<FileCleanupCategory?>(null) }
     var cleanupRange: FileCleanupRange by remember { mutableStateOf(FileCleanupRange.All) }
-    var cleanupCandidateCount by remember { mutableStateOf(0) }
     var previewImages by remember { mutableStateOf<List<net.weero.measix.pilot.service.ImageSource>>(emptyList()) }
     var previewIndex by remember { mutableStateOf(-1) }
     val settings = LocalSettings.current
@@ -155,37 +156,30 @@ private fun FileDirectoryContent(
     val isUpload = selectedCategory == FileCategory.UPLOAD
     val hasItems = if (isUpload) uploadFiles.isNotEmpty() else generatedImages.isNotEmpty()
 
-    // 清理确认只展示当前 query 候选数，不把全列表数冒充实际删除数
-    LaunchedEffect(cleanupCategory, cleanupRange) {
-        val category = cleanupCategory ?: return@LaunchedEffect
-        cleanupCandidateCount = try {
-            queryService.candidateCount(directory.selection ?: return@LaunchedEffect, category, cleanupRange)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            0
-        }
-    }
-
     val pendingUploadDelete = (uploadDeleteState as? UploadDeleteState.Confirming)?.target
         ?: (uploadDeleteState as? UploadDeleteState.Executing)?.target
     if (pendingUploadDelete != null) {
         val target = pendingUploadDelete
         val executing = uploadDeleteState is UploadDeleteState.Executing
-        LaunchedEffect(target.key) {
+        var inspectionRetry by remember(target.key) { mutableStateOf(0) }
+        var pendingUploadDeleteImpact by remember(target.key, inspectionRetry) {
+            mutableStateOf<UiState<ArtifactDeleteImpactUiModel>>(UiState.Loading)
+        }
+        var deleteFailure by remember(target.key) { mutableStateOf<String?>(null) }
+        LaunchedEffect(target.key, inspectionRetry) {
             pendingUploadDeleteImpact = try {
-                queryService.inspectArtifact(target.uploadKey())
+                UiState.Success(queryService.inspectArtifact(target.uploadKey()) ?: error(deleteAlreadyDeletedToast))
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                null
+            } catch (error: Exception) {
+                logDiagnosticFailure("SettingFilesPage", "File delete inspection failed", error)
+                UiState.Error(error)
             }
         }
         AlertDialog(
             onDismissRequest = {
                 if (!executing) {
                     uploadDeleteState = UploadDeleteState.Idle
-                    pendingUploadDeleteImpact = null
                 }
             },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
@@ -197,7 +191,16 @@ private fun FileDirectoryContent(
                             target.displayName,
                         )
                     )
-                    pendingUploadDeleteImpact?.let { impact ->
+                    when (val inspection = pendingUploadDeleteImpact) {
+                        is UiState.Error -> ErrorNotice(
+                            detail = inspection.error.userVisibleDiagnostic(),
+                            onRetry = { inspectionRetry++ },
+                        )
+                        UiState.Loading, UiState.Idle -> CircularProgressIndicator()
+                        is UiState.Success -> Unit
+                    }
+                    deleteFailure?.let { ErrorNotice(detail = it) }
+                    (pendingUploadDeleteImpact as? UiState.Success)?.data?.let { impact ->
                         if (impact.referencedByHistory) {
                             ImpactText(stringResource(R.string.setting_files_page_delete_impact_history))
                         }
@@ -225,27 +228,34 @@ private fun FileDirectoryContent(
             },
             confirmButton = {
                 TextButton(
-                    enabled = !executing,
+                    enabled = !executing && pendingUploadDeleteImpact is UiState.Success,
                     onClick = {
-                        if (uploadDeleteState is UploadDeleteState.Confirming) {
+                        if (uploadDeleteState is UploadDeleteState.Confirming && pendingUploadDeleteImpact is UiState.Success) {
+                            deleteFailure = null
                             uploadDeleteState = UploadDeleteState.Executing(target)
                             scope.launch {
                                 try {
-                                    val toast = when (applicationService.deleteArtifact(target.uploadKey())) {
+                                    val toast = when (val result = applicationService.deleteArtifact(target.uploadKey())) {
                                         ArtifactDeleteOutcome.Deleted,
                                         ArtifactDeleteOutcome.CleanupPending -> deletedToast
                                         ArtifactDeleteOutcome.InProgress -> deleteInProgressToast
                                         ArtifactDeleteOutcome.AlreadyDeleted -> deleteAlreadyDeletedToast
-                                        is ArtifactDeleteOutcome.Failed -> deleteFailedToast
+                                        is ArtifactDeleteOutcome.Failed -> {
+                                            deleteFailure = listOfNotNull(result.reason, result.detail).joinToString("\n")
+                                            return@launch
+                                        }
                                     }
                                     toaster.show(toast)
+                                    uploadDeleteState = UploadDeleteState.Idle
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
-                                } catch (_: Exception) {
-                                    toaster.show(deleteFailedToast)
+                                } catch (error: Exception) {
+                                    logDiagnosticFailure("SettingFilesPage", "File deletion failed", error)
+                                    deleteFailure = error.userVisibleDiagnostic()
                                 } finally {
-                                    uploadDeleteState = UploadDeleteState.Idle
-                                    pendingUploadDeleteImpact = null
+                                    if (uploadDeleteState is UploadDeleteState.Executing) {
+                                        uploadDeleteState = UploadDeleteState.Confirming(target)
+                                    }
                                 }
                             }
                         }
@@ -259,7 +269,6 @@ private fun FileDirectoryContent(
                     enabled = !executing,
                     onClick = {
                         uploadDeleteState = UploadDeleteState.Idle
-                        pendingUploadDeleteImpact = null
                     }
                 ) {
                     Text(stringResource(R.string.setting_files_page_cancel_action))
@@ -268,38 +277,45 @@ private fun FileDirectoryContent(
         )
     }
 
-    val pendingGeneratedDelete = pendingGeneratedDeleteKey?.let { key ->
-        generatedImages.firstOrNull { it.key == key }
-    }
-    if (pendingGeneratedDelete != null) {
-        val target = pendingGeneratedDelete
+    pendingGeneratedDelete?.let { target ->
+        var deleting by remember(target.key) { mutableStateOf(false) }
+        var deleteFailure by remember(target.key) { mutableStateOf<String?>(null) }
         val fileLabel = generatedDeleteLabel(
             target.prompt.orEmpty(),
             stringResource(R.string.setting_files_page_generated_no_prompt),
         )
         AlertDialog(
-            onDismissRequest = { pendingGeneratedDeleteKey = null },
+            onDismissRequest = { if (!deleting) pendingGeneratedDelete = null },
             title = { Text(stringResource(R.string.setting_files_page_delete_file_title)) },
             text = {
-                Text(
-                    stringResource(
-                        R.string.setting_files_page_delete_generated_confirmation,
-                        fileLabel,
-                    )
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.setting_files_page_delete_generated_confirmation, fileLabel))
+                    deleteFailure?.let { ErrorNotice(detail = it) }
+                }
             },
             confirmButton = {
                 TextButton(
+                    enabled = !deleting,
                     onClick = {
-                        pendingGeneratedDeleteKey = null
+                        deleting = true
+                        deleteFailure = null
                         scope.launch {
                             try {
-                                val ok = applicationService.deleteGenerated(target.generatedKey())
-                                toaster.show(if (ok) deletedToast else deleteFailedToast)
+                                when (val result = applicationService.deleteGeneratedBatch(listOf(target.generatedKey())) {}.single()) {
+                                    is GeneratedImageBatchItemResult.Failed -> deleteFailure = result.cause.userVisibleDiagnostic()
+                                    is GeneratedImageBatchItemResult.CleanupPending -> deleteFailure = result.cause.userVisibleDiagnostic()
+                                    else -> {
+                                        pendingGeneratedDelete = null
+                                        toaster.show(deletedToast)
+                                    }
+                                }
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
-                            } catch (_: Exception) {
-                                toaster.show(deleteFailedToast)
+                            } catch (error: Exception) {
+                                logDiagnosticFailure("SettingFilesPage", "Generated image deletion failed", error)
+                                deleteFailure = error.userVisibleDiagnostic()
+                            } finally {
+                                deleting = false
                             }
                         }
                     }
@@ -308,7 +324,7 @@ private fun FileDirectoryContent(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingGeneratedDeleteKey = null }) {
+                TextButton(enabled = !deleting, onClick = { pendingGeneratedDelete = null }) {
                     Text(stringResource(R.string.setting_files_page_cancel_action))
                 }
             }
@@ -316,21 +332,47 @@ private fun FileDirectoryContent(
     }
 
     cleanupCategory?.let { category ->
+        var countRetry by remember(category) { mutableStateOf(0) }
+        var cleaning by remember(category) { mutableStateOf(false) }
+        var cleanupFailure by remember(category, cleanupRange) { mutableStateOf<String?>(null) }
+        var cleanupCandidateCount by remember(category, cleanupRange, countRetry) {
+            mutableStateOf<UiState<Int>>(UiState.Loading)
+        }
+        LaunchedEffect(category, cleanupRange, countRetry) {
+            cleanupCandidateCount = try {
+                UiState.Success(queryService.candidateCount(
+                    directory.selection ?: return@LaunchedEffect, category, cleanupRange,
+                ))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                logDiagnosticFailure("SettingFilesPage", "File cleanup preview failed", error)
+                UiState.Error(error)
+            }
+        }
         AlertDialog(
-            onDismissRequest = { cleanupCategory = null },
+            onDismissRequest = { if (!cleaning) cleanupCategory = null },
             title = { Text(stringResource(R.string.setting_files_page_clean_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        stringResource(
-                            if (category == FileCleanupCategory.UPLOAD) {
-                                R.string.setting_files_page_clean_confirmation
-                            } else {
-                                R.string.setting_files_page_clean_generated_confirmation
-                            },
-                            cleanupCandidateCount,
+                    when (val count = cleanupCandidateCount) {
+                        is UiState.Success -> Text(
+                            stringResource(
+                                if (category == FileCleanupCategory.UPLOAD) {
+                                    R.string.setting_files_page_clean_confirmation
+                                } else {
+                                    R.string.setting_files_page_clean_generated_confirmation
+                                },
+                                count.data,
+                            )
                         )
-                    )
+                        is UiState.Error -> ErrorNotice(
+                            detail = count.error.userVisibleDiagnostic(),
+                            onRetry = { countRetry++ },
+                        )
+                        UiState.Loading, UiState.Idle -> CircularProgressIndicator()
+                    }
+                    cleanupFailure?.let { ErrorNotice(detail = it) }
                     Row(
                         modifier = Modifier.horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -338,6 +380,7 @@ private fun FileDirectoryContent(
                         cleanupRanges.forEach { range ->
                             FilterChip(
                                 selected = cleanupRange == range,
+                                enabled = !cleaning,
                                 onClick = { cleanupRange = range },
                                 label = { Text(stringResource(rangeLabel(range))) }
                             )
@@ -347,11 +390,14 @@ private fun FileDirectoryContent(
             },
             confirmButton = {
                 TextButton(
+                    enabled = !cleaning && cleanupCandidateCount is UiState.Success,
                     onClick = {
+                        if (cleanupCandidateCount !is UiState.Success) return@TextButton
                         val confirmedSelection = directory.selection ?: return@TextButton
                         val confirmedCategory = category
                         val confirmedRange = cleanupRange
-                        cleanupCategory = null
+                        cleaning = true
+                        cleanupFailure = null
                         scope.launch {
                             try {
                                 val result = applicationService.cleanup(confirmedSelection, confirmedCategory, confirmedRange)
@@ -368,11 +414,19 @@ private fun FileDirectoryContent(
                                         )
                                     else -> cleanedToast
                                 }
-                                toaster.show(message)
+                                if (result.failed > 0 || result.detail != null) {
+                                    cleanupFailure = listOfNotNull(message, result.detail).joinToString("\n")
+                                } else {
+                                    toaster.show(message)
+                                    cleanupCategory = null
+                                }
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
-                            } catch (_: Exception) {
-                                toaster.show(cleanFailedToast)
+                            } catch (error: Exception) {
+                                logDiagnosticFailure("SettingFilesPage", "File cleanup failed", error)
+                                cleanupFailure = error.userVisibleDiagnostic()
+                            } finally {
+                                cleaning = false
                             }
                         }
                     }
@@ -381,7 +435,7 @@ private fun FileDirectoryContent(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { cleanupCategory = null }) {
+                TextButton(enabled = !cleaning, onClick = { cleanupCategory = null }) {
                     Text(stringResource(R.string.setting_files_page_cancel_action))
                 }
             }
@@ -397,7 +451,6 @@ private fun FileDirectoryContent(
                     IconButton(
                         onClick = {
                             cleanupRange = FileCleanupRange.All
-                            cleanupCandidateCount = 0
                             cleanupCategory = if (isUpload) {
                                 FileCleanupCategory.UPLOAD
                             } else {
@@ -433,6 +486,9 @@ private fun FileDirectoryContent(
                 Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center) {
                     Text(stringResource(R.string.setting_files_page_load_failed))
+                    directory.errorDetail?.let { detail ->
+                        net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
+                    }
                     TextButton(onClick = onRetry) { Text(stringResource(R.string.application_recovery_retry)) }
                 }
                 return@Column
@@ -497,7 +553,7 @@ private fun FileDirectoryContent(
                             items(generatedImages, key = { it.generatedKey().mediaId }) { file ->
                                 GeneratedImageItem(
                                     file = file,
-                                    onDelete = { pendingGeneratedDeleteKey = file.generatedKey() },
+                                    onDelete = { pendingGeneratedDelete = file },
                                     onImageClick = applicationService.imageSource(file.key).let { uri ->
                                         imagePathIndex[uri]?.let { index ->
                                             {
@@ -582,24 +638,28 @@ private fun FileDirectoryContent(
                             if (target == null) {
                                 ImagePreviewDeleteResult.Deleted
                             } else {
-                                when (applicationService.deleteArtifact(target.uploadKey())) {
+                                when (val result = applicationService.deleteArtifact(target.uploadKey())) {
                                     ArtifactDeleteOutcome.Deleted,
                                     ArtifactDeleteOutcome.CleanupPending,
                                     ArtifactDeleteOutcome.AlreadyDeleted -> ImagePreviewDeleteResult.Deleted
                                     ArtifactDeleteOutcome.InProgress ->
                                         ImagePreviewDeleteResult.Failed(deleteInProgressToast)
                                     is ArtifactDeleteOutcome.Failed ->
-                                        ImagePreviewDeleteResult.Failed(deleteFailedToast)
+                                        ImagePreviewDeleteResult.Failed(listOfNotNull(result.reason, result.detail).joinToString("\n"))
                                 }
                             }
                         }
 
                         FileCategory.GENERATED_IMAGES -> {
                             val target = generatedImages.firstOrNull { applicationService.imageSource(it.key) == imageUrl }
-                            if (target == null || applicationService.deleteGenerated(target.generatedKey())) {
+                            if (target == null) {
                                 ImagePreviewDeleteResult.Deleted
                             } else {
-                                ImagePreviewDeleteResult.Failed(deleteFailedToast)
+                                when (val result = applicationService.deleteGeneratedBatch(listOf(target.generatedKey())) {}.single()) {
+                                    is GeneratedImageBatchItemResult.Failed -> ImagePreviewDeleteResult.Failed(result.cause.userVisibleDiagnostic())
+                                    is GeneratedImageBatchItemResult.CleanupPending -> ImagePreviewDeleteResult.Failed(result.cause.userVisibleDiagnostic())
+                                    else -> ImagePreviewDeleteResult.Deleted
+                                }
                             }
                         }
                     }

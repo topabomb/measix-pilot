@@ -20,6 +20,8 @@
 
 `VolcengineTTSProvider` 使用 V3 单向 SSE 和 MP3，资源 ID、音色及服务端语速在播放会话中冻结；每段合成复验原空间准入，仅更新同 endpoint 的凭据。只在明确成功终态且音频非空时交付完整分片；截断、服务错误及本地字节上限均失败，不播放部分结果。调用禁止重试、重定向与认证重放，取消等待正文读取实际退出。解析失败保留原异常类型名称、堆栈和因果诊断，并脱敏已知请求凭据。企业允许使用自有 TTS 时复用这条个人配置链；平台下发协议不增加未经约定的火山映射。
 
+`MiMoTTSProvider` 在 `Call.readResponse` 内按原 SSE framing 同步读取，音频事件不经过有限 callback 队列。只有非空音频与 `[DONE]` 共同确认成功才交付完整 PCM；远端 error、正文截断或缺少终态均失败。取消关闭实际请求并等待正文读取退出。
+
 `selectedTTSProviderId` 选中一个 provider；`defaultTTSPlaybackSpeed` 是播放层公共速度，不是服务端 TTS voice。
 
 `TtsController` 仅预取当前位置之后两段；同 turn 的追加只补足该窗口，不能按上次预取位置继续前推。合成失败保留诊断并继续后续队列项，不自动重试失败分片。远端 TTS 可并发预取；`SystemTTSProvider` 通过单一 `SystemTtsSynthesisCoordinator` 串行访问设备引擎，避免厂商实现同时绑定和合成多个分片。

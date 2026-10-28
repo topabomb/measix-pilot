@@ -309,14 +309,6 @@ private fun MarkdownContent(content: String, modifier: Modifier, style: TextStyl
     }
 }
 
-// for debug
-private fun dumpAst(node: ASTNode, text: String, indent: String = "") {
-    println("$indent${node.type} ${if (node.children.isEmpty()) node.getTextInNode(text) else ""} | ${node.javaClass.simpleName}")
-    node.children.fastForEach {
-        dumpAst(it, text, "$indent  ")
-    }
-}
-
 object HeaderStyle {
     private const val LINE_HEIGHT_RATIO = 1.25f
 
@@ -657,8 +649,7 @@ private fun MarkdownNode(
 
         MarkdownElementTypes.HTML_BLOCK -> {
             val text = node.getTextInNode(content)
-            if (LocalMarkdownHtmlAllowed.current) SimpleHtmlBlock(html = text, modifier = modifier)
-            else Text(text, modifier = modifier)
+            Text(text, modifier = modifier)
         }
 
         // 其他类型的节点，递归处理子节点
@@ -796,7 +787,6 @@ private fun Paragraph(
     onClickCitation: (String) -> Unit = {},
     modifier: Modifier,
 ) {
-    // dumpAst(node, content)
     if (node.findChildOfTypeRecursive(MarkdownElementTypes.IMAGE, GFMElementTypes.BLOCK_MATH) != null) {
         FlowRow(modifier = modifier) {
             node.children.fastForEach { child ->

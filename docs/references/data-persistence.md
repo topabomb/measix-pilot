@@ -40,6 +40,7 @@ Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏根记
 
 `ConversationQueryService` 管选中域订阅，`SelectedRealmPagingSource` 对每次惰性加载重新验证原 Session；
 切域或订阅结束使旧源失效。FTS 在排序和限额前经所属根会话过滤 scope，不能在 UI 拿到跨域结果后再过滤。
+`FileManagementQueryService` 的目录读取失败通过 `FileDirectoryUiModel.errorDetail` 保留脱敏诊断，重新订阅重试原查询；授权失效继续清空目录，取消不转换为失败。
 `MessageFtsManager` 在原会话事务内同时维护 `message_fts` 与 `message_fts_rowid`；后者以会话、节点、消息变体唯一键映射 FTS rowid，节点重建、删除和标题更新先通过普通索引定位 rowid。所有非空文本变体继续参与索引，搜索语义与范围过滤保持不变。新装由数据库创建回调建立 FTS5 表，`Migration_16_17` 显式创建映射并使投影版本失效；启动恢复沿原 `ensureSearchProjection` 重建两表后才开放查询，不在每次打开数据库时补建。备份在全新数据库内仅从保留消息重建这两张派生表，不复制源库映射或全文索引。
 显示排序 `ConversationSortOrder` 默认为更新时间；业务使用的最近会话仍按更新时间读取。查询投影的 `sortTime` 与同次 SQL 排序一致，供日期分组和显示使用，不能用新的偏好重新解释尚未替换的旧页。
 历史页读取本空间全部根会话，侧栏保留助手及文件夹范围；Settings 恢复后缺失助手定义的历史仍可打开。历史可读不授予继续生成资格，不自动补建助手或改写会话归属，用户可通过既有操作显式切换到可用助手。
@@ -60,6 +61,11 @@ Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏根记
 MemoryDAO 的列表、读取、更新、删除均含 scope 和 owner，单行修改还要求 id；列表按 id 升序。工具结果定位仅允许在明确 scope 内按 id 查到 canonical owner，再以完整地址写入，没有跨域裸 ID 删除。旧个人行保留原归属；`MemoryEntity` 的 `(scope, assistant_id)` 联合索引按主体和 namespace 缩小查询范围。
 
 删除用户助手的记忆清理明确限定 Personal。企业记录保留，不因删除共享助手定义而按 assistant ID 跨域清空。
+
+`AssistantManagementService` 的删除 tombstone 只有在停止运行、记忆／会话清理和文件回收完成后才移除；
+启动重试失败通过 `PendingAssistantCleanupException` 保留原异常 cause，恢复页可显示实际存储诊断。
+Workspace 的 PREPARED 删除补偿仍由 `WorkspaceRepository.checkIntegrity` 恢复，取消直接向上传播并保留 journal，
+不能把已取消的恢复当作完成而开放启动门禁。
 
 ### 授权与提交
 
@@ -149,6 +155,8 @@ Master 的 START 使用会话持久 scope 捕获 RealmAccess；Child 继承父�
 相同主键但不同内容、不同文件 owner 的路径冲突、非规范路径或跨域引用均拒绝，不覆盖企业行；同一共享 Artifact 仅在 metadata 与 payload 均相同时合并。物理发布仍使用既有 swap/rollback；重试先恢复原图，再重新读取最新企业状态。
 
 升级时遇到已发布个人版本留下的 prepared 输入，在 publication 副本上走生产 Room migration，保留原输入字节；若旧个人恢复已开始直接交换 pending 文件，先按原交换来源回滚，再进入合并。
+
+Artifact 恢复清理失败保留原异常 cause 和完整堆栈，继续保留生命周期事实以供同入口重试。
 
 CREATING/DELETING（包含 payload 已清除但 metadata 补偿未完成的状态）和图库 `.pending`/`.deleting` receipt 交回原 owner 恢复，不在备份层执行生命周期动作。
 

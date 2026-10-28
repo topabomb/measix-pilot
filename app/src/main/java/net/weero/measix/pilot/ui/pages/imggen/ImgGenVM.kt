@@ -42,6 +42,8 @@ import net.weero.measix.pilot.service.FileManagementApplicationService
 import net.weero.measix.pilot.service.FileManagementQueryService
 import net.weero.measix.pilot.service.GeneratedMediaUiModel
 import net.weero.measix.pilot.service.ManagedFileKey
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -97,7 +99,10 @@ class ImgGenVM internal constructor(
             try {
                 configurationApplicationService.selectResource(selection, net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL, modelId)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { _error.value = error.message ?: "image_model_unavailable" }
+            catch (error: Exception) {
+                logDiagnosticFailure(TAG, "Image model selection failed", error)
+                _error.value = ImageGenerationOutcome.Failure("image_model_unavailable", error.userVisibleDiagnostic())
+            }
         }
     }
 
@@ -118,8 +123,8 @@ class ImgGenVM internal constructor(
     private var cancelJob: Job? = null
     private var generationToken: Any? = null
 
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error
+    private val _error = MutableStateFlow<ImageGenerationOutcome.Failure?>(null)
+    val error: StateFlow<ImageGenerationOutcome.Failure?> = _error
 
     private val _currentGeneratedImages = MutableStateFlow<List<GeneratedImage>>(emptyList())
     val currentGeneratedImages: StateFlow<List<GeneratedImage>> = combine(_currentGeneratedImages, realmSelection) { images, selected ->
@@ -242,14 +247,14 @@ class ImgGenVM internal constructor(
         val references = if (edit) _referenceImages.value.toList() else emptyList()
         if (requestPrompt.isBlank() || (edit && references.isEmpty())) return
         val capabilities = imageCapabilities.value ?: return
-        if (edit && !capabilities.canEdit) { _error.value = "invalid_request"; return }
+        if (edit && !capabilities.canEdit) { _error.value = ImageGenerationOutcome.Failure("invalid_request"); return }
         val catalog = (modelCatalog.value as? net.weero.measix.pilot.service.ModelCatalogReadState.Available)?.catalog ?: return
         val selection = catalog.selection ?: return
         if (references.any { it.selection != selection }) return
         val sourceImages = references.map { it.file.path }
         val chosen = catalog.roleSelections[net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL]
         val model = chosen?.reference?.let(catalog::find)?.model
-        if (chosen?.isAvailable != true || model == null) { _error.value = "image_model_unavailable"; return }
+        if (chosen?.isAvailable != true || model == null) { _error.value = ImageGenerationOutcome.Failure("image_model_unavailable"); return }
         val count = _numberOfImages.value
         val size = _size.value
         val previous = cancelJob
@@ -289,20 +294,20 @@ class ImgGenVM internal constructor(
                 )
                 val outcome = coordinator.enqueue(request)
                 if (isCurrent()) when (outcome) {
-                    is ImageGenerationOutcome.Failure -> _error.value = outcome.reason
+                    is ImageGenerationOutcome.Failure -> _error.value = outcome
                     is ImageGenerationOutcome.Success -> {
                         _currentGeneratedImages.value = outcome.media.map { media -> GeneratedImage(
                             selection, media.mediaId.toInt(), requestPrompt, media.canonicalFile.absolutePath,
                             fileManagementApplicationService.imageSource(ManagedFileKey.Generated(media.mediaId.toInt(), selection), media.canonicalFile.name),
                             System.currentTimeMillis(), model.displayName,
                         ) }
-                        if (outcome.cleanupPending) _error.value = "cleanup_pending"
+                        if (outcome.cleanupPending) _error.value = ImageGenerationOutcome.Failure("cleanup_pending")
                     }
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                Log.e(TAG, "Failed to generate image", error)
-                if (isCurrent()) _error.value = "unknown"
+                logDiagnosticFailure(TAG, "Failed to generate image", error)
+                if (isCurrent()) _error.value = ImageGenerationOutcome.Failure("unknown", error.userVisibleDiagnostic())
             } finally {
                 previewFile?.delete()
                 if (generationToken === token) _isGenerating.value = false
@@ -325,15 +330,6 @@ class ImgGenVM internal constructor(
             selection = selection,
             owner = owner,
         )
-    }
-
-    suspend fun deleteImage(image: GeneratedImage): Boolean = try {
-        fileManagementApplicationService.deleteGenerated(ManagedFileKey.Generated(image.id, image.selection))
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (error: Exception) {
-        Log.e(TAG, "Failed to delete image", error)
-        false
     }
 
     internal suspend fun reconcileGallerySelection(selection: RealmSelection, ids: Set<Int>): Set<Int> {

@@ -240,6 +240,118 @@ class WorkspaceApplicationServiceTest {
         }
     }
 
+    @Test fun `single created document is removed on output failure and a retry can commit`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        val destination = ExportDestination()
+        val document = destination.create("selected.txt")
+        val failure = java.io.IOException("destination write failed", IllegalStateException("storage offline"))
+        coEvery { repository.statFile("id", area, "file") } returns
+            me.rerere.workspace.WorkspaceFileEntry("file", "file", false, 3, 1)
+        coEvery { repository.exportFile("id", area, "file", any()) } coAnswers {
+            arg<java.io.OutputStream>(3).write(1)
+            throw failure
+        }
+        val service = workspaceService(repository, mockk())
+        val actual = runCatching { service.exportFile(WorkspaceExportRequest("id", area, listOf("file")), document, destination) }.exceptionOrNull()
+        assertTrue(generateSequence(actual) { it.cause }.any { it === failure })
+        assertEquals(listOf(document), destination.deleted)
+        assertEquals(1, destination.outputs.single().closes)
+        val retryDocument = destination.create("retry.txt")
+        coEvery { repository.exportFile("id", area, "file", any()) } coAnswers { arg<java.io.OutputStream>(3).write(2) }
+        service.exportFile(WorkspaceExportRequest("id", area, listOf("file")), retryDocument, destination)
+        assertEquals(listOf(document), destination.deleted)
+        assertEquals(1, destination.outputs.last().closes)
+    }
+
+    @Test fun `already cancelled single export still owns and removes the picker document`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val destination = ExportDestination()
+        val document = destination.create("selected.txt")
+        val service = workspaceService(repository, mockk())
+        val cancelled = kotlinx.coroutines.Job().apply { cancel() }
+        val scope = kotlinx.coroutines.CoroutineScope(cancelled)
+        val exporting = scope.async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            service.exportFile(WorkspaceExportRequest("id", me.rerere.workspace.WorkspaceStorageArea.FILES, listOf("file")), document, destination)
+        }
+        exporting.join()
+        assertTrue(exporting.isCancelled)
+        assertEquals(listOf(document), destination.deleted)
+        assertTrue(destination.outputs.isEmpty())
+        coVerify(exactly = 0) { repository.exportFile(any(), any(), any(), any()) }
+    }
+
+    @Test fun `lost picker source removes only its created document without reading a workspace`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val destination = ExportDestination()
+        val document = destination.create("selected.txt")
+        val failure = runCatching { workspaceService(repository, mockk()).exportFile(null, document, destination) }.exceptionOrNull()
+        assertEquals("workspace_export_source_unavailable", failure?.message)
+        assertEquals(listOf(document), destination.deleted)
+        assertTrue(destination.outputs.isEmpty())
+        coVerify(exactly = 0) { repository.statFile(any(), any(), any()) }
+    }
+
+    @Test fun `message file exports keep original workspace and reject its replaced root or revoked view`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val workspaceId = kotlin.uuid.Uuid.random().toString()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        var registered = workspace().copy(id = workspaceId, root = "original-root")
+        coEvery { repository.getById(workspaceId) } coAnswers { registered }
+        coEvery { repository.statFile(workspaceId, area, "same.txt") } returns
+            me.rerere.workspace.WorkspaceFileEntry("same.txt", "same.txt", false, 1, 1)
+        coEvery { repository.exportFile(workspaceId, area, "same.txt", any()) } coAnswers { arg<java.io.OutputStream>(3).write(1) }
+        var allowed = true
+        val original = net.weero.measix.pilot.service.ConversationMessageResourceSource(mockk(),
+            net.weero.measix.pilot.data.model.WorkspaceContextOrigin(workspaceId, "original-root", "/workspace")) {
+            check(allowed) { "original_view_revoked" }
+        }
+        val service = workspaceService(repository, mockk())
+        val destination = ExportDestination()
+        val first = destination.create("same.txt")
+        service.exportMessageFile(original, "/workspace/same.txt", first, destination)
+        service.shareMessageFile(original, "/workspace/same.txt") { assertEquals(listOf<Byte>(1), it.readBytes().toList()) }
+        coVerify(exactly = 2) { repository.exportFile(workspaceId, area, "same.txt", any()) }
+        for (replacement in listOf(false, true)) {
+            allowed = replacement
+            registered = workspace().copy(id = workspaceId, root = if (replacement) "replacement-root" else "original-root")
+            val next = destination.create("same.txt")
+            val expected = if (replacement) "message_workspace_unavailable" else "original_view_revoked"
+            assertEquals(expected, runCatching { service.exportMessageFile(original, "/workspace/same.txt", next, destination) }.exceptionOrNull()?.message)
+            assertEquals(expected, runCatching { service.shareMessageFile(original, "/workspace/same.txt") { error("must not publish") } }.exceptionOrNull()?.message)
+            assertTrue(next in destination.deleted)
+        }
+        coVerify(exactly = 2) { repository.exportFile(any(), any(), any(), any()) }
+    }
+
+    @Test fun `message file revocation during copy removes unfinished export and share`() = runTest {
+        val repository = mockk<WorkspaceRepository>()
+        val workspaceId = kotlin.uuid.Uuid.random().toString()
+        val area = me.rerere.workspace.WorkspaceStorageArea.FILES
+        coEvery { repository.getById(workspaceId) } returns workspace().copy(id = workspaceId)
+        coEvery { repository.statFile(workspaceId, area, "same.txt") } returns
+            me.rerere.workspace.WorkspaceFileEntry("same.txt", "same.txt", false, 1, 1)
+        var allowed = true
+        coEvery { repository.exportFile(workspaceId, area, "same.txt", any()) } coAnswers {
+            arg<java.io.OutputStream>(3).write(1)
+            allowed = false
+        }
+        val original = net.weero.measix.pilot.service.ConversationMessageResourceSource(mockk(),
+            net.weero.measix.pilot.data.model.WorkspaceContextOrigin(workspaceId, "root", "/workspace")) {
+            check(allowed) { "original_view_revoked" }
+        }
+        val service = workspaceService(repository, mockk())
+        val destination = ExportDestination()
+        val document = destination.create("same.txt")
+        assertEquals("original_view_revoked", runCatching { service.exportMessageFile(original, "/workspace/same.txt", document, destination) }.exceptionOrNull()?.message)
+        assertEquals(listOf(document), destination.deleted)
+        allowed = true
+        var delivered = false
+        assertEquals("original_view_revoked", runCatching { service.shareMessageFile(original, "/workspace/same.txt") { delivered = true } }.exceptionOrNull()?.message)
+        assertFalse(delivered)
+        assertTrue(java.io.File(temporary.root, "workspace_share").listFiles().orEmpty().isEmpty())
+    }
+
     private class ExportDestination(private val failCloseIndex: Int = -1, private val failDelete: Boolean = false) : WorkspaceExportDestination {
         val uris = mutableListOf<android.net.Uri>()
         val names = mutableListOf<String>()

@@ -158,6 +158,25 @@ class AssistantManagementServiceTest {
         coVerify(exactly = 0) { env.conversations.deleteOfAssistantFromPendingCleanup(any()) }
     }
 
+    @Test
+    fun `recovery cleanup preserves storage failure cause and retries the tombstone`() = runTest {
+        val id = ConfigurationReference.random()
+        val env = Env(Settings(pendingAssistantDeletions = listOf(PendingAssistantDeletion(id))))
+        coEvery { env.conversations.deleteOfAssistantFromPendingCleanup(id) } throws
+            java.io.IOException("conversation deletion failed", IllegalStateException("disk full"))
+
+        val failure = runCatching { env.service.performPendingDeletionCleanupDuringRecovery() }.exceptionOrNull()
+
+        assertTrue(failure is PendingAssistantCleanupException)
+        assertTrue(failure?.cause is java.io.IOException)
+        assertEquals("conversation deletion failed", failure?.cause?.message)
+        assertEquals("disk full", failure?.cause?.cause?.message)
+        assertEquals(listOf(id), env.settings.value.pendingAssistantDeletions.map { it.assistantId })
+        coEvery { env.conversations.deleteOfAssistantFromPendingCleanup(id) } returns Unit
+        env.service.performPendingDeletionCleanupDuringRecovery()
+        assertTrue(env.settings.value.pendingAssistantDeletions.isEmpty())
+    }
+
     private fun managementCaller(): Assistant = Assistant(
         id = ConfigurationReference.random(),
         name = "Caller",

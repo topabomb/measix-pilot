@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.InputStream
-import java.io.OutputStream
+import android.net.Uri
 import net.weero.measix.pilot.service.workspace.WorkspaceApplicationService
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
 import net.weero.measix.pilot.service.workspace.WorkspaceUiModel
@@ -192,8 +192,8 @@ class WorkspaceDetailVM(
     fun imageSource(entry: WorkspaceFileEntry, area: WorkspaceStorageArea): net.weero.measix.pilot.service.ImageSource =
         workspaceApplicationService.imageSource(id, area, entry)
 
-    suspend fun exportFile(entry: WorkspaceFileEntry, area: WorkspaceStorageArea, outputStream: OutputStream) =
-        workspaceApplicationService.exportFile(id, area, entry.path, outputStream)
+    suspend fun exportFile(request: WorkspaceExportRequest?, document: Uri, destination: WorkspaceExportDestination) =
+        workspaceApplicationService.exportFile(request, document, destination)
 
     /**
      * 把当前区域下的文件导出到 cacheDir 的临时文件, 完成后回调 [onReady].

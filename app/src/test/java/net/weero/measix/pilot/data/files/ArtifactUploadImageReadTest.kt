@@ -247,9 +247,15 @@ class ArtifactUploadImageReadTest {
     fun `payload read failure is explicit and releases pin`() = runBlocking {
         val entity = register("unreadable.png")
         coEvery { payloadStore.readBytes(entity.relativePath, GeneratedMediaStore.MAX_IMAGE_BYTES.toLong()) } throws
-            java.io.IOException("read unavailable")
+            java.io.IOException("read unavailable; token=secret-value", IllegalStateException("disk unavailable"))
 
-        assertFailure(ArtifactImageReadResult.Reason.READ_FAILED, read(listOf("/upload/unreadable.png")))
+        val failure = read(listOf("/upload/unreadable.png")) as ArtifactImageReadResult.Failure
+        assertEquals(ArtifactImageReadResult.Reason.READ_FAILED, failure.reason)
+        assertTrue(failure.detail.orEmpty().contains("IOException"))
+        assertTrue(failure.detail.orEmpty().contains("read unavailable"))
+        assertTrue(failure.detail.orEmpty().contains("IllegalStateException"))
+        assertTrue(failure.detail.orEmpty().contains("disk unavailable"))
+        assertFalse(failure.detail.orEmpty().contains("secret-value"))
         assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
     }
 

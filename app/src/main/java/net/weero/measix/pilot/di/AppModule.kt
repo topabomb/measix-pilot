@@ -266,7 +266,6 @@ val appModule = module {
             runtimeRegistry = get(),
             commandCoordinator = get(),
             toolSetFactory = get(),
-            settingsStore = get(),
             memoryService = get(),
             configurations = get(),
             turnPipelineFactory = get(),

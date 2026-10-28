@@ -21,6 +21,7 @@ import net.weero.measix.pilot.service.webdav.WebDavBackupService
 import net.weero.measix.pilot.service.webdav.WebDavBackupTarget
 import net.weero.measix.pilot.data.sync.S3BackupItem
 import net.weero.measix.pilot.data.sync.S3Sync
+import net.weero.measix.pilot.data.sync.s3.S3Config
 import net.weero.measix.pilot.utils.UiState
 import android.net.Uri
 import java.io.File
@@ -51,6 +52,9 @@ class BackupVM internal constructor(
     internal val webDavTargetIdentity = target.asStateFlow()
     private val retryWebDav = MutableStateFlow(0L)
     private var listJob: Job? = null
+    private var s3ListJob: Job? = null
+    private var s3ListRevision = 0L
+    private var s3ListedConfig: S3Config? = null
 
     init {
         viewModelScope.launch {
@@ -80,7 +84,19 @@ class BackupVM internal constructor(
                     finally { acquired?.let(webDav::closeLater) }
                 }
         }
-        loadS3BackupFileItems()
+        viewModelScope.launch {
+            var initial = true
+            settingsStore.userSettings.map { it.s3Config }.distinctUntilChanged().collect {
+                s3ListJob?.cancel()
+                ++s3ListRevision
+                s3ListedConfig = null
+                s3BackupItems.value = UiState.Idle
+                if (initial) {
+                    initial = false
+                    loadS3BackupFileItems()
+                }
+            }
+        }
     }
 
     fun updateSettings(transform: (Settings) -> Settings) {
@@ -141,20 +157,25 @@ class BackupVM internal constructor(
 
     // S3 Backup methods
     fun loadS3BackupFileItems() {
-        viewModelScope.launch {
+        val config = settingsStore.userSettings.value.s3Config
+        val revision = ++s3ListRevision
+        s3ListJob?.cancel()
+        s3ListedConfig = null
+        s3ListJob = viewModelScope.launch {
             try {
-                s3BackupItems.emit(UiState.Loading)
-                s3BackupItems.emit(
-                    value = UiState.Success(
-                        data = s3Sync.listBackupFiles(
-                            config = settings.value.s3Config
-                        )
-                    )
-                )
+                s3BackupItems.value = UiState.Loading
+                val items = s3Sync.listBackupFiles(config)
+                currentCoroutineContext().ensureActive()
+                if (revision == s3ListRevision && settingsStore.userSettings.value.s3Config == config) {
+                    s3ListedConfig = config
+                    s3BackupItems.value = UiState.Success(items)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                s3BackupItems.emit(UiState.Error(error))
+                if (revision == s3ListRevision && settingsStore.userSettings.value.s3Config == config) {
+                    s3BackupItems.value = UiState.Error(error)
+                }
             }
         }
     }
@@ -169,11 +190,20 @@ class BackupVM internal constructor(
     }
 
     suspend fun restoreFromS3(item: S3BackupItem) {
-        restoreApplicationService.restoreS3(config = settings.value.s3Config, item = item)
+        restoreApplicationService.restoreS3(config = requireS3ItemConfig(item), item = item)
     }
 
     suspend fun deleteS3BackupFile(item: S3BackupItem) {
-        s3Sync.deleteS3BackupFile(settings.value.s3Config, item)
+        s3Sync.deleteS3BackupFile(requireS3ItemConfig(item), item)
+    }
+
+    private fun requireS3ItemConfig(item: S3BackupItem): S3Config {
+        val config = s3ListedConfig
+        val items = (s3BackupItems.value as? UiState.Success)?.data
+        check(config != null && config == settingsStore.userSettings.value.s3Config && items?.any { it === item } == true) {
+            "s3_backup_target_changed"
+        }
+        return config
     }
 
     private suspend fun recordBackupTime() {

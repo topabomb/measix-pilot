@@ -158,6 +158,7 @@ MessageOrigin 和 Omitted。MessagePart 保存最终请求的 part 偏移，附�
 首次渲染时区复用。只读取本次窗口需要的 Artifact。非 disclosure 正文超过 64 KiB 时通过
 `ArtifactStore` 暂存为 immutable text，再随同一事务建立 CONTEXT 引用并发布；失败精确释放未发布资源。
 Artifact identity 与路径必须同时匹配，读取仍需原域授权，路径复用不重绑定旧来源。
+`DocumentAsPromptTransformer` 的 DOCX、PPTX、EPUB 解析错误保留原异常并中止接纳；缺失必需归档条目同样失败，不能把错误说明或部分正文作为文档输入保存。PPTX 按 presentation 的 slide relationship 顺序提取，notes 沿对应 slide 的关系解析，正文只取 body 占位形状，不包含后续页码或页脚；ZIP 排列、文件数字和孤立条目不决定正文顺序，必需关系缺失或指向包外均失败。
 
 时间提醒将消息的首次时间解释与前驱间隔分开：同一真实 USER 身份及 createdAt 使用已保存
 `MessageTime.zoneId`，前驱改变只重算 gap；前驱有首次时区时按它自己的时区转换为 Instant，

@@ -237,6 +237,20 @@ class SettingsStore internal constructor(
         }
     }
 
+    /** Recovery chooses a Personal assistant and forgets its previous chat in the same commit. */
+    internal suspend fun selectPersonalAssistantForRecovery(assistantId: ConfigurationReference) = updateMutex.withLock {
+        commitUserDocument { document ->
+            if (assistantId !is ConfigurationReference.User ||
+                document.personalSettings().withBuiltInDefinitions().assistants.none { it.id == assistantId }) {
+                throw SettingsLockedException("selections/ASSISTANT", "REFERENCE_MISSING")
+            }
+            val scope = ConfigurationScope.Personal
+            val selections = document.preferences.forScope(scope).copy(assistantId = assistantId)
+            document.copy(preferences = document.preferences.withSelections(scope, selections)
+                .withLastConversation(scope, null))
+        }
+    }
+
     /** A completed deletion must not clear a newer conversation remembered in this scope. */
     internal suspend fun forgetConversation(scope: ConfigurationScope, expectedId: kotlin.uuid.Uuid) = updateMutex.withLock {
         commitUserDocument { document ->
@@ -799,10 +813,6 @@ data class BackupReminderConfig(
     val lastBackupTime: Long = 0L,
 )
 
-fun Settings.isNotConfigured() = providers.none { provider ->
-    provider.enabled && provider.models.isNotEmpty()
-}
-
 fun Settings.findModelById(uuid: ConfigurationReference?, fallback: ConfigurationReference? = null): Model? {
     if (uuid == null && fallback == null) return null
     return uuid?.let { this.providers.findModelById(it) }
@@ -841,18 +851,6 @@ fun Settings.getAssistantById(id: ConfigurationReference): Assistant? {
 
 fun Settings.getQuickMessagesOfAssistant(assistant: Assistant) =
     quickMessages.filter { it.id in assistant.quickMessageIds }
-
-fun Settings.getSelectedTTSProvider(): TTSProviderSetting? {
-    return selectedTTSProviderId.let { id ->
-        ttsProviders.find { it.id == id }
-    } ?: ttsProviders.firstOrNull()
-}
-
-fun Settings.getSelectedASRProvider(): ASRProviderSetting? {
-    return selectedASRProviderId?.let { id ->
-        asrProviders.find { it.id == id }
-    } ?: asrProviders.firstOrNull()
-}
 
 fun Model.findProvider(providers: List<ProviderSetting>, checkOverwrite: Boolean = true): ProviderSetting? {
     val provider = findModelProviderFromList(providers.filter { it.enabled }) ?: return null

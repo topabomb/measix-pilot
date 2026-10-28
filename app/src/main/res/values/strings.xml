@@ -383,7 +383,6 @@
   <string name="copy">Copy</string>
   <string name="copy_all">Copy All</string>
   <string name="create_fork">Create a fork</string>
-  <string name="db_migrating">Migrating database...</string>
   <string name="deep_thinking">Deep Thinking</string>
   <string name="deep_thinking_seconds">Thought for %1$.1f seconds</string>
   <string name="delete">Delete</string>

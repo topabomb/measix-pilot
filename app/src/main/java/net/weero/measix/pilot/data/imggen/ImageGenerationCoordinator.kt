@@ -24,6 +24,8 @@ import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.ImageEditParams
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.ui.ImageGenerationItem
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import me.rerere.ai.util.classifyProviderFailure
 
 internal sealed interface ImageGenerationSource {
@@ -232,8 +234,8 @@ internal class ImageGenerationCoordinator(
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
-            Log.e(TAG, "image persistence failed", error)
-            return ImageGenerationOutcome.Failure("persistence_error")
+            logDiagnosticFailure(TAG, "image persistence failed", error)
+            return ImageGenerationOutcome.Failure("persistence_error", error.userVisibleDiagnostic())
         }
         return ImageGenerationOutcome.Success(committed)
     }

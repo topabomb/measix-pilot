@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import net.weero.measix.pilot.ui.components.toast.rememberToasterState
+import io.mockk.coVerify
 import io.mockk.coEvery
 import io.mockk.mockk
 import java.util.concurrent.CopyOnWriteArrayList
@@ -170,7 +171,72 @@ class RichTextHostAndroidTest {
         assertSame(RenderedContentSource.UserConfiguration, received[2]?.source)
     }
 
-    @Test fun bothMarkdownEnginesAndHtmlLinksUseTheOriginalHostAction() {
+    @Test fun messageFileActionsKeepHistoricalWorkspaceWhenTheCurrentAssistantUsesAnotherWorkspace() {
+        val view = ConversationViewLease(kotlin.uuid.Uuid.random(), net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0L) {}
+        val workspaceA = kotlin.uuid.Uuid.random()
+        val assistantB = net.weero.measix.pilot.data.model.Assistant(workspaceId = kotlin.uuid.Uuid.random())
+        val originalSource = ConversationMessageResourceSource(view,
+            net.weero.measix.pilot.data.model.WorkspaceContextOrigin(workspaceA.toString(), "original-root", "/workspace")) {}
+        val tool = me.rerere.ai.ui.UIMessagePart.Tool(
+            localCallId = kotlin.uuid.Uuid.random(), stepId = kotlin.uuid.Uuid.random(), providerCallId = "write-original",
+            toolName = "workspace_write_file", input = "{}",
+            output = listOf(me.rerere.ai.ui.UIMessagePart.Text(
+                """{"path":"/workspace/source.txt","sizeBytes":4,"updatedAt":0,"isDirectory":false}""")),
+            resultStatus = me.rerere.ai.ui.ToolResultStatus.COMPLETED,
+        )
+        val message = me.rerere.ai.ui.UIMessage.assistant("Saved original file").copy(parts = listOf(tool))
+        val query = mockk<ConversationQueryService>()
+        val workspace = mockk<net.weero.measix.pilot.service.workspace.WorkspaceApplicationService>()
+        coEvery { query.messageResourceSource(view, view.conversationId, message.id) } returns originalSource
+        coEvery { workspace.shareMessageFile(any(), any(), any()) } returns Unit
+        coEvery { workspace.exportMessageFile(any(), any(), any(), any()) } returns mockk()
+        val isolated = org.koin.dsl.koinApplication { modules(org.koin.dsl.module {
+            single { query }
+            single { workspace }
+            single { mockk<FileManagementApplicationService>(relaxed = true) }
+            single { mockk<MediaExportService>() }
+        }) }
+        var requestCode: Int? = null
+        val registry = object : ActivityResultRegistry() {
+            override fun <I, O> onLaunch(code: Int, contract: ActivityResultContract<I, O>, input: I, options: ActivityOptionsCompat?) {
+                assertEquals(Intent.ACTION_CREATE_DOCUMENT, contract.createIntent(compose.activity, input).action)
+                requestCode = code
+            }
+        }
+        val registryOwner = object : ActivityResultRegistryOwner { override val activityResultRegistry = registry }
+        try {
+            compose.setContent {
+                org.koin.compose.KoinIsolatedContext(isolated) {
+                    MaterialTheme { CompositionLocalProvider(
+                        LocalActivityResultRegistryOwner provides registryOwner,
+                        net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo provides net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo(),
+                        LocalSettings provides Settings.dummy(), LocalDarkMode provides false,
+                        LocalNavController provides Navigator(remember { mutableStateListOf<NavKey>() }),
+                        LocalToaster provides rememberToasterState(),
+                    ) {
+                        net.weero.measix.pilot.ui.components.message.ChatMessage(
+                            node = net.weero.measix.pilot.data.model.MessageNode.of(message), detailSource = view,
+                            assistant = assistantB, readOnly = true,
+                            onFork = {}, onRegenerate = {}, onEdit = {}, onShare = {}, onDelete = {}, onUpdate = {},
+                        )
+                    } }
+                }
+            }
+            compose.onNodeWithText("source.txt").performClick()
+            compose.onNodeWithText(compose.activity.getString(R.string.common_share)).performClick()
+            coVerify(exactly = 1) { workspace.shareMessageFile(originalSource, "/workspace/source.txt", any()) }
+            compose.onNodeWithText("source.txt").performClick()
+            compose.onNodeWithText(compose.activity.getString(R.string.common_export)).performClick()
+            val document = Uri.parse("content://documents/original-message")
+            compose.runOnIdle { registry.dispatchResult(requireNotNull(requestCode), Activity.RESULT_OK, Intent().setData(document)) }
+            compose.waitForIdle()
+            coVerify(exactly = 1) { workspace.exportMessageFile(originalSource, "/workspace/source.txt", document, any()) }
+            assertNotEquals(workspaceA, assistantB.workspaceId)
+            assertFalse(view.closed.value)
+        } finally { view.close(); isolated.close() }
+    }
+
+    @Test fun markdownAndHtmlBlockAndInlineLinksUseTheOriginalHostAction() {
         val files = mockk<FileManagementApplicationService>(relaxed = true)
         val exports = mockk<MediaExportService>()
         val received = CopyOnWriteArrayList<Pair<RenderedContentSource, String>>()
@@ -186,8 +252,8 @@ class RichTextHostAndroidTest {
                     RichTextHost(RenderedContentSource.UserConfiguration, files = files, exports = exports) {
                         when (mode.intValue) {
                             0 -> MarkdownBlock("[Owned link](/upload/one.pdf)")
-                            1 -> MarkdownNew("<p><a href='/upload/two.pdf'>Owned link</a></p>")
-                            else -> SimpleHtmlBlock("<p><a href='/upload/three.pdf'>Owned link</a></p>")
+                            1 -> MarkdownBlock("<p><a href='/upload/two.pdf'>Owned link</a></p>")
+                            else -> MarkdownBlock("Text <a href='/upload/three.pdf'>Owned link</a>")
                         }
                     }
                 }
@@ -195,10 +261,10 @@ class RichTextHostAndroidTest {
         }
         for (index in 0..2) {
             compose.runOnIdle { mode.intValue = index }
-            val node = compose.onNodeWithText("Owned link")
+            val node = compose.onNodeWithText("Owned link", substring = true)
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
             node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
-            node.performTouchInput { click(layouts.single().getBoundingBox(0).center) }
+            node.performTouchInput { click(layouts.single().getBoundingBox(layouts.single().layoutInput.text.text.indexOf("Owned link")).center) }
             try { compose.waitUntil(5_000) { received.size == index + 1 } }
             catch (error: AssertionError) { throw AssertionError("Link renderer $index did not invoke its host", error) }
         }

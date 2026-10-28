@@ -201,13 +201,12 @@ class GenerationSideEffects internal constructor(
 
     private suspend fun runBackgroundGeneration(
         captured: CapturedModelConfiguration,
-        role: ModelSelectionRole,
         prompt: String,
         conversationId: Uuid,
     ): String? {
         val result = captured.model.requests.execute { target ->
             target.generateText(providerManager, listOf(ModelRequestMessage.user(prompt)),
-                backgroundTextGenerationParams(captured.model.model, conversationId = conversationId), role)
+                backgroundTextGenerationParams(captured.model.model, conversationId = conversationId))
         }
         return result.choices.getOrNull(0)?.message?.toText()
     }
@@ -258,7 +257,6 @@ class GenerationSideEffects internal constructor(
 
             val generatedTitle = runBackgroundGeneration(
                 captured = captured,
-                role = ModelSelectionRole.TITLE,
                 conversationId = snapshot.conversationId,
                 prompt = settings.titlePrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
@@ -321,7 +319,6 @@ class GenerationSideEffects internal constructor(
 
             val generated = runBackgroundGeneration(
                 captured = captured,
-                role = ModelSelectionRole.SUGGESTION,
                 conversationId = snapshot.conversationId,
                 prompt = settings.suggestionPrompt.applyPlaceholders(
                     "locale" to Locale.getDefault().displayName,
@@ -422,8 +419,7 @@ class GenerationSideEffects internal constructor(
 
             val result = captured.model.requests.execute { target ->
                 target.generateText(providerManager, listOf(ModelRequestMessage.user(prompt)),
-                    backgroundTextGenerationParams(captured.model.model, conversationId = snapshot.conversationId),
-                    ModelSelectionRole.COMPRESS)
+                    backgroundTextGenerationParams(captured.model.model, conversationId = snapshot.conversationId))
             }
             return historySummaryText(result)
         }

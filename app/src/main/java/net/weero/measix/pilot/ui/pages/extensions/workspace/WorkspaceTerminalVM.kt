@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.ui.pages.extensions.workspace
 
-import android.util.Log
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -40,9 +41,9 @@ class WorkspaceTerminalVM(
                 current.terminal.lastFailure?.let { failure ->
                     if (failure.id != observedFailureId) {
                         observedFailureId = failure.id
-                        mutableCommandError.value = when (val reason = failure.reason) {
+                        mutableCommandError.value = when (failure.reason) {
                             WorkspaceTerminalFailureReason.NotReady -> WorkspaceTerminalCommandError.NotReady
-                            WorkspaceTerminalFailureReason.Unexpected -> WorkspaceTerminalCommandError.Unexpected
+                            WorkspaceTerminalFailureReason.Unexpected -> WorkspaceTerminalCommandError.Unexpected(failure.detail)
                         }
                     }
                 }
@@ -90,8 +91,8 @@ class WorkspaceTerminalVM(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                Log.w(TAG, "Terminal command failed for workspace=$workspaceId", error)
-                if (state.value.selection == selection) mutableCommandError.value = WorkspaceTerminalCommandError.Unexpected
+                logDiagnosticFailure(TAG, "Terminal command failed for workspace=$workspaceId", error)
+                if (state.value.selection == selection) mutableCommandError.value = WorkspaceTerminalCommandError.Unexpected(error.userVisibleDiagnostic())
             }
         }
     }
@@ -113,8 +114,8 @@ class WorkspaceTerminalVM(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            Log.w(TAG, "Terminal creation failed for workspace=$workspaceId", error)
-            if (state.value.selection == selection) mutableCommandError.value = WorkspaceTerminalCommandError.Unexpected
+            logDiagnosticFailure(TAG, "Terminal creation failed for workspace=$workspaceId", error)
+            if (state.value.selection == selection) mutableCommandError.value = WorkspaceTerminalCommandError.Unexpected(error.userVisibleDiagnostic())
         }
     }
 
@@ -126,5 +127,5 @@ class WorkspaceTerminalVM(
 sealed interface WorkspaceTerminalCommandError {
     data class LimitReached(val maximum: Int) : WorkspaceTerminalCommandError
     data object NotReady : WorkspaceTerminalCommandError
-    data object Unexpected : WorkspaceTerminalCommandError
+    data class Unexpected(val detail: String? = null) : WorkspaceTerminalCommandError
 }

@@ -67,6 +67,7 @@ class HistoryPageAndroidTest {
         coEvery { application.restore(token) } coAnswers { rows.value = Result.success(listOf(first, second)) }
         val isolated = koinApplication { modules(module {
             single { query }
+            single { configuration }
             single { application }
         }) }
         val store = ViewModelStore()

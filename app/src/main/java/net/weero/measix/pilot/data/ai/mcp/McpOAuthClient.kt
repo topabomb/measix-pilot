@@ -373,7 +373,7 @@ class McpOAuthClient(
 
     private fun wellKnownPrmUrls(serverUrl: String): List<String> {
         val url = serverUrl.toHttpUrlOrNull() ?: return emptyList()
-        val origin = "${url.scheme}://${url.host}${portSuffix(url)}"
+        val origin = url.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().removeSuffix("/")
         val path = url.encodedPath.trimEnd('/')
         return buildList {
             if (path.isNotEmpty() && path != "/") {
@@ -385,7 +385,7 @@ class McpOAuthClient(
 
     private fun wellKnownAsUrls(issuer: String): List<String> {
         val url = issuer.toHttpUrlOrNull() ?: return emptyList()
-        val origin = "${url.scheme}://${url.host}${portSuffix(url)}"
+        val origin = url.newBuilder().encodedPath("/").query(null).fragment(null).build().toString().removeSuffix("/")
         val path = url.encodedPath.trimEnd('/')
         return buildList {
             if (path.isNotEmpty() && path != "/") {
@@ -396,11 +396,6 @@ class McpOAuthClient(
             add("$origin/.well-known/oauth-authorization-server")
             add("$origin/.well-known/openid-configuration")
         }.distinct()
-    }
-
-    private fun portSuffix(url: HttpUrl): String {
-        val defaultPort = HttpUrl.defaultPort(url.scheme)
-        return if (url.port == defaultPort) "" else ":${url.port}"
     }
 
     private suspend inline fun <reified T> getMetadata(url: String): T? {

@@ -9,8 +9,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import me.rerere.common.http.SseEvent
-import me.rerere.common.http.sseFlow
+import me.rerere.common.http.readResponse
+import okhttp3.sse.internal.ServerSentEventReader
+import okio.BufferedSource
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
@@ -31,7 +34,8 @@ private val mimoJson = Json { ignoreUnknownKeys = true }
 
 @Serializable
 private data class MiMoChunk(
-    val choices: List<MiMoChoice> = emptyList()
+    val choices: List<MiMoChoice> = emptyList(),
+    val error: JsonElement? = null,
 )
 
 @Serializable
@@ -55,57 +59,30 @@ internal fun decodeMiMoAudioData(data: String): ByteArray? {
     if (payload == "[DONE]") return null
     // 非 [DONE] 的 data 视为 JSON 片段 解析失败直接上抛
     val chunk = mimoJson.decodeFromString<MiMoChunk>(payload)
+    if (chunk.error != null) throw IOException("MiMo TTS service error: ${chunk.error}")
     val encoded = chunk.choices.firstOrNull()?.delta?.audio?.data ?: return null
     // 空字符串视为无音频片段
     if (encoded.isBlank()) return null
     return Base64.getDecoder().decode(encoded)
 }
 
-internal class MiMoSseProcessor(
-    private val model: String,
-    private val voice: String
-) {
-    private var hasAudio = false
-    // metadata 只构造一次 贯穿整个流
-    private val metadata = mapOf(
-        "provider" to "mimo",
-        "model" to model,
-        "voice" to voice
-    )
-
-    fun process(event: SseEvent): AudioChunk? {
-        return when (event) {
-            is SseEvent.Open -> null
-            is SseEvent.Event -> {
-                // 只处理包含 audio.data 的增量事件 其他事件忽略
-                val pcmData = decodeMiMoAudioData(event.data) ?: return null
-                hasAudio = true
-                AudioChunk(
-                    data = pcmData,
-                    format = AudioFormat.PCM,
-                    sampleRate = MIMO_SAMPLE_RATE,
-                    metadata = metadata
-                )
-            }
-
-            is SseEvent.Closed -> {
-                // 如果整段流没有任何音频片段 直接报错
-                if (!hasAudio) {
-                    throw IllegalStateException("MiMo TTS returned no audio chunks")
-                }
-                // 流关闭时补一个终结 chunk 便于播放器收尾
-                AudioChunk(
-                    data = byteArrayOf(),
-                    format = AudioFormat.PCM,
-                    sampleRate = MIMO_SAMPLE_RATE,
-                    isLast = true,
-                    metadata = metadata
-                )
-            }
-
-            is SseEvent.Failure -> throw event.throwable ?: Exception("MiMo TTS streaming failed")
+/** Read in the response owner, preserving SSE framing without a lossy callback queue. */
+internal fun readMiMoAudio(source: BufferedSource): ByteArray {
+    val audio = ByteArrayOutputStream()
+    var completed = false
+    val reader = ServerSentEventReader(source, object : ServerSentEventReader.Callback {
+        override fun onEvent(id: String?, type: String?, data: String) {
+            if (type == "error") throw IOException("MiMo TTS service error: $data")
+            if (data.trim() == "[DONE]") completed = true
+            else decodeMiMoAudioData(data)?.let { audio.write(it) }
         }
-    }
+
+        override fun onRetryChange(timeMs: Long) = Unit
+    })
+    while (!completed && reader.processNextEvent()) { }
+    check(completed) { "MiMo TTS stream closed before [DONE]" }
+    check(audio.size() > 0) { "MiMo TTS returned no audio chunks" }
+    return audio.toByteArray()
 }
 
 /**
@@ -150,8 +127,8 @@ internal fun buildMiMoRequestBody(
     put("stream", true)
 }
 
-class MiMoTTSProvider : TTSProvider<TTSProviderSetting.MiMo> {
-    private val httpClient = OkHttpClient.Builder()
+class MiMoTTSProvider(client: OkHttpClient = OkHttpClient()) : TTSProvider<TTSProviderSetting.MiMo> {
+    private val httpClient = client.newBuilder()
         .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
@@ -191,22 +168,29 @@ class MiMoTTSProvider : TTSProvider<TTSProviderSetting.MiMo> {
 
         // baseUrl 允许用户在设置页自定义 这里直接拼接路径
         val body = requestBody.toString().toRequestBody(JSON_MEDIA_TYPE)
-        val httpRequest = request.transport?.request(body) ?: Request.Builder()
+        val httpRequest = (request.transport?.request(body) ?: Request.Builder()
             .url("${providerSetting.baseUrl}/chat/completions")
             // MiMo 使用 api-key 头传 token
             .addHeader("api-key", providerSetting.apiKey)
             .addHeader("Content-Type", "application/json")
             // JsonObject 的 toString 会输出 JSON 字符串
             .post(body)
-            .build()
+            .build()).newBuilder().header("Accept", "text/event-stream").build()
 
-        val processor = MiMoSseProcessor(
-            model = providerSetting.model,
-            voice = providerSetting.voice
-        )
-
-        (request.transport?.client ?: httpClient).sseFlow(httpRequest).collect { event ->
-            processor.process(event)?.let { emit(it) }
+        val bytes = (request.transport?.client ?: httpClient).newCall(httpRequest).readResponse { response ->
+            if (!response.isSuccessful) throw IOException("MiMo TTS HTTP ${response.code}: ${response.body.string()}")
+            val contentType = response.body.contentType()
+            check(contentType?.type == "text" && contentType.subtype == "event-stream") {
+                "Invalid MiMo TTS content-type: $contentType"
+            }
+            readMiMoAudio(response.body.source())
         }
+        emit(AudioChunk(
+            data = bytes,
+            format = AudioFormat.PCM,
+            sampleRate = MIMO_SAMPLE_RATE,
+            isLast = true,
+            metadata = mapOf("provider" to "mimo", "model" to providerSetting.model, "voice" to providerSetting.voice),
+        ))
     }
 }

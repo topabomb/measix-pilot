@@ -3,6 +3,7 @@ package net.weero.measix.pilot.ui.pages.setting
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.components.ui.ErrorCard
 import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
+import net.weero.measix.pilot.ui.components.ui.ErrorNotice
 import net.weero.measix.pilot.utils.logDiagnosticFailure
 import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
 import net.weero.measix.pilot.ui.components.ui.ItemAction
@@ -654,6 +655,25 @@ private fun McpServerItem(
     val status = presentation?.status ?: McpStatus.Idle
     var showDeleteDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    var oauthFailure by remember(item.id) { mutableStateOf<String?>(null) }
+    var updatingOAuth by remember(item.id) { mutableStateOf(false) }
+    fun updateOAuth(command: suspend () -> Unit) {
+        if (updatingOAuth) return
+        updatingOAuth = true
+        oauthFailure = null
+        scope.launch {
+            try {
+                command()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                logDiagnosticFailure("SettingMcpPage", "MCP OAuth settings update failed", error)
+                oauthFailure = error.userVisibleDiagnostic()
+            } finally {
+                updatingOAuth = false
+            }
+        }
+    }
     Card(
         onClick = { onEdit(item) },
         modifier = modifier,
@@ -718,6 +738,7 @@ private fun McpServerItem(
                     }
                 }
 
+                oauthFailure?.let { ErrorNotice(detail = it, onDismiss = { oauthFailure = null }) }
                 val summary = when {
                     !item.commonOptions.enable -> stringResource(R.string.configuration_reason_disabled)
                     presentation?.unavailableReason != null -> configurationUnavailableText(presentation.unavailableReason)
@@ -827,12 +848,15 @@ private fun McpServerItem(
                             singleLine = true,
                         )
                         Button(
+                            enabled = !updatingOAuth,
                             onClick = {
-                                scope.launch {
+                                val originalClientId = clientIdText.trim()
+                                val originalClientSecret = clientSecretText.trim().ifBlank { null }
+                                updateOAuth {
                                     mcpApplicationService.setOAuthClientCredentials(
                                         item.id,
-                                        clientIdText.trim(),
-                                        clientSecretText.trim().ifBlank { null },
+                                        originalClientId,
+                                        originalClientSecret,
                                     )
                                     mcpApplicationService.authorize(item.id, context)
                                 }
@@ -860,7 +884,8 @@ private fun McpServerItem(
                     status != McpStatus.Authorizing &&
                     item.commonOptions.oauth?.isAuthorized == true) {
                     TextButton(
-                        onClick = { scope.launch { mcpApplicationService.clearAuthorization(item.id) } },
+                        enabled = !updatingOAuth,
+                        onClick = { updateOAuth { mcpApplicationService.clearAuthorization(item.id) } },
                         contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
                     ) {
                         Icon(

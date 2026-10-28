@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.data.export
+package net.weero.measix.pilot.data.export
 
 import android.content.Context
 import android.content.Intent
@@ -28,6 +28,7 @@ class ExporterState<T>(
     private val context: Context,
     private val scope: CoroutineScope,
     private val createDocumentLauncher: ManagedActivityResultLauncher<String, Uri?>,
+    private val onExportRequested: (ExporterState<T>) -> Unit = {},
 ) {
     val value: String
         get() = serializer.exportToJson(data)
@@ -36,6 +37,7 @@ class ExporterState<T>(
         get() = serializer.getExportFileName(data)
 
     fun exportToFile(fileName: String = this.fileName) {
+        onExportRequested(this)
         createDocumentLauncher.launch(fileName)
     }
 
@@ -43,8 +45,13 @@ class ExporterState<T>(
         scope.launch {
             val file = withContext(Dispatchers.IO) {
                 val cacheDir = File(context.cacheDir, "export")
-                cacheDir.mkdirs()
-                val file = File(cacheDir, fileName)
+                check(cacheDir.isDirectory || cacheDir.mkdirs()) { "Export cache directory is unavailable: $cacheDir" }
+                // Shared URIs retain their original payload when another export uses the same display name.
+                val directory = kotlin.io.path.createTempDirectory(cacheDir.toPath(), "share-").toFile()
+                val safeName = fileName.replace('\\', '/').substringAfterLast('/')
+                    .replace(Regex("[\\p{Cntrl}:*?\"<>|]"), "_").take(80)
+                    .takeUnless { it.isBlank() || it == "." || it == ".." } ?: "export.json"
+                val file = File(directory, safeName)
                 file.writeText(value)
                 file
             }
@@ -84,7 +91,9 @@ fun <T> rememberExporter(
     val createDocumentLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
-        uri?.let { pendingState?.writeToUri(it) }
+        val requested = pendingState
+        pendingState = null
+        uri?.let { requested?.writeToUri(it) }
     }
 
     val state = remember(data, serializer) {
@@ -94,7 +103,8 @@ fun <T> rememberExporter(
             context = context,
             scope = scope,
             createDocumentLauncher = createDocumentLauncher,
-        ).also { pendingState = it }
+            onExportRequested = { pendingState = it },
+        )
     }
 
     return state

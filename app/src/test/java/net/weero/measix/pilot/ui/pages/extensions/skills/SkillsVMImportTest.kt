@@ -28,7 +28,6 @@ import kotlinx.coroutines.joinAll
 import net.weero.measix.pilot.data.files.SkillFileSaveResult
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.files.SkillBundleImportResult
-import net.weero.measix.pilot.data.files.SkillMetadata
 import net.weero.measix.pilot.data.files.SkillFrontmatterParser
 import net.weero.measix.pilot.data.files.SkillParseResult
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
@@ -361,8 +360,6 @@ class SkillsVMImportTest {
         every { resolver.openInputStream(uri) } returns ByteArrayInputStream(bytes)
         return context to uri
     }
-
-    private fun metadata(name: String) = SkillMetadata(name = name, description = "typed")
 
     private fun zip(vararg files: Pair<String, ByteArray>): ByteArray = ByteArrayOutputStream().use { output ->
         ZipOutputStream(output).use { zip ->

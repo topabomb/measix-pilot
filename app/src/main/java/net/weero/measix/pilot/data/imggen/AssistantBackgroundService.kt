@@ -18,12 +18,15 @@ import net.weero.measix.pilot.data.db.entity.ArtifactOrigin
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.requireDiscarded
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 data class BackgroundUpdateResult(
     val requested: Boolean,
     val updated: Boolean,
     val reason: String? = null,
     val cleanupPending: Boolean = false,
+    val detail: String? = null,
 )
 
 internal sealed interface AssistantBackgroundTarget {
@@ -84,8 +87,8 @@ internal class AssistantBackgroundService(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            Log.e(TAG, "failed to read background", error)
-            null
+            logDiagnosticFailure(TAG, "failed to read background", error)
+            return BackgroundUpdateResult(true, false, "background_copy_failed", detail = error.userVisibleDiagnostic())
         } ?: return BackgroundUpdateResult(true, false, "background_copy_failed")
         var copy: OwnedArtifact? = null
         try {
@@ -107,11 +110,12 @@ internal class AssistantBackgroundService(
             }
             throw cancelled
         } catch (error: Exception) {
-            Log.e(TAG, "failed to write background settings", error)
             val cleanupFailure = withContext(NonCancellable) {
                 copy?.let { discardUncommittedBackgroundCopy(it, it.uri.toString()) }
             }
-            return BackgroundUpdateResult(true, false, "settings_write_failed", cleanupFailure != null)
+            if (cleanupFailure != null && cleanupFailure !== error) error.addSuppressed(cleanupFailure)
+            logDiagnosticFailure(TAG, "failed to write background settings", error)
+            return BackgroundUpdateResult(true, false, "settings_write_failed", cleanupFailure != null, error.userVisibleDiagnostic())
         }
         val cleanupPending = try {
             artifactStore.collectGarbage(protectionWindowMillis = 0)

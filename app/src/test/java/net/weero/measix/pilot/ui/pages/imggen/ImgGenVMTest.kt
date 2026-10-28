@@ -45,6 +45,51 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class ImgGenVMTest {
     @Test
+    fun `generation failure preserves owner diagnostic and unexpected cause for the page`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val owner = ViewModelStore()
+        try {
+            val selected = RealmSelection(RealmAccess.Personal, 0)
+            val model = Model(modelId = "image", type = me.rerere.ai.provider.ModelType.IMAGE)
+            val settings = mockk<SettingsStore>()
+            every { settings.userSettings } returns MutableStateFlow(Settings())
+            val catalog = net.weero.measix.pilot.service.userDefinitionModelCatalog(
+                listOf(ProviderSetting.OpenAI(models = listOf(model))),
+            ).copy(selection = selected, roleSelections = mapOf(
+                net.weero.measix.pilot.data.configuration.ResourceSelectionSlot.IMAGE_MODEL to
+                    net.weero.measix.pilot.data.configuration.ConfigurationSelection(model.id, null),
+            ))
+            val configuration = mockk<ConfigurationQueryService>()
+            every { configuration.observeModelCatalog() } returns flowOf(ModelCatalogReadState.Available(catalog))
+            coEvery { configuration.requireSelection(selected) } returns Unit
+            val files = mockk<FileManagementQueryService>()
+            every { files.observeSelection() } returns MutableStateFlow(selected)
+            every { files.observeGeneratedPaging() } returns flowOf(PagingData.empty())
+            val coordinator = mockk<ImageGenerationCoordinator>()
+            coEvery { coordinator.enqueue(any()) } returns ImageGenerationOutcome.Failure(
+                reason = "persistence_error", detail = "IOException: media journal is read only",
+            )
+            val vm = ImgGenVM(ApplicationProvider.getApplicationContext<Application>(), settings,
+                coordinator, files, mockk(), configuration, mockk())
+            owner.put("diagnostic", vm)
+            runCurrent()
+            vm.updatePrompt("image")
+            vm.generateImage()
+            runCurrent()
+            org.junit.Assert.assertTrue(vm.error.value.toString().contains("media journal is read only"))
+            vm.clearError()
+            org.junit.Assert.assertNull(vm.error.value)
+            coEvery { coordinator.enqueue(any()) } throws IllegalStateException(
+                "preview failed", java.io.IOException("payload directory unavailable"),
+            )
+            vm.generateImage()
+            runCurrent()
+            org.junit.Assert.assertTrue(vm.error.value.toString().contains("IllegalStateException"))
+            org.junit.Assert.assertTrue(vm.error.value.toString().contains("payload directory unavailable"))
+        } finally { owner.clear(); runCurrent(); Dispatchers.resetMain() }
+    }
+
+    @Test
     fun `gallery export forwards the page context instead of the application`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val owner = ViewModelStore()

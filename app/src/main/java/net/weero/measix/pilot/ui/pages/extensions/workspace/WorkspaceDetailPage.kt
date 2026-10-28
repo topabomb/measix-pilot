@@ -83,11 +83,9 @@ import androidx.lifecycle.Lifecycle
 import java.io.File
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import net.weero.measix.pilot.service.workspace.WorkspaceExportRequest
 import net.weero.measix.pilot.service.workspace.WorkspaceExportItem
-import net.weero.measix.pilot.service.workspace.WorkspaceDocumentTreeDestination
+import net.weero.measix.pilot.service.workspace.WorkspaceDocumentDestination
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowTurnBackward
@@ -177,15 +175,13 @@ fun WorkspaceDetailPage(id: String) {
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("*/*"),
     ) { uri ->
-        val (area, entry) = exportTarget.also { exportTarget = null } ?: return@rememberLauncherForActivityResult
+        val request = exportTarget.also { exportTarget = null }?.let { (area, entry) ->
+            WorkspaceExportRequest(id, area, listOf(entry.path))
+        }
         if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) {
             try {
-                withContext(Dispatchers.IO) {
-                    val output = context.contentResolver.openOutputStream(uri)
-                        ?: throw java.io.IOException("Document provider did not open output: $uri")
-                    output.use { vm.exportFile(entry, area, it) }
-                }
+                vm.exportFile(request, uri, WorkspaceDocumentDestination(context.contentResolver))
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { vm.reportExportFailure(error) }
         }
@@ -194,7 +190,7 @@ fun WorkspaceDetailPage(id: String) {
         val request = pendingBatch.also { pendingBatch = null } ?: return@rememberLauncherForActivityResult
         if (uri != null) {
             selectedFiles = emptySet()
-            try { vm.exportFiles(request, WorkspaceDocumentTreeDestination(context.contentResolver, uri)) }
+            try { vm.exportFiles(request, WorkspaceDocumentDestination(context.contentResolver, uri)) }
             catch (error: Exception) { vm.reportExportFailure(error) }
         }
     }

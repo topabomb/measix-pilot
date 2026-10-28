@@ -1,6 +1,5 @@
 package net.weero.measix.pilot.service
 
-import android.util.Log
 import androidx.core.net.toUri
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -27,6 +26,8 @@ import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.FileFolders
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 /** A UI command retains both its typed identity and the selection that displayed it. */
 sealed interface ManagedFileKey {
@@ -53,8 +54,10 @@ data class FileDirectoryUiModel(
     val selection: RealmSelection?,
     val uploads: List<ManagedFileUiModel> = emptyList(),
     val generated: List<ManagedFileUiModel> = emptyList(),
-    val failed: Boolean = false,
-)
+    val errorDetail: String? = null,
+) {
+    val failed: Boolean get() = errorDetail != null
+}
 
 data class GeneratedMediaUiModel(
     val key: ManagedFileKey.Generated,
@@ -90,8 +93,8 @@ class FileManagementQueryService internal constructor(
             }
         }.onStart { emit(empty) }.catch { error ->
             if (error is CancellationException) throw error
-            Log.w("FileManagementQuery", "File directory unavailable", error)
-            emit(if (error is EnterpriseConfigurationException) empty else empty.copy(failed = true))
+            logDiagnosticFailure("FileManagementQuery", "File directory unavailable", error)
+            emit(if (error is EnterpriseConfigurationException) empty else empty.copy(errorDetail = error.userVisibleDiagnostic()))
         }
     }
 

@@ -50,14 +50,6 @@ data class Conversation(
             return messageNodes.map { node -> node.messages[node.selectIndex] }
         }
 
-    fun getMessageNodeByMessage(message: UIMessage): MessageNode? {
-        return messageNodes.firstOrNull { node -> node.messages.contains(message) }
-    }
-
-    fun getMessageNodeByMessageId(messageId: Uuid): MessageNode? {
-        return messageNodes.firstOrNull { node -> node.messages.any { it.id == messageId } }
-    }
-
     fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
         val newNodes = this.messageNodes.toMutableList()
 

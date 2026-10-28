@@ -352,7 +352,7 @@ public final class TerminalEmulator {
         if (mouseButton == MOUSE_LEFT_BUTTON_MOVED && !isDecsetInternalBitSet(DECSET_BIT_MOUSE_TRACKING_BUTTON_EVENT)) {
             // Do not send tracking.
         } else if (isDecsetInternalBitSet(DECSET_BIT_MOUSE_PROTOCOL_SGR)) {
-            mSession.write(String.format("\033[<%d;%d;%d" + (pressed ? 'M' : 'm'), mouseButton, column, row));
+            mSession.write(String.format(Locale.US, "\033[<%d;%d;%d" + (pressed ? 'M' : 'm'), mouseButton, column, row));
         } else {
             mouseButton = pressed ? mouseButton : 3; // 3 for release of all buttons.
             // Clip to screen, and clip to the limits of 8-bit data.
@@ -936,9 +936,14 @@ public final class TerminalEmulator {
                     for (String part : dcs.substring(2).split(";")) {
                         if (part.length() % 2 == 0) {
                             StringBuilder transBuffer = new StringBuilder();
-                            for (int i = 0; i < part.length(); i += 2) {
-                                char c = (char) Long.decode("0x" + part.charAt(i) + "" + part.charAt(i + 1)).longValue();
-                                transBuffer.append(c);
+                            try {
+                                for (int i = 0; i < part.length(); i += 2) {
+                                    transBuffer.append((char) Long.decode("0x" + part.charAt(i) + "" + part.charAt(i + 1)).longValue());
+                                }
+                            } catch (NumberFormatException error) {
+                                // Malformed process output must not escape the main-thread parser.
+                                mClient.logError(LOG_TAG, "Invalid device termcap/terminfo hexadecimal name: " + part);
+                                continue;
                             }
                             String trans = transBuffer.toString();
                             String responseValue;
@@ -1994,20 +1999,15 @@ public final class TerminalEmulator {
                     mColors.reset();
                     mSession.onColorsChanged();
                 } else {
-                    int lastIndex = 0;
-                    for (int charIndex = 0; ; charIndex++) {
-                        boolean endOfInput = charIndex == textParameter.length();
-                        if (endOfInput || textParameter.charAt(charIndex) == ';') {
-                            try {
-                                int colorToReset = Integer.parseInt(textParameter.substring(lastIndex, charIndex));
+                    for (String parameter : textParameter.split(";")) {
+                        try {
+                            int colorToReset = Integer.parseInt(parameter);
+                            if (colorToReset >= 0 && colorToReset < mColors.mCurrentColors.length) {
                                 mColors.reset(colorToReset);
                                 mSession.onColorsChanged();
-                                if (endOfInput) break;
-                                charIndex++;
-                                lastIndex = charIndex;
-                            } catch (NumberFormatException e) {
-                                // Ignore.
                             }
+                        } catch (NumberFormatException ignored) {
+                            // Ignore malformed indexes and continue with later reset parameters.
                         }
                     }
                 }

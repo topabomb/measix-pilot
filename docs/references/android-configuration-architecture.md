@@ -154,6 +154,8 @@ installation ID 在本机企业连接生命周期内稳定。`enrollment_expired
 
 身份与配置正文分别恢复。manifest/凭据有效而配置读取、hash 或领域校验失败时，保留原 Session、Applied 引用和空间选择，以 `configurationError` 表示正文不可用。保留身份的导航提交不依赖正文可读；新 Applied 发布仍须完整校验。企业历史按原主体和身份时效授权，不依赖当前助手目录，也不把缺失助手/模型替换为个人默认。企业校验失败不阻断个人数据恢复；整体恢复顺序见 [应用架构](application-architecture.md)。
 
+manifest 或凭据本身读取失败时，`EnterpriseSessionController.recover` 发布 `EnterpriseState.Failed`，保留稳定 reason 与脱敏异常类型、message、cause；完整堆栈写入诊断日志。`EnterpriseOverview.failureDetail` 传递原诊断，界面可展开和复制。个人数据恢复继续，取消仍向上传播且不发布失败状态。
+
 ### 配置格式与兼容
 
 Android 支持的 Snapshot 集合由 `PlatformSnapshotCompatibility.supportedSchemas` 定义，目前为 4、5；Applied manifest 独立使用 `ENTERPRISE_MANIFEST_SCHEMA_VERSION`，目前为 7。不能按 APK 版本、最高格式号或连续区间推断兼容性。
@@ -320,6 +322,7 @@ Conversation、Memory、Artifact、GeneratedMedia、收藏、分页与统计中�
 用户 `ProviderSetting` / `Model` 保存连接参数、模型能力和高级覆盖，字段以原类型声明为准。
 Provider `customHeaders` 缺字段解码为空列表；复制、类型转换与 Model providerOverwrite 保留该字段。
 Provider 编辑复用原 typed contract，目录、余额及生成请求共用各自 Adapter 合并入口，详情默认折叠显示请求头编辑器。
+余额订阅与草稿预览失败由 `ProviderBalanceUiState.Unavailable.detail` 保留脱敏诊断，取消向上传播；失败不进入余额缓存，重新订阅仍可重试。
 `providerOverwrite`、custom headers/body、URL 和 API key 只属于用户定义，可能含凭据；
 企业公开 Model 与私有 execution binding 独立，不以这些覆盖字段作为受管执行来源。
 有效模型选择由 Resolver 派生，执行 owner 复验原域准入；wire 差异见 [Provider 协议](protocol-reference.md)。

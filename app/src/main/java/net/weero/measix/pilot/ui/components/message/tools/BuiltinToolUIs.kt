@@ -23,6 +23,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,6 +79,7 @@ import net.weero.measix.pilot.ui.modifier.shimmer
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.utils.openUrl
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.compose.koinInject
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
@@ -133,17 +137,21 @@ object MemoryToolUI : ToolUIRenderer {
     override fun Preview(context: ToolUIContext, onDismissRequest: () -> Unit) {
         val memoryService: MemoryService = koinInject()
         val scope = rememberCoroutineScope()
-        val toaster = net.weero.measix.pilot.ui.context.LocalToaster.current
         val memoryFailureMessage = stringResource(R.string.memory_operation_failed)
         val memoryView = (net.weero.measix.pilot.ui.components.richtext.LocalRenderedContentSource.current as?
             net.weero.measix.pilot.service.RenderedContentSource.Conversation)?.view
+        var failure by remember(memoryView, context.conversationId, context.locator) { mutableStateOf<Throwable?>(null) }
         val candidate by androidx.compose.runtime.produceState<MemoryToolRecord?>(null, memoryView, context.conversationId, context.locator) {
             val conversationId = context.conversationId
             val locator = context.locator
             if (memoryView != null && conversationId != null && locator != null) {
                 value = try { memoryService.captureToolRecord(memoryView, conversationId, locator) }
                 catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                catch (_: Exception) { null }
+                catch (error: Exception) {
+                    net.weero.measix.pilot.utils.logDiagnosticFailure("MemoryToolUI", "Memory record lookup failed", error)
+                    failure = error
+                    null
+                }
             }
         }
         val record = candidate?.takeIf { it.matches(context.conversationId, context.locator) }
@@ -158,7 +166,10 @@ object MemoryToolUI : ToolUIRenderer {
                                     record?.let { memoryService.deleteToolRecord(it) }
                                     onDismissRequest()
                                 } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-                                catch (_: Exception) { toaster.show(memoryFailureMessage, type = net.weero.measix.pilot.ui.components.toast.ToastType.Error) }
+                                catch (error: Exception) {
+                                    net.weero.measix.pilot.utils.logDiagnosticFailure("MemoryToolUI", "Memory deletion failed", error)
+                                    failure = error
+                                }
                             }
                         }
                     ) {
@@ -172,6 +183,15 @@ object MemoryToolUI : ToolUIRenderer {
                 null
             },
         )
+        failure?.let { error ->
+            net.weero.measix.pilot.ui.components.ui.ErrorDetails(
+                error = net.weero.measix.pilot.service.ChatError(
+                    title = memoryFailureMessage,
+                    detail = error.userVisibleDiagnostic(),
+                ),
+                onDismiss = { failure = null },
+            )
+        }
     }
 }
 

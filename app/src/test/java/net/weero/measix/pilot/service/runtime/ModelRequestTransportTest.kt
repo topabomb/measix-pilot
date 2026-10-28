@@ -36,8 +36,7 @@ class ModelRequestTransportTest {
         )
         val target = ModelRequestTarget.Remote(setting,
             credentials = RequestCredentials.Routed("http://platform.test/runtime", "test"))
-        val chunk = target.generateText(providers, emptyList(), params,
-            net.weero.measix.pilot.data.configuration.ModelSelectionRole.TITLE)
+        val chunk = target.generateText(providers, emptyList(), params)
         assertEquals("hello world", chunk.choices.single().message!!.toText())
         assertEquals("stop", chunk.choices.single().finishReason)
         assertFalse(chunk.choices.single().message!!.parts.any { it is UIMessagePart.Step })

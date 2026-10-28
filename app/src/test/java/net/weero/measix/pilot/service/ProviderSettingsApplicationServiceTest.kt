@@ -264,10 +264,16 @@ class ProviderSettingsApplicationServiceTest {
         val manager = mockk<ProviderManager>()
         val provider = mockk<Provider<ProviderSetting.OpenAI>>()
         every { manager.getProviderByType(configured) } returns provider
-        coEvery { provider.getBalance(configured) } throws IllegalStateException("private diagnostic") andThen "8"
+        coEvery { provider.getBalance(configured) } throws java.io.IOException("balance endpoint unavailable", IllegalStateException("upstream reset; token=secret-value")) andThen "8"
         val service = ProviderSettingsApplicationService(manager, store)
         val id = configured.id as ConfigurationReference.User
-        assertEquals(ProviderBalanceUiState.Unavailable, service.observeBalance(id).first { it == ProviderBalanceUiState.Unavailable })
+        val failed = service.observeBalance(id).first { it is ProviderBalanceUiState.Unavailable } as ProviderBalanceUiState.Unavailable
+        val detail = failed.detail.orEmpty()
+        assertTrue(detail.contains("IOException"))
+        assertTrue(detail.contains("balance endpoint unavailable"))
+        assertTrue(detail.contains("IllegalStateException"))
+        assertTrue(detail.contains("upstream reset"))
+        assertTrue(!detail.contains("secret-value"))
         assertEquals(ProviderBalanceUiState.Available("8"), service.observeBalance(id).first { it is ProviderBalanceUiState.Available })
         settings.value = settings.value.copy(providers = emptyList())
         assertEquals(ProviderBalanceUiState.Hidden, service.observeBalance(id).first())
@@ -282,6 +288,23 @@ class ProviderSettingsApplicationServiceTest {
         assertEquals(ProviderBalanceUiState.Available("preview"), service.previewBalance(draft))
         assertEquals(ProviderBalanceUiState.Hidden, service.previewBalance(draft.copy(balanceOption = draft.balanceOption.copy(enabled = false))))
         coVerify(exactly = 1) { provider.getBalance(draft) }
+    }
+
+    @Test
+    fun `balance preview preserves failure diagnostic and propagates cancellation`() = runTest {
+        val draft = ProviderSetting.OpenAI(balanceOption = me.rerere.ai.provider.BalanceOption(enabled = true))
+        val (service, _, provider) = fixture(draft)
+        coEvery { provider.getBalance(draft) } throws java.io.IOException("preview transport failed", IllegalStateException("socket closed"))
+        val failed = service.previewBalance(draft) as ProviderBalanceUiState.Unavailable
+        assertTrue(failed.detail.orEmpty().contains("IOException"))
+        assertTrue(failed.detail.orEmpty().contains("preview transport failed"))
+        assertTrue(failed.detail.orEmpty().contains("IllegalStateException: socket closed"))
+        coEvery { provider.getBalance(draft) } throws CancellationException("preview dismissed")
+        val cancelled = try {
+            service.previewBalance(draft)
+            error("Expected cancellation")
+        } catch (failure: CancellationException) { failure }
+        assertEquals("preview dismissed", cancelled.message)
     }
 
     private fun fixture(

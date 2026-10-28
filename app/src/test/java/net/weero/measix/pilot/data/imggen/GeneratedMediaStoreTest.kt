@@ -379,7 +379,7 @@ class GeneratedMediaStoreTest {
         )
         every { repository.deleteMedia(3) } returns Unit
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        assertTrue(store.delete(ConfigurationScope.Personal, 3))
+        assertEquals(GeneratedMediaDeleteResult.Completed, store.deleteDetailed(ConfigurationScope.Personal, 3))
         assertFalse(file.exists())
         coVerify { repository.getMediaById(3) }
         verify { repository.deleteMedia(3) }
@@ -401,7 +401,7 @@ class GeneratedMediaStoreTest {
             createAt = 1L,
         )
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        assertFalse(store.delete(ConfigurationScope.Personal, 4))
+        assertTrue(store.deleteDetailed(ConfigurationScope.Personal, 4) is GeneratedMediaDeleteResult.Failed)
         verify(exactly = 0) { repository.deleteMedia(any()) }
         filesDir.deleteRecursively()
     }
@@ -528,7 +528,7 @@ class GeneratedMediaStoreTest {
         )
         every { repository.deleteMedia(5) } throws IllegalStateException("dao")
         val store = GeneratedMediaStore(filesDir, repository, mockk(relaxed = true))
-        assertFalse(store.delete(ConfigurationScope.Personal, 5))
+        assertTrue(store.deleteDetailed(ConfigurationScope.Personal, 5) is GeneratedMediaDeleteResult.Failed)
         assertTrue(file.exists())
         filesDir.deleteRecursively()
     }
@@ -597,7 +597,7 @@ class GeneratedMediaStoreTest {
             deleteCommittedPayload = { false },
         )
 
-        assertTrue(store.delete(ConfigurationScope.Personal, 7))
+        assertTrue(store.deleteDetailed(ConfigurationScope.Personal, 7) is GeneratedMediaDeleteResult.CleanupPending)
         assertTrue(File(images, "deferred.png${GeneratedMediaStore.DELETING_SUFFIX}").exists())
         verify(exactly = 1) { repository.deleteMedia(7) }
         filesDir.deleteRecursively()

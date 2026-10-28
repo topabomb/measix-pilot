@@ -216,36 +216,6 @@ class S3Client(
         }
     }
 
-    suspend fun headObject(key: String): Result<S3ObjectMetadata> = withContext(Dispatchers.IO) {
-        runCatchingPreservingCancellation {
-            val path = "/${key.trimStart('/')}"
-            val signed = AwsSignatureV4.sign(
-                config = config,
-                method = "HEAD",
-                path = path,
-            )
-
-            val response: HttpResponse = httpClient.request(signed.url) {
-                method = HttpMethod.Head
-                headers {
-                    signed.headers.forEach { (k, v) -> append(k, v) }
-                }
-            }
-
-            if (!response.status.isSuccess()) {
-                throw S3Exception("Object not found: ${response.status}", "")
-            }
-
-            S3ObjectMetadata(
-                key = key,
-                size = response.headers["content-length"]?.toLongOrNull() ?: 0,
-                contentType = response.headers["content-type"] ?: "application/octet-stream",
-                etag = response.headers["etag"]?.trim('"'),
-                lastModified = response.headers["last-modified"],
-            )
-        }
-    }
-
     suspend fun listObjects(
         prefix: String = "",
         delimiter: String = "",
@@ -283,20 +253,6 @@ class S3Client(
 
             val xmlBody = response.bodyAsText()
             parseListObjectsResponse(xmlBody)
-        }
-    }
-
-    suspend fun objectExists(key: String): Boolean {
-        return headObject(key).isSuccess
-    }
-
-    fun getPublicUrl(key: String): String {
-        val path = "/${key.trimStart('/')}"
-        return if (config.pathStyle) {
-            "${config.endpoint.trimEnd('/')}/${config.bucket}$path"
-        } else {
-            val scheme = if (config.isHttps) "https://" else "http://"
-            "$scheme${config.bucket}.${config.host}$path"
         }
     }
 
@@ -430,14 +386,6 @@ data class S3Object(
     val etag: String?,
     val lastModified: Instant?,
     val storageClass: String?,
-)
-
-data class S3ObjectMetadata(
-    val key: String,
-    val size: Long,
-    val contentType: String,
-    val etag: String?,
-    val lastModified: String?,
 )
 
 data class S3ListResult(

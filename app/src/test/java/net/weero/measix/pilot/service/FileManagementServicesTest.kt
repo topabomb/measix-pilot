@@ -56,6 +56,25 @@ class FileManagementServicesTest {
 
     @After fun tearDown() { root.deleteRecursively() }
 
+    @Test fun `artifact deletion exposes owner diagnosis and retry keeps the original selection`() = runTest {
+        val artifacts = mockk<ArtifactStore>()
+        val application = FileManagementApplicationService(mockk(), artifacts, mockk(),
+            ApplicationRecoveryGate().apply { ready() }, sessions)
+        val failure = java.io.IOException("delete failed token=private-token", IllegalStateException("volume unavailable"))
+        coEvery { artifacts.deleteUserRequested(selection.access.scope, 1) } returns
+            net.weero.measix.pilot.data.files.ArtifactDeleteResult.Failed(1, "delete_failed", failure)
+        val key = ManagedFileKey.Artifact(1, selection)
+        val outcome = application.deleteArtifact(key) as ArtifactDeleteOutcome.Failed
+        assertEquals("delete_failed", outcome.reason)
+        val diagnostic = outcome.detail.orEmpty()
+        assertTrue(diagnostic.contains("IOException: delete failed"))
+        assertTrue(diagnostic.contains("Caused by: IllegalStateException: volume unavailable"))
+        org.junit.Assert.assertFalse(diagnostic.contains("private-token"))
+        coEvery { artifacts.deleteUserRequested(selection.access.scope, 1) } returns
+            net.weero.measix.pilot.data.files.ArtifactDeleteResult.Completed(1)
+        assertEquals(ArtifactDeleteOutcome.Deleted, application.deleteArtifact(key))
+    }
+
     @Test fun `gallery selection reconciliation uses original scope and rejects expired response`() = runTest {
         var now = 1000L
         val controller = EnterpriseSessionController(enterpriseTestStore(File(root, "selection-expiry")),
@@ -289,6 +308,24 @@ class FileManagementServicesTest {
     }
 
     @Test
+    fun `cleanup exposes both owners original diagnostic without exposing credentials`() = runTest {
+        val artifacts = mockk<ArtifactStore>()
+        val generated = mockk<GeneratedMediaStore>()
+        val service = FileManagementApplicationService(mockk(), artifacts, generated, ApplicationRecoveryGate().apply { ready() }, sessions)
+        val failure = java.io.IOException("delete refused token=secret-value", IllegalStateException("disk unavailable"))
+        coEvery { artifacts.deleteUserRequestedFolderCreatedBefore(ConfigurationScope.Personal, FileFolders.UPLOAD, Long.MAX_VALUE) } returns
+            ArtifactCleanupResult(0, 1, 0, 0, listOf(failure))
+        coEvery { generated.deleteCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE) } returns
+            GeneratedMediaCleanupResult(0, 0, 1, listOf(failure))
+        for (category in FileCleanupCategory.entries) {
+            val result = service.cleanup(selection, category, FileCleanupRange.All)
+            assertTrue(result.detail.orEmpty().contains("IOException"))
+            assertTrue(result.detail.orEmpty().contains("disk unavailable"))
+            org.junit.Assert.assertFalse(result.detail.orEmpty().contains("secret-value"))
+        }
+    }
+
+    @Test
     fun `cutoff is calculated once from the supported typed range`() {
         val now = 1_800_000_000_000L
 
@@ -376,7 +413,8 @@ class FileManagementServicesTest {
         val targets = listOf(oldPersonal, enterprise)
         targets.forEach { old ->
             assertTrue(runCatching { application.deleteArtifact(ManagedFileKey.Artifact(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
-            assertTrue(runCatching { application.deleteGenerated(ManagedFileKey.Generated(1, old)) }.exceptionOrNull() is EnterpriseConfigurationException)
+            val rejected = application.deleteGeneratedBatch(listOf(ManagedFileKey.Generated(1, old))) {}.single()
+            assertTrue((rejected as GeneratedImageBatchItemResult.Failed).cause is EnterpriseConfigurationException)
             assertTrue(runCatching { application.cleanup(old, FileCleanupCategory.UPLOAD, FileCleanupRange.All) }.exceptionOrNull() is EnterpriseConfigurationException)
             for (key in listOf(ManagedFileKey.Artifact(1, old), ManagedFileKey.Generated(1, old))) {
                 assertTrue(runCatching { application.imageSource(key).requireAccess() }.exceptionOrNull() is EnterpriseConfigurationException)
@@ -386,7 +424,7 @@ class FileManagementServicesTest {
             assertTrue(runCatching { query.candidateCount(old, FileCleanupCategory.GENERATED_IMAGES, FileCleanupRange.All) }.exceptionOrNull() is EnterpriseConfigurationException)
         }
         coVerify(exactly = 0) { artifacts.deleteUserRequested(any(), any()) }
-        coVerify(exactly = 0) { generated.delete(any(), any()) }
+        coVerify(exactly = 0) { generated.deleteDetailed(any(), any()) }
         coEvery { artifacts.deleteUserRequested(ConfigurationScope.Personal, 1) } returns net.weero.measix.pilot.data.files.ArtifactDeleteResult.Completed(1)
         assertEquals(ArtifactDeleteOutcome.Deleted, application.deleteArtifact(ManagedFileKey.Artifact(1, personal)))
     }
@@ -449,10 +487,17 @@ class FileManagementServicesTest {
     fun `directory query reports failure and a new subscription retries the same realm`() = runTest {
         val artifacts = mockk<ArtifactStore>()
         val generated = mockk<GeneratedMediaStore>()
-        every { artifacts.observe(ConfigurationScope.Personal) } returns kotlinx.coroutines.flow.flow { throw java.io.IOException("disk") }
+        every { artifacts.observe(ConfigurationScope.Personal) } returns kotlinx.coroutines.flow.flow { throw java.io.IOException("directory read failed", IllegalStateException("disk unavailable; token=secret-value")) }
         every { generated.observe(ConfigurationScope.Personal) } returns flowOf(emptyList())
         val query = FileManagementQueryService(artifacts, generated, ApplicationRecoveryGate().also { it.ready() }, sessions)
-        assertTrue(query.observeDirectory().first { it.failed }.uploads.isEmpty())
+        val failed = query.observeDirectory().first { it.failed }
+        assertTrue(failed.uploads.isEmpty())
+        val detail = failed.errorDetail.orEmpty()
+        assertTrue(detail.contains("IOException"))
+        assertTrue(detail.contains("directory read failed"))
+        assertTrue(detail.contains("IllegalStateException"))
+        assertTrue(detail.contains("disk unavailable"))
+        assertTrue(!detail.contains("secret-value"))
         every { artifacts.observe(ConfigurationScope.Personal) } returns flowOf(emptyList())
         assertEquals(selection, query.observeDirectory().first { it.selection != null }.selection)
     }

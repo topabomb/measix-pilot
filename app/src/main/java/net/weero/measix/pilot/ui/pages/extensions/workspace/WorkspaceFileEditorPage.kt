@@ -10,7 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import net.weero.measix.pilot.service.workspace.WorkspaceExportRequest
 import net.weero.measix.pilot.service.workspace.WorkspaceExportItem
-import net.weero.measix.pilot.service.workspace.WorkspaceDocumentTreeDestination
+import net.weero.measix.pilot.service.workspace.WorkspaceDocumentDestination
 import net.weero.measix.pilot.ui.components.files.*
 import net.weero.measix.pilot.service.files.MediaPreviewSource
 import androidx.compose.foundation.layout.Box
@@ -130,7 +130,7 @@ private fun WorkspaceFileEditorContent(
             exportJob = scope.launch {
                 try {
                     applicationService.exportFiles(WorkspaceExportRequest(id, area, listOf(path)),
-                        WorkspaceDocumentTreeDestination(context.contentResolver, uri)) { item ->
+                        WorkspaceDocumentDestination(context.contentResolver, uri)) { item ->
                         if (item is WorkspaceExportItem.Failed) saveError = item.cause.userVisibleDiagnostic()
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }

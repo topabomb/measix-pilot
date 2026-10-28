@@ -16,7 +16,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.rerere.workspace.WorkspaceStorageArea
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
-import net.weero.measix.pilot.service.workspace.WorkspaceDocumentTreeDestination
+import net.weero.measix.pilot.service.workspace.WorkspaceDocumentDestination
 import net.weero.measix.pilot.service.workspace.WorkspaceExportDestination
 import net.weero.measix.pilot.service.workspace.WorkspaceExportItem
 import net.weero.measix.pilot.service.workspace.WorkspaceExportRequest
@@ -83,7 +83,7 @@ class WorkspaceExportFlowAndroidTest {
                         val uri = DocumentsContract.buildDocumentUriUsingTree(tree(root), "ws/$root/$name")
                         requireNotNull(resolver.openInputStream(uri)).use { it.readBytes() }
                     }
-                    val delegate = WorkspaceDocumentTreeDestination(resolver, tree(targetRoot))
+                    val delegate = WorkspaceDocumentDestination(resolver, tree(targetRoot))
                     val created = linkedMapOf<Uri, String>()
                     val closes = mutableMapOf<Uri, Int>()
                     val deleted = mutableListOf<Uri>()
@@ -235,7 +235,7 @@ class WorkspaceExportFlowAndroidTest {
                         val results = mutableListOf<WorkspaceExportItem>()
                         commands.exportFiles(
                             WorkspaceExportRequest(source, WorkspaceStorageArea.FILES, listOf("same.bin")),
-                            WorkspaceDocumentTreeDestination(resolver, tree),
+                            WorkspaceDocumentDestination(resolver, tree),
                             results::add,
                         )
                         assertEquals(1, results.size)

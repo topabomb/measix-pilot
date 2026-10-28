@@ -561,13 +561,6 @@ class ConversationRuntime internal constructor(
         _activeTurn.value?.worker?.join()
     }
 
-    @Synchronized
-    internal fun cancelActiveGeneration(reason: String): Job? {
-        val current = _activeTurn.value ?: return null
-        current.requestCancel(reason)
-        return current.worker
-    }
-
     internal fun currentWorker(): Job? = _activeTurn.value?.worker
 
     /** Binds the immutable request context once to the exact worker that owns this Turn. */
@@ -922,16 +915,6 @@ class ConversationRuntime internal constructor(
 
     internal fun releaseLease() {
         release()
-    }
-
-    // 作用域 API - 短请求（REST）
-    fun <T> withRef(block: () -> T): T {
-        val lease = acquireLease()
-        try {
-            return block()
-        } finally {
-            lease.close()
-        }
     }
 
     /**

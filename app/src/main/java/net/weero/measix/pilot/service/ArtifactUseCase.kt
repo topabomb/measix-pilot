@@ -31,6 +31,7 @@ import net.weero.measix.pilot.data.files.ArtifactStore
 import net.weero.measix.pilot.data.files.OwnedArtifact
 import net.weero.measix.pilot.data.files.requireDiscarded
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 enum class ArtifactUiOrigin {
     USER,
@@ -59,7 +60,7 @@ sealed interface ArtifactDeleteOutcome {
     data object CleanupPending : ArtifactDeleteOutcome
     data object InProgress : ArtifactDeleteOutcome
     data object AlreadyDeleted : ArtifactDeleteOutcome
-    data class Failed(val reason: String) : ArtifactDeleteOutcome
+    data class Failed(val reason: String, val detail: String? = null) : ArtifactDeleteOutcome
 }
 
 /** UI/Application 的 artifact 端口；调用方看不到 DAO、payload 或删除状态机。 */
@@ -110,8 +111,6 @@ class ArtifactUseCase internal constructor(
 
     fun mimeType(uri: Uri): String? = store.mimeType(uri)
 
-    fun isManagedUploadUrl(url: String): Boolean = store.isUploadUri(Uri.parse(url))
-
     suspend fun updateSettingsReferences(transform: (Settings) -> Settings): Settings {
         recoveryGate.awaitReady()
         return store.updateSettingsReferences(transform)
@@ -148,7 +147,7 @@ internal fun ArtifactDeleteResult.toOutcome(): ArtifactDeleteOutcome = when (thi
         ArtifactDeleteResult.RejectionReason.IN_PROGRESS -> ArtifactDeleteOutcome.InProgress
         ArtifactDeleteResult.RejectionReason.ALREADY_DELETED -> ArtifactDeleteOutcome.AlreadyDeleted
     }
-    is ArtifactDeleteResult.Failed -> ArtifactDeleteOutcome.Failed(reason)
+    is ArtifactDeleteResult.Failed -> ArtifactDeleteOutcome.Failed(reason, cause?.userVisibleDiagnostic())
 }
 
 /** 单个输入编辑器拥有的 draft lease；创建、发布、丢弃和关闭在同一 Mutex 下串行。 */

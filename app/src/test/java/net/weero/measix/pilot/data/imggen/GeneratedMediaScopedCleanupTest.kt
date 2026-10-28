@@ -98,6 +98,7 @@ class GeneratedMediaScopedCleanupTest {
 
         assertEquals(0, result.deleted)
         assertEquals(1, result.cleanupPending)
+        assertTrue(result.failures.single().message!!.contains("generated_media_payload_cleanup_pending"))
         assertEquals(0, result.failed)
         val tombstone = File(images, "deferred.png${GeneratedMediaStore.DELETING_SUFFIX}")
         assertTrue(tombstone.isFile)
@@ -116,13 +117,15 @@ class GeneratedMediaScopedCleanupTest {
         val original = File(images, "restore.png").apply { writeText("x") }
         val repository = mockk<GenMediaRepository>()
         coEvery { repository.listCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE) } returns listOf(entity)
-        every { repository.deleteMedia(10) } throws IllegalStateException("db unavailable")
+        val expected = IllegalStateException("db unavailable", java.io.IOException("disk unavailable"))
+        every { repository.deleteMedia(10) } throws expected
 
         val result = store(filesDir, repository).deleteCreatedBefore(ConfigurationScope.Personal, Long.MAX_VALUE)
 
         assertEquals(0, result.deleted)
         assertEquals(0, result.cleanupPending)
         assertEquals(1, result.failed)
+        assertTrue(result.failures.single() === expected)
         assertTrue(original.isFile)
         assertTrue(!File(images, "restore.png${GeneratedMediaStore.DELETING_SUFFIX}").exists())
         filesDir.deleteRecursively()

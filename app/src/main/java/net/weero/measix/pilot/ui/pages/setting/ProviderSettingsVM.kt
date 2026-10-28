@@ -16,6 +16,8 @@ import me.rerere.ai.provider.ProviderSetting
 import net.weero.measix.pilot.service.ProviderSettingsApplicationService
 import net.weero.measix.pilot.service.ProviderToolProbeResult
 import net.weero.measix.pilot.utils.UiState
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 class ProviderSettingsVM(
     private val providerId: ConfigurationReference,
@@ -143,19 +145,20 @@ class ProviderSettingsVM(
     }
 
     fun consumeMutationFailure() {
-        mutableState.value = mutableState.value.copy(mutationFailed = false)
+        mutableState.value = mutableState.value.copy(mutationError = null)
     }
 
     private fun launchMutation(onSuccess: () -> Unit = {}, block: suspend () -> Unit) {
         viewModelScope.launch {
             try {
-                mutableState.value = mutableState.value.copy(mutationFailed = false)
+                mutableState.value = mutableState.value.copy(mutationError = null)
                 block()
                 onSuccess()
             } catch (error: CancellationException) {
                 throw error
-            } catch (_: Exception) {
-                mutableState.value = mutableState.value.copy(mutationFailed = true)
+            } catch (error: Exception) {
+                logDiagnosticFailure("ProviderSettingsVM", "Provider configuration mutation failed", error)
+                mutableState.value = mutableState.value.copy(mutationError = error.userVisibleDiagnostic())
             }
         }
     }
@@ -201,7 +204,7 @@ data class ProviderSettingsUiState(
     val showConnectionTest: Boolean = false,
     val selectedConnectionModelId: ConfigurationReference? = null,
     val connectionTest: ProviderConnectionTestState = ProviderConnectionTestState(),
-    val mutationFailed: Boolean = false,
+    val mutationError: String? = null,
 )
 
 data class ProviderConnectionTestState(

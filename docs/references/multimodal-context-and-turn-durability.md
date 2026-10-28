@@ -127,6 +127,8 @@ Artifact metadata、引用和生命周期归 `ArtifactStore`；`ArtifactPayloadS
 
 `GeneratedMediaStore.commit` 以同步 `receiveChatArtifact` 回调明确聊天副本的接收者，图库 row 提交后、可取消返回边界前交给原 `ToolExecutionContext.registerUnpublishedResource`。接收后由工具 checkpoint 协议发布或丢弃；接收失败只清理未交付副本，保留已提交图库。未提供接收者的页面任务只生成图库原件，不先创建无人管理的聊天副本。
 
+`ImageGenerationCoordinator` 的持久化失败保留 `persistence_error` 和脱敏异常诊断；`AssistantBackgroundService` 的读取、配置提交失败同样保留原 reason 与 detail，补偿失败附为 suppressed，不能覆盖原异常。页面与工具结果沿现有失败入口展示或传递 detail，取消继续传播。
+
 `GeneratedMediaStore.deleteDetailed` 沿原重命名、删行及删除回执恢复协议执行，区分 Completed、AlreadyAbsent、
 CleanupPending 与 Failed；后两者保留异常，不能把已删记录但清理待恢复当作尚未删除。
 `FileManagementApplicationService.saveGeneratedBatch/deleteGeneratedBatch` 只接收同一原 RealmSelection 的 keys，

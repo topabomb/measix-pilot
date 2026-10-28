@@ -549,6 +549,8 @@ class WorkspaceRepository(
                 withContext(Dispatchers.IO) { manager.clearWorkspaceDeletionJournal(workspace.root) }
                 WorkspaceDeletionRecovery.RESTORED
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Throwable) {
             Log.e(TAG, "Workspace deletion compensation is pending: ${workspace.id}", error)
             updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)

@@ -66,7 +66,7 @@ private fun ProviderBalanceValue(
     val value = when (val state = balance) {
         ProviderBalanceUiState.Hidden -> return
         is ProviderBalanceUiState.Available -> state.value
-        ProviderBalanceUiState.Unavailable -> androidx.compose.ui.res.stringResource(R.string.provider_balance_unavailable)
+        is ProviderBalanceUiState.Unavailable -> androidx.compose.ui.res.stringResource(R.string.provider_balance_unavailable)
         ProviderBalanceUiState.Loading -> "~"
     }
 
@@ -87,5 +87,8 @@ private fun ProviderBalanceValue(
             maxLines = 1,
             color = color
         )
+        (balance as? ProviderBalanceUiState.Unavailable)?.detail?.let { detail ->
+            net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail)
+        }
     }
 }

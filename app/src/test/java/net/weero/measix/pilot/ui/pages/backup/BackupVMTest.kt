@@ -12,6 +12,9 @@ import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.data.sync.S3BackupItem
+import net.weero.measix.pilot.data.sync.S3Sync
+import net.weero.measix.pilot.data.sync.s3.S3Config
 import net.weero.measix.pilot.service.*
 import net.weero.measix.pilot.service.webdav.*
 import net.weero.measix.pilot.utils.UiState
@@ -20,6 +23,98 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class BackupVMTest {
+    @Test fun `accepted S3 restore retains its original bucket while configuration changes`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        val finish = CompletableDeferred<Unit>()
+        try {
+            val first = S3Config(endpoint = "https://s3.example", bucket = "first")
+            val second = first.copy(bucket = "second")
+            val settings = MutableStateFlow(Settings(s3Config = first))
+            val item = S3BackupItem("measix_pilot_backups/backup_shared.zip", "backup_shared.zip", 1, Instant.EPOCH)
+            val sync = mockk<S3Sync>(relaxed = true)
+            val restores = mockk<BackupRestoreApplicationService>(relaxed = true)
+            coEvery { sync.listBackupFiles(first) } returns listOf(item)
+            coEvery { restores.restoreS3(first, item) } coAnswers { finish.await() }
+            val vm = BackupVM(mockk<SettingsStore> { every { userSettings } returns settings },
+                mockk(relaxed = true), sync, restores,
+                mockk { every { observeWebDavConfiguration() } returns MutableStateFlow(WebDavConfigurationReadState.Loading) },
+                mockk()).also { store.put("backup", it) }
+            runCurrent()
+            vm.deleteS3BackupFile(item)
+            coVerify(exactly = 1) { sync.deleteS3BackupFile(first, item) }
+            val restore = launch { vm.restoreFromS3(item) }
+            runCurrent()
+            settings.value = settings.value.copy(s3Config = second)
+            runCurrent()
+            assertEquals(UiState.Idle, vm.s3BackupItems.value)
+            assertTrue(restore.isActive)
+            finish.complete(Unit)
+            restore.join()
+            coVerify(exactly = 1) { restores.restoreS3(first, item) }
+            coVerify(exactly = 0) { restores.restoreS3(second, any()) }
+        } finally { finish.complete(Unit); store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `late S3 listing cannot replace results from the current bucket`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        val delayed = CompletableDeferred<List<S3BackupItem>>()
+        try {
+            val first = S3Config(endpoint = "https://s3.example", bucket = "first")
+            val second = first.copy(bucket = "second")
+            val settings = MutableStateFlow(Settings(s3Config = first))
+            val oldItem = S3BackupItem("measix_pilot_backups/backup_old.zip", "backup_old.zip", 1, Instant.EPOCH)
+            val newItem = S3BackupItem("measix_pilot_backups/backup_new.zip", "backup_new.zip", 2, Instant.EPOCH)
+            val sync = mockk<S3Sync>(relaxed = true)
+            coEvery { sync.listBackupFiles(first) } coAnswers { withContext(NonCancellable) { delayed.await() } }
+            coEvery { sync.listBackupFiles(second) } returns listOf(newItem)
+            val vm = BackupVM(mockk<SettingsStore> { every { userSettings } returns settings },
+                mockk(relaxed = true), sync, mockk(relaxed = true),
+                mockk { every { observeWebDavConfiguration() } returns MutableStateFlow(WebDavConfigurationReadState.Loading) },
+                mockk()).also { store.put("backup", it) }
+            runCurrent()
+            coVerify(atLeast = 1) { sync.listBackupFiles(first) }
+            settings.value = settings.value.copy(s3Config = second)
+            runCurrent()
+            vm.loadS3BackupFileItems()
+            runCurrent()
+            assertEquals(listOf(newItem), (vm.s3BackupItems.value as UiState.Success).data)
+            delayed.complete(listOf(oldItem))
+            runCurrent()
+            assertEquals("A completed request from the old bucket must not replace the current list",
+                listOf(newItem), (vm.s3BackupItems.value as UiState.Success).data)
+        } finally { delayed.complete(emptyList()); store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `old S3 items cannot restore or delete an object in a newly selected bucket`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val first = S3Config(endpoint = "https://s3.example", bucket = "first")
+            val second = first.copy(bucket = "second")
+            val settings = MutableStateFlow(Settings(s3Config = first))
+            val oldItem = S3BackupItem("measix_pilot_backups/backup_shared.zip", "backup_shared.zip", 1, Instant.EPOCH)
+            val sync = mockk<S3Sync>(relaxed = true)
+            val restores = mockk<BackupRestoreApplicationService>(relaxed = true)
+            coEvery { sync.listBackupFiles(first) } returns listOf(oldItem)
+            val vm = BackupVM(mockk<SettingsStore> { every { userSettings } returns settings },
+                mockk(relaxed = true), sync, restores,
+                mockk { every { observeWebDavConfiguration() } returns MutableStateFlow(WebDavConfigurationReadState.Loading) },
+                mockk()).also { store.put("backup", it) }
+            runCurrent()
+            assertEquals(listOf(oldItem), (vm.s3BackupItems.value as UiState.Success).data)
+            settings.value = settings.value.copy(s3Config = second)
+            runCurrent()
+            // A row/confirmation callback can outlive a configuration change. A rejection is valid;
+            // interpreting the old key against the replacement bucket is never valid.
+            try { vm.restoreFromS3(oldItem) } catch (error: IllegalStateException) { }
+            try { vm.deleteS3BackupFile(oldItem) } catch (error: IllegalStateException) { }
+            coVerify(exactly = 0) { restores.restoreS3(second, oldItem) }
+            coVerify(exactly = 0) { sync.deleteS3BackupFile(second, oldItem) }
+        } finally { store.clear(); Dispatchers.resetMain() }
+    }
+
     @Test fun `initialization failure can retry without changing saved preferences`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val store = ViewModelStore()

@@ -58,7 +58,7 @@ class ConversationCommandCoordinatorTest {
         val mutation = (write.captured as ConversationWrite.Mutate).mutation
         assertEquals("new", mutation.headerPatch?.title)
         assertTrue(mutation.upsertedNodes.isEmpty())
-        coVerify(exactly = 0) { repository.getConversationById(any()) }
+        coVerify(exactly = 0) { repository.getConversationSnapshotById(any()) }
         coVerify(exactly = 0) { registry.loadRuntime(any()) }
     }
 
@@ -80,7 +80,7 @@ class ConversationCommandCoordinatorTest {
 
         assertEquals("Model", (write.captured as ConversationWrite.Mutate).mutation.headerPatch?.title)
         coVerify(exactly = 1) { repository.commit(any()) }
-        coVerify(exactly = 0) { repository.getConversationById(any()) }
+        coVerify(exactly = 0) { repository.getConversationSnapshotById(any()) }
         coVerify(exactly = 0) { registry.loadRuntime(any()) }
     }
 

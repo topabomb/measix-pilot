@@ -38,6 +38,8 @@ import net.weero.measix.pilot.ui.components.ai.AssistantPickerSheet
 import org.koin.compose.koinInject
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.time.Duration
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
 /**
  * 查看器底部栏的调用方动作。差异化逻辑留在调用方:
@@ -135,10 +137,12 @@ internal fun rememberImageBackgroundHost(
     val applying = remember { AtomicBoolean(false) }
     var pendingPick by remember { mutableStateOf<PendingAssistantPick?>(null) }
     var pendingConfirm by remember { mutableStateOf<PendingBackgroundChoice?>(null) }
+    var failureDetail by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(catalog?.selection, assistantId, editSharedDefinition) {
         pendingPick = null
         pendingConfirm = null
+        failureDetail = null
     }
     val action = remember(description, defaultAssistantName, missingAssistantText) {
         ImagePreviewAction(
@@ -230,12 +234,21 @@ internal fun rememberImageBackgroundHost(
                             toaster = confirm.toaster,
                             backgroundService = backgroundService,
                             applying = applying,
+                            onFailure = { detail ->
+                                val target = confirm.target
+                                if (target !is AssistantBackgroundTarget.Page || catalogState.value?.selection == target.selection) {
+                                    failureDetail = detail
+                                }
+                            },
                         )
                     },
                     onDismiss = { pendingConfirm = null },
                 ) {
                     Text(stringResource(R.string.image_viewer_background_confirm_message, confirm.assistantName))
                 }
+            }
+            failureDetail?.let { detail ->
+                ErrorDetails(net.weero.measix.pilot.service.ChatError(detail = detail), onDismiss = { failureDetail = null })
             }
         }
     }
@@ -257,6 +270,7 @@ internal fun setBackgroundWithFeedback(
     toaster: ToasterState,
     backgroundService: AssistantBackgroundService,
     applying: AtomicBoolean,
+    onFailure: (String) -> Unit = {},
 ) {
     if (!applying.compareAndSet(false, true)) return
     scope.launch {
@@ -275,6 +289,7 @@ internal fun setBackgroundWithFeedback(
                     id = toastId,
                 )
             } else {
+                result.detail?.let(onFailure)
                 toaster.show(
                     message = backgroundFailureMessage(context, result.reason),
                     type = ToastType.Error,
@@ -285,6 +300,8 @@ internal fun setBackgroundWithFeedback(
             toaster.dismiss(toastId)
             throw cancelled
         } catch (error: Throwable) {
+            logDiagnosticFailure("ImageBackground", "Unable to set assistant background", error)
+            onFailure(error.userVisibleDiagnostic())
             toaster.show(
                 message = backgroundFailureMessage(context, error.message),
                 type = ToastType.Error,

@@ -50,6 +50,8 @@ import net.weero.measix.pilot.data.model.collectFileUrlStrings
 import net.weero.measix.pilot.data.model.collectArtifactReferences
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
 import net.weero.measix.pilot.utils.JsonInstant
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import kotlin.uuid.Uuid
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -71,15 +73,16 @@ data class ArtifactCleanupResult(
     val cleanupPending: Int,
     val skippedInProgress: Int,
     val failed: Int,
+    val failures: List<Throwable> = emptyList(),
 )
 
 /** 显式删除结果 */
 sealed interface ArtifactDeleteResult {
     data class Completed(val artifactId: Long) : ArtifactDeleteResult
     /** 用户删除已被 DELETING 状态接受，剩余物理/元数据清理由启动恢复幂等续跑。 */
-    data class CleanupPending(val artifactId: Long, val reason: String) : ArtifactDeleteResult
+    data class CleanupPending(val artifactId: Long, val reason: String, val cause: Throwable? = null) : ArtifactDeleteResult
     data class Rejected(val artifactId: Long, val reason: RejectionReason) : ArtifactDeleteResult
-    data class Failed(val artifactId: Long, val reason: String) : ArtifactDeleteResult
+    data class Failed(val artifactId: Long, val reason: String, val cause: Throwable? = null) : ArtifactDeleteResult
 
     enum class RejectionReason { IN_PROGRESS, ALREADY_DELETED }
 }
@@ -163,7 +166,7 @@ data class ArtifactImageContent(val reference: LocalArtifactRef, val uri: Uri, v
 
 sealed interface ArtifactImageReadResult {
     data class Success(val images: List<ArtifactImageContent>) : ArtifactImageReadResult
-    data class Failure(val reason: Reason) : ArtifactImageReadResult
+    data class Failure(val reason: Reason, val detail: String? = null) : ArtifactImageReadResult
     enum class Reason { NOT_FOUND, TOO_LARGE, UNSUPPORTED_TYPE, READ_FAILED }
 }
 
@@ -178,12 +181,12 @@ internal fun ArtifactDeleteResult.requireDiscarded(
 ) {
     when (this) {
         is ArtifactDeleteResult.Completed -> Unit
-        is ArtifactDeleteResult.CleanupPending -> error("$context: deletion cleanup pending ($reason)")
+        is ArtifactDeleteResult.CleanupPending -> throw IllegalStateException("$context: deletion cleanup pending ($reason)", cause)
         is ArtifactDeleteResult.Rejected -> check(reason == ArtifactDeleteResult.RejectionReason.ALREADY_DELETED) {
             "$context: deletion not acquired ($reason)"
         }
-        is ArtifactDeleteResult.Failed -> check(allowAlreadyPublished && reason == "artifact_already_published") {
-            "$context: deletion failed ($reason)"
+        is ArtifactDeleteResult.Failed -> if (!allowAlreadyPublished || reason != "artifact_already_published") {
+            throw IllegalStateException("$context: deletion failed ($reason)", cause)
         }
     }
 }
@@ -580,8 +583,9 @@ class ArtifactStore(
                     throw error
                 } catch (_: FilePayloadTooLargeException) {
                     return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.TOO_LARGE))
-                } catch (_: java.io.IOException) {
-                    return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.READ_FAILED))
+                } catch (error: java.io.IOException) {
+                    logDiagnosticFailure(TAG, "Upload image read failed", error)
+                    return consume(ArtifactImageReadResult.Failure(ArtifactImageReadResult.Reason.READ_FAILED, error.userVisibleDiagnostic()))
                 }
                 val mime = ImageMime.sniff(bytes)
                 if (mime == null || ImageMime.isUnsupportedNonImage(bytes, entity.mimeType) || !ImageMime.isAcceptedImage(bytes)) {
@@ -1206,11 +1210,6 @@ class ArtifactStore(
         if (released) previewPublicationChanges.tryEmit(Unit)
     }
 
-    suspend fun retainForUndo(conversations: List<Conversation>): ArtifactRetentionLease = withLifecycleLock {
-        retainIds(conversations.flatMap { buildMutableReferencesForNodes(it.scope, it.messageNodes) }
-            .mapTo(linkedSetOf(), ArtifactReferenceEntity::artifactId))
-    }
-
     /** Retains aggregate message trees without exposing internal model context through Conversation. */
     internal suspend fun retainNodesForUndo(
         scope: ConfigurationScope,
@@ -1501,6 +1500,7 @@ class ArtifactStore(
         var cleanupPending = 0
         var skippedInProgress = 0
         var failed = 0
+        val failures = mutableListOf<Throwable>()
         entities.forEach { entity ->
             if (isPinned(entity.id)) {
                 skippedInProgress++
@@ -1516,12 +1516,18 @@ class ArtifactStore(
             }
             when (result) {
                 is ArtifactDeleteResult.Completed -> deleted++
-                is ArtifactDeleteResult.CleanupPending -> cleanupPending++
+                is ArtifactDeleteResult.CleanupPending -> {
+                    cleanupPending++
+                    failures += IllegalStateException(result.reason, result.cause)
+                }
                 is ArtifactDeleteResult.Rejected -> skippedInProgress++
-                is ArtifactDeleteResult.Failed -> failed++
+                is ArtifactDeleteResult.Failed -> {
+                    failed++
+                    failures += IllegalStateException(result.reason, result.cause)
+                }
             }
         }
-        return ArtifactCleanupResult(deleted = deleted, cleanupPending = cleanupPending, skippedInProgress = skippedInProgress, failed = failed)
+        return ArtifactCleanupResult(deleted = deleted, cleanupPending = cleanupPending, skippedInProgress = skippedInProgress, failed = failed, failures = failures)
     }
 
     /** 范围清理确认对话框的候选计数（只读提示，不锁定；真实清理在同一 lock 内重新快照）。 */
@@ -1536,8 +1542,8 @@ class ArtifactStore(
         creating.forEach { entity ->
             when (val result = discardCreating(entity)) {
                 is ArtifactDeleteResult.Completed -> Unit
-                is ArtifactDeleteResult.Failed -> error(
-                    "Failed to roll back interrupted artifact creation ${entity.id}: ${result.reason}"
+                is ArtifactDeleteResult.Failed -> throw IllegalStateException(
+                    "Failed to roll back interrupted artifact creation ${entity.id}: ${result.reason}", result.cause
                 )
                 else -> error("Unexpected CREATING rollback result for ${entity.id}: $result")
             }
@@ -1549,11 +1555,11 @@ class ArtifactStore(
         }
         artifactDAO.listByState(ArtifactState.DELETING.name).forEach { entity ->
             when (val result = finishUserDeletion(entity, detach)) {
-                is ArtifactDeleteResult.CleanupPending -> error(
-                    "Failed to resume artifact deletion ${entity.id}: ${result.reason}"
+                is ArtifactDeleteResult.CleanupPending -> throw IllegalStateException(
+                    "Failed to resume artifact deletion ${entity.id}: ${result.reason}", result.cause
                 )
-                is ArtifactDeleteResult.Failed -> error(
-                    "Failed to resume artifact deletion ${entity.id}: ${result.reason}"
+                is ArtifactDeleteResult.Failed -> throw IllegalStateException(
+                    "Failed to resume artifact deletion ${entity.id}: ${result.reason}", result.cause
                 )
                 else -> Unit
             }
@@ -1738,8 +1744,8 @@ class ArtifactStore(
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
-        Log.e(TAG, "artifact deletion failed: ${entity.id}", error)
-        ArtifactDeleteResult.CleanupPending(entity.id, error.message ?: "unknown")
+        logDiagnosticFailure(TAG, "artifact deletion failed: ${entity.id}", error)
+        ArtifactDeleteResult.CleanupPending(entity.id, error.message ?: "unknown", error)
     }
 
     private suspend fun finishUserDeletion(entity: ArtifactEntity, detach: suspend (Set<String>) -> Boolean): ArtifactDeleteResult = try {
@@ -1755,7 +1761,8 @@ class ArtifactStore(
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
-        ArtifactDeleteResult.CleanupPending(entity.id, error.message ?: "settings_detach_failed")
+        logDiagnosticFailure(TAG, "artifact settings detach failed: ${entity.id}", error)
+        ArtifactDeleteResult.CleanupPending(entity.id, error.message ?: "settings_detach_failed", error)
     }
 
     private suspend fun discardCreating(entity: ArtifactEntity): ArtifactDeleteResult = try {
@@ -1769,7 +1776,8 @@ class ArtifactStore(
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (error: Exception) {
-        ArtifactDeleteResult.Failed(entity.id, error.message ?: "unknown")
+        logDiagnosticFailure(TAG, "artifact creation rollback failed: ${entity.id}", error)
+        ArtifactDeleteResult.Failed(entity.id, error.message ?: "unknown", error)
     }
 
     private suspend fun deletionConflict(id: Long): ArtifactDeleteResult {

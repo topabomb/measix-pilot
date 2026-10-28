@@ -111,5 +111,6 @@ class AttachmentResolver(
             ArtifactImageReadResult.Reason.UNSUPPORTED_TYPE -> AttachmentFailureReasons.UNSUPPORTED_ATTACHMENT_TYPE
             ArtifactImageReadResult.Reason.READ_FAILED -> AttachmentFailureReasons.ATTACHMENT_READ_FAILED
         },
+        detail = detail,
     )
 }

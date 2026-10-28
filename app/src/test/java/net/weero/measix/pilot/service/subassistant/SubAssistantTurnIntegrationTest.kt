@@ -243,7 +243,7 @@ class SubAssistantTurnIntegrationTest {
             val runGate = SubAssistantRunGate()
             val childRuns = SubAssistantRunCoordinator(
                 turnRunner = runner, conversationRepo = repository, runtimeRegistry = registry,
-                commandCoordinator = commands, toolSetFactory = tools, settingsStore = settingsStore,
+                commandCoordinator = commands, toolSetFactory = tools,
                 modelExecutions = net.weero.measix.pilot.test.testModelExecutionService(settingsStore, sessions, ApplicationRecoveryGate().apply { ready() }),
                 memoryService = mockk<net.weero.measix.pilot.service.MemoryService> {
                     coEvery { captureExecution(any(), any()) } returns null

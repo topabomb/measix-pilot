@@ -3,8 +3,6 @@ package net.weero.measix.pilot.data.imggen
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 
@@ -21,14 +19,6 @@ data class ImageGenerationModelDescriptor(
 ) {
     fun toPromptJson(json: Json = DescriptorJson): String =
         json.encodeToString(serializer(), sanitized())
-
-    fun toPromptObject(): String = buildJsonObject {
-        val safe = sanitized()
-        put("provider_type", safe.providerType)
-        put("provider_name", safe.providerName)
-        put("model_id", safe.modelId)
-        put("model_name", safe.modelName)
-    }.toString()
 
     fun sanitized(): ImageGenerationModelDescriptor = copy(
         providerType = sanitizeConfigString(providerType, MAX_PROVIDER_TYPE_CODE_POINTS),

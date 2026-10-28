@@ -40,6 +40,9 @@ import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.JetbrainsMono
+import net.weero.measix.pilot.ui.components.ui.ErrorNotice
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.contentOrNull
@@ -394,15 +397,16 @@ private fun ProviderConfigureGoogle(
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
+    var importError by remember(provider.id) { mutableStateOf<String?>(null) }
     val serviceAccountJsonLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
+        importError = null
         try {
             val content = context.contentResolver.openInputStream(uri)
-                ?.bufferedReader()
-                ?.readText()
-                ?: return@rememberLauncherForActivityResult
+                ?.bufferedReader()?.use { it.readText() }
+                ?: error("service_account_input_unavailable")
             val json = Json.parseToJsonElement(content).jsonObject
             onEdit(
                 provider.copy(
@@ -412,11 +416,15 @@ private fun ProviderConfigureGoogle(
                 )
             )
             toaster.show("Service account imported", type = ToastType.Success)
-        } catch (e: Exception) {
-            toaster.show("Failed to import: ${e.message}", type = ToastType.Error)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            logDiagnosticFailure("ProviderConfigure", "Service account import failed", error)
+            importError = error.userVisibleDiagnostic()
         }
     }
 
+    importError?.let { ErrorNotice(detail = it, onDismiss = { importError = null }) }
     provider.description()
 
     OutlinedTextField(

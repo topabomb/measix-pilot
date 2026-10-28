@@ -49,11 +49,12 @@ class WorkspaceTerminalVMTest {
                 lastFailure = WorkspaceTerminalFailure(
                     id = "failure",
                     reason = WorkspaceTerminalFailureReason.Unexpected,
+                    detail = "IOException: terminal descriptor failed",
                 ),
             ),
         )
         runCurrent()
 
-        assertEquals(WorkspaceTerminalCommandError.Unexpected, vm.commandError.value)
+        assertEquals(WorkspaceTerminalCommandError.Unexpected("IOException: terminal descriptor failed"), vm.commandError.value)
     }
 }

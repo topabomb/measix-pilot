@@ -22,7 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.rerere.workspace.WorkspaceStorageArea
 import net.weero.measix.pilot.service.ApplicationRecoveryGate
-import net.weero.measix.pilot.service.workspace.WorkspaceDocumentTreeDestination
+import net.weero.measix.pilot.service.workspace.WorkspaceDocumentDestination
 import net.weero.measix.pilot.service.workspace.WorkspaceExportDestination
 import net.weero.measix.pilot.service.workspace.WorkspaceExportItem
 import net.weero.measix.pilot.service.workspace.WorkspaceExportRequest
@@ -70,7 +70,7 @@ class WorkspaceExportTargetGrantAndroidTest {
                 val source = commands.createWorkspace("Export target grant $run").workspaceId.also { workspace = it }
                 sourceBodies.forEach { (name, body) -> commands.writeText(source, name, body) }
                 val request = WorkspaceExportRequest(source, WorkspaceStorageArea.FILES, sourceBodies.keys.toList())
-                val delegate = WorkspaceDocumentTreeDestination(context.contentResolver, tree)
+                val delegate = WorkspaceDocumentDestination(context.contentResolver, tree)
                 // No implicit grant travels with the control broadcast. The first create must fail.
                 val denied = runCatching { runInterruptible(Dispatchers.IO) { delegate.create("ungranted.txt") } }.exceptionOrNull()
                 assertNotNull(denied)

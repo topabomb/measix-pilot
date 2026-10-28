@@ -113,7 +113,7 @@ class AssistantManagementService internal constructor(
         } catch (missing: NoSuchElementException) { return Result.failure(missing) }
         catch (rejected: net.weero.measix.pilot.data.datastore.AssistantManagementRejection) { return Result.failure(rejected) }
         catch (rejected: net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException) { return Result.failure(rejected) }
-        val cleanupCompleted = committed.deletion?.let { cleanupPendingDeletion(it) } == true
+        val cleanupCompleted = committed.deletion?.let { cleanupPendingDeletion(it) == null } == true
         return Result.success(AssistantDeletionResult(committed.assistant, cleanupPending = !cleanupCompleted))
     }
 
@@ -147,18 +147,18 @@ class AssistantManagementService internal constructor(
     internal suspend fun performPendingDeletionCleanupDuringRecovery() {
         val pending = settingsStore.userSettings.value.pendingAssistantDeletions
         pending.forEach { tombstone ->
-            if (!cleanupPendingDeletion(tombstone)) {
-                throw PendingAssistantCleanupException(tombstone.assistantId)
+            cleanupPendingDeletion(tombstone)?.let { failure ->
+                throw PendingAssistantCleanupException(tombstone.assistantId, failure)
             }
         }
     }
 
-    private suspend fun cleanupPendingDeletion(tombstone: PendingAssistantDeletion): Boolean {
+    private suspend fun cleanupPendingDeletion(tombstone: PendingAssistantDeletion): Throwable? {
         val latestSettings = settingsStore.userSettings.value
         if (latestSettings.assistants.any { it.id == tombstone.assistantId }) {
             // 备份恢复或其他显式恢复重新带回了同 ID Assistant：旧 tombstone 不得删除新数据。
             removePendingDeletion(tombstone.assistantId)
-            return true
+            return null
         }
 
         val failure = try {
@@ -190,10 +190,10 @@ class AssistantManagementService internal constructor(
         }
         if (failure != null) {
             Log.e(TAG, "Pending cleanup failed for ${tombstone.assistantId}", failure)
-            return false
+            return failure
         }
         removePendingDeletion(tombstone.assistantId)
-        return true
+        return null
     }
 
     private suspend fun removePendingDeletion(assistantId: ConfigurationReference) {
@@ -208,8 +208,8 @@ class AssistantManagementService internal constructor(
 
 }
 
-class PendingAssistantCleanupException(assistantId: ConfigurationReference) :
-    IllegalStateException("Pending assistant cleanup did not converge: $assistantId")
+class PendingAssistantCleanupException(assistantId: ConfigurationReference, cause: Throwable) :
+    IllegalStateException("Pending assistant cleanup did not converge: $assistantId", cause)
 
 data class AssistantDeletionResult(
     val assistant: Assistant,

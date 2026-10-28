@@ -57,7 +57,7 @@ class AssistantBackgroundServiceTest {
     @Test
     fun `settings failure compensates and exposes cleanup status`() = runTest {
         val env = Env()
-        coEvery { env.store.updateAssistantPreferenceReferences(any(), any(), any(), any(), any(), any()) } throws IllegalStateException("datastore failed")
+        coEvery { env.store.updateAssistantPreferenceReferences(any(), any(), any(), any(), any(), any()) } throws IllegalStateException("datastore failed", java.io.IOException("disk full"))
         coEvery { env.store.discardUnpublished(env.owned) } returns ArtifactDeleteResult.Failed(
             env.owned.entity.id,
             "payload_delete_failed",
@@ -67,6 +67,9 @@ class AssistantBackgroundServiceTest {
 
         assertEquals("settings_write_failed", result.reason)
         assertTrue(result.cleanupPending)
+        assertTrue(result.detail.orEmpty().contains("IllegalStateException: datastore failed"))
+        assertTrue(result.detail.orEmpty().contains("Caused by: IOException: disk full"))
+        assertTrue(result.detail.orEmpty().contains("payload_delete_failed"))
         env.close()
     }
 
@@ -101,6 +104,7 @@ class AssistantBackgroundServiceTest {
         val result = env.service.replaceUserSelectedBackground(AssistantBackgroundTarget.Definition(env.assistant.id as ConfigurationReference.User), image)
 
         assertEquals("background_copy_failed", result.reason)
+        assertTrue(result.detail.orEmpty().contains("IllegalStateException: unsafe"))
         coVerify(exactly = 0) { env.store.createFromBytes(any(), any(), any(), any(), any(), any()) }
         env.close()
     }

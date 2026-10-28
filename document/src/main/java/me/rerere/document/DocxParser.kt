@@ -19,54 +19,46 @@ private data class ParagraphProperties(
 
 object DocxParser {
     fun parse(file: File): String {
-        return try {
-            file.inputStream().use { fileInputStream ->
-                ZipInputStream(fileInputStream).use { zipStream ->
-                    var entry = zipStream.nextEntry
-                    while (entry != null) {
-                        if (entry.name == "word/document.xml") {
-                            return parseDocumentXml(zipStream)
-                        }
-                        entry = zipStream.nextEntry
+        return file.inputStream().use { fileInputStream ->
+            ZipInputStream(fileInputStream).use { zipStream ->
+                var entry = zipStream.nextEntry
+                while (entry != null) {
+                    if (entry.name == "word/document.xml") {
+                        return parseDocumentXml(zipStream)
                     }
-                    "Unable to find document content in DOCX file"
+                    entry = zipStream.nextEntry
                 }
+                throw java.io.IOException("DOCX is missing word/document.xml")
             }
-        } catch (e: Exception) {
-            "Error parsing DOCX file: ${e.message}"
         }
     }
 
     private fun parseDocumentXml(inputStream: InputStream): String {
-        return try {
-            val factory = XmlPullParserFactory.newInstance()
-            factory.isNamespaceAware = true
-            val parser = factory.newPullParser()
-            parser.setInput(inputStream, "UTF-8")
+        val factory = XmlPullParserFactory.newInstance()
+        factory.isNamespaceAware = true
+        val parser = factory.newPullParser()
+        parser.setInput(inputStream, "UTF-8")
 
-            val result = StringBuilder()
-            var inBody = false
+        val result = StringBuilder()
+        var inBody = false
 
-            while (parser.eventType != XmlPullParser.END_DOCUMENT) {
-                when (parser.eventType) {
-                    XmlPullParser.START_TAG -> {
-                        when (parser.name) {
-                            "body" -> inBody = true
-                            "p" -> if (inBody) processParagraph(parser, result)
-                            "tbl" -> if (inBody) processTable(parser, result)
-                        }
-                    }
-                    XmlPullParser.END_TAG -> {
-                        if (parser.name == "body") inBody = false
+        while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+            when (parser.eventType) {
+                XmlPullParser.START_TAG -> {
+                    when (parser.name) {
+                        "body" -> inBody = true
+                        "p" -> if (inBody) processParagraph(parser, result)
+                        "tbl" -> if (inBody) processTable(parser, result)
                     }
                 }
-                parser.next()
+                XmlPullParser.END_TAG -> {
+                    if (parser.name == "body") inBody = false
+                }
             }
-
-            result.toString().trim()
-        } catch (e: Exception) {
-            "Error parsing document XML: ${e.message}"
+            parser.next()
         }
+
+        return result.toString().trim()
     }
 
     private fun processParagraph(parser: XmlPullParser, result: StringBuilder) {

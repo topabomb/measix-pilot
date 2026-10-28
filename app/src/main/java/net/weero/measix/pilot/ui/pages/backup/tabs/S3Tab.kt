@@ -82,10 +82,10 @@ fun S3Tab(
     val backupItemsState by vm.s3BackupItems.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
-    var showBackupFiles by remember { mutableStateOf(false) }
+    var showBackupFiles by remember(s3Config) { mutableStateOf(false) }
     var restoringItemId by remember { mutableStateOf<String?>(null) }
     var isBackingUp by remember { mutableStateOf(false) }
-    var pendingS3Restore by remember { mutableStateOf<S3BackupItem?>(null) }
+    var pendingS3Restore by remember(s3Config) { mutableStateOf<S3BackupItem?>(null) }
     val connectionSuccess = stringResource(R.string.backup_page_connection_success)
     val connectionFailedFmt = stringResource(R.string.backup_page_connection_failed)
     val backupSuccess = stringResource(R.string.backup_page_backup_success)

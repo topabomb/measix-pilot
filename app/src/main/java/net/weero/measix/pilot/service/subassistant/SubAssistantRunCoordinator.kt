@@ -90,8 +90,6 @@ import net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext
 import net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolveResult
 import net.weero.measix.pilot.data.ai.attachments.AttachmentResolver
-import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.files.AttachmentCloner
 import net.weero.measix.pilot.data.files.ArtifactStore
@@ -115,7 +113,6 @@ import kotlin.uuid.Uuid
 private const val TAG = "SubAssistantRunCoordinator"
 private const val PREVIEW_THROTTLE_MS = 100L
 private const val MAX_SUB_ASSISTANT_INTERACTIONS = 16
-private const val FINALIZATION_TIMEOUT_MS = 5_000L
 
 /** Target Generation 运行结果（最终消息 + 唯一终态语义）。 */
 private data class TargetGenerationResult(
@@ -137,7 +134,6 @@ class SubAssistantRunCoordinator internal constructor(
     private val runtimeRegistry: ConversationRuntimeRegistry,
     private val commandCoordinator: ConversationCommandCoordinator,
     private val toolSetFactory: TurnToolSetFactory,
-    private val settingsStore: SettingsStore,
     private val memoryService: MemoryService,
     private val configurations: net.weero.measix.pilot.service.ConfigurationQueryService,
     private val modelExecutions: net.weero.measix.pilot.service.ModelExecutionService,
@@ -160,14 +156,11 @@ class SubAssistantRunCoordinator internal constructor(
     /** preflight 产物：放行（含 lease）或拒绝（含结果 parts）。 */
     private sealed interface Preflight {
         data class Ready(
-            val settings: Settings,
             val runSpec: net.weero.measix.pilot.data.ai.subassistant.SubAssistantRunSpec,
             val target: Assistant,
-            val model: me.rerere.ai.provider.Model,
             val processedTask: String,
             val lineageDecision: LineageDecision,
             val runId: String,
-            val runKey: SubAssistantRunKey,
             val lease: SubAssistantRunGate.LeaseHandle,
         ) : Preflight
 
@@ -183,7 +176,6 @@ class SubAssistantRunCoordinator internal constructor(
         execContext: ToolExecutionContext,
     ): Preflight {
         val inputs = modelExecutions.read(realmAccess)
-        val settings = inputs.userSettings
         val configuration = inputs.configuration
         val targetAssistant = configuration.assistants[targetAssistantId]
         val callerAssistant = configuration.assistants[callerAssistantId]
@@ -302,14 +294,11 @@ class SubAssistantRunCoordinator internal constructor(
         }
 
         return Preflight.Ready(
-            settings = settings,
             runSpec = runSpec,
             target = target,
-            model = runSpec.model,
             processedTask = processedTask,
             lineageDecision = lineageDecision,
             runId = runId,
-            runKey = runKey,
             lease = lease,
         )
     }
@@ -365,7 +354,7 @@ class SubAssistantRunCoordinator internal constructor(
                     }
 
                     is LineageDecision.ReuseChild -> {
-                        val taskNodeId = reuseChild(target, preflight.lineageDecision.childConversationId, userParts)
+                        val taskNodeId = reuseChild(preflight.lineageDecision.childConversationId, userParts)
                         Materialized.Ready(
                             preflight.lineageDecision.childConversationId,
                             taskNodeId,
@@ -471,7 +460,6 @@ class SubAssistantRunCoordinator internal constructor(
         if (preflight is Preflight.Blocked) return preflight.parts
         val ready = preflight as Preflight.Ready
         val target = ready.target
-        val model = ready.model
 
         var childConversationId: Uuid? = null
         var childTaskNodeId: Uuid? = null
@@ -874,7 +862,6 @@ class SubAssistantRunCoordinator internal constructor(
     }
 
     private suspend fun reuseChild(
-        target: Assistant,
         childConversationId: Uuid,
         userParts: List<UIMessagePart>,
     ): Uuid {

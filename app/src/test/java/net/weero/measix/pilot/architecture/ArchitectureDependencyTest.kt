@@ -13,6 +13,11 @@ import org.junit.Test
  */
 class ArchitectureDependencyTest {
     @Test
+    fun `application dependencies cannot bypass constructor injection through service locators`() {
+        listOf("getKoin()", "KoinJavaComponent", "GlobalContext").forEach(::assertNoHits)
+    }
+
+    @Test
     fun `provider settings UI never reaches provider SDK or model registry directly`() {
         val settingUi = sourcesUnder("ui/pages/setting") +
             File(architectureSourceRoot, "ui/components/ai/ProviderBalanceText.kt")

@@ -22,7 +22,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,7 +33,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
 import kotlinx.datetime.toJavaLocalDateTime
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
@@ -75,15 +73,7 @@ fun ColumnScope.ChatMessageActionButtons(
 ) {
     val context = LocalContext.current
     val settings = LocalSettings.current
-    var isPendingDelete by remember { mutableStateOf(false) }
     var showRegenerateConfirm by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isPendingDelete) {
-        if (isPendingDelete) {
-            delay(3000) // 3秒后自动取消
-            isPendingDelete = false
-        }
-    }
 
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),

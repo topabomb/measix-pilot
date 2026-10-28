@@ -1,6 +1,7 @@
 package me.rerere.search
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -9,6 +10,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import me.rerere.common.http.readResponse
 import me.rerere.ai.core.InputSchema
 import me.rerere.search.SearchResult.SearchResultItem
 import me.rerere.search.SearchService.Companion.httpClient
@@ -76,35 +78,36 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
 
             Log.i(TAG, "search: $url")
 
-            val response = httpClient.newCall(request).await()
-            if (response.isSuccessful) {
-                val bodyRaw = response.body.string()
-                val searchResponse = runCatching {
-                    json.decodeFromString<SearXNGResponse>(bodyRaw)
-                }.onFailure {
-                    it.printStackTrace()
-                    println("SearXNG response body: $bodyRaw")
-                    error("Failed to decode SearXNG response: ${it.message}")
-                }.getOrThrow()
+            httpClient.newCall(request).readResponse { response ->
+                if (response.isSuccessful) {
+                    val bodyRaw = response.body.string()
+                    val searchResponse = runCatching {
+                        json.decodeFromString<SearXNGResponse>(bodyRaw)
+                    }.onFailure {
+                        it.printStackTrace()
+                        println("SearXNG response body: $bodyRaw")
+                        error("Failed to decode SearXNG response: ${it.message}")
+                    }.getOrThrow()
 
-                // 转换为标准格式，取前 N 个结果
-                val items = searchResponse.results
-                    .take(commonOptions.resultSize)
-                    .map { result ->
-                        SearchResultItem(
-                            title = result.title,
-                            url = result.url,
-                            text = result.content
-                        )
-                    }
+                    // 转换为标准格式，取前 N 个结果
+                    val items = searchResponse.results
+                        .take(commonOptions.resultSize)
+                        .map { result ->
+                            SearchResultItem(
+                                title = result.title,
+                                url = result.url,
+                                text = result.content
+                            )
+                        }
 
-                return@withContext Result.success(SearchResult(items = items))
-            } else {
-                val errorBody = response.body.string()
-                println("SearXNG API error: ${response.code} - $errorBody")
-                throw SearchHttpException("SearXNG", response.code)
+                    SearchResult(items = items)
+                } else {
+                    val errorBody = response.body.string()
+                    println("SearXNG API error: ${response.code} - $errorBody")
+                    throw SearchHttpException("SearXNG", response.code)
+                }
             }
-        }
+        }.onFailure { if (it is CancellationException) throw it }
     }
 
     override suspend fun scrape(

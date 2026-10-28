@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui.permission
+package net.weero.measix.pilot.ui.components.ui.permission
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,7 +41,6 @@ internal fun PermissionRationaleDialog(
     permanentlyDeniedPermissions: List<PermissionInfo>,
     onProceed: () -> Unit,
     onCancel: () -> Unit,
-    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Dialog(

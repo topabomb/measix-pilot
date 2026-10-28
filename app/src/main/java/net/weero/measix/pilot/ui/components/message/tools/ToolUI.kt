@@ -72,7 +72,7 @@ data class ToolUIContext(
     /** Call assembly, approval and execution are deliberately distinct. */
     val phase: ToolLivePhase,
     /** Inline 保持现有 renderer；Archived 只展示 durable 裁剪摘要。 */
-    val outputProjection: ToolOutputProjection = ToolOutputProjection.Inline(tool.output),
+    val outputProjection: ToolOutputProjection = ToolOutputProjection.Inline,
     val conversationId: kotlin.uuid.Uuid? = null,
     val locator: me.rerere.ai.core.ToolCallLocator? = null,
 )
@@ -82,11 +82,10 @@ val LocalToolConversationId = androidx.compose.runtime.staticCompositionLocalOf<
 
 /** Tool Result 的展示投影：完整内联，或已归档为 durable 摘要。 */
 sealed interface ToolOutputProjection {
-    data class Inline(val parts: List<UIMessagePart>) : ToolOutputProjection
+    data object Inline : ToolOutputProjection
     data class Archived(
         val characters: Long,
         val lines: Int,
-        val terminalStatus: String,
     ) : ToolOutputProjection
 }
 

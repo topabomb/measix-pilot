@@ -19,6 +19,8 @@ ConversationPresentation 的有序消息、阶段和预览能力
 `Tool.clientDiagnostic` 是结果检查点保存的脱敏客户端诊断。普通工具详情、归档结果详情和子助手卡片提供
 同一展开/复制入口；`ask_user` 专用交互卡片也披露保存的诊断。入口不依赖 output 或可回放结果是否存在，
 诊断不进入 Provider 请求。
+记忆工具预览的记录查询与删除异常通过 `ErrorDetails` 展示可复制的脱敏诊断，取消继续传播；删除失败保留原记录供用户重试。
+`workspace_shell` 结果没有进程输出字段时使用通用详情，保留领域拒绝的 reason/detail；含进程字段的非零退出结果继续展示命令和 stdout/stderr。
 
 Assistant 消息的 `MessageModelInfo` 在 START 提交时从捕获模型保存，包含配置引用、wire model ID 和显示名称。
 主聊天、子助手、消息详情及导出读取该历史值，不查询当前模型目录重写名称。旧消息缺字段显示未知模型；

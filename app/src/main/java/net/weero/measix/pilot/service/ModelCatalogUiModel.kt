@@ -67,11 +67,6 @@ internal data class ModelCatalogUiModel(
     fun find(id: ConfigurationReference?): ModelChoiceUiModel? = groups.asSequence()
         .flatMap { it.models.asSequence() }.firstOrNull { it.model.id == id }
 
-    fun filterModels(predicate: (Model) -> Boolean): ModelCatalogUiModel = copy(
-        groups = groups.map { it.copy(models = it.models.filter { choice -> predicate(choice.model) }) }
-            .filter { it.models.isNotEmpty() },
-    )
-
     /** Daily pickers expose only actionable choices. The current invalid reference is rendered separately. */
     fun selectableGroups(type: ModelType): List<ModelGroupUiModel> = groups.map { group ->
         group.copy(models = group.models.filter { it.model.type == type && it.canSelect })

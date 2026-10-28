@@ -506,42 +506,15 @@ class ConversationRepository(
             )
         }
 
-        val sourceStatuses = when (operation) {
-            TurnExecutionOperation.START -> error("handled above")
-            TurnExecutionOperation.RECOVER -> listOf(
-                TurnExecutionStatus.RUNNING,
-                TurnExecutionStatus.AWAITING_USER,
-            )
-            TurnExecutionOperation.ADVANCE -> when (execution.status) {
-                TurnExecutionStatus.RUNNING -> listOf(
-                    TurnExecutionStatus.RUNNING,
-                    TurnExecutionStatus.AWAITING_USER,
-                )
-                TurnExecutionStatus.AWAITING_USER -> listOf(
-                    TurnExecutionStatus.RUNNING,
-                    TurnExecutionStatus.AWAITING_USER,
-                )
-                TurnExecutionStatus.COMPLETED,
-                TurnExecutionStatus.CANCELLED,
-                TurnExecutionStatus.FAILED,
-                TurnExecutionStatus.INCOMPLETE,
-                TurnExecutionStatus.INTERRUPTED,
-                -> listOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)
-            }
-        }
-        val changed = if (sourceStatuses.isEmpty()) {
-            0
-        } else {
-            turnExecutionDAO.transition(
-                turnId = execution.turnId,
-                conversationId = execution.conversationId,
-                sourceStatuses = sourceStatuses,
-                targetStatus = execution.status,
-                reason = execution.reason,
-                assistantMessageId = execution.assistantMessageId,
-                updatedAt = execution.updatedAt,
-            )
-        }
+        val changed = turnExecutionDAO.transition(
+            turnId = execution.turnId,
+            conversationId = execution.conversationId,
+            sourceStatuses = RECOVERABLE_TURN_STATUSES,
+            targetStatus = execution.status,
+            reason = execution.reason,
+            assistantMessageId = execution.assistantMessageId,
+            updatedAt = execution.updatedAt,
+        )
         if (changed == 1) return
         val current = turnExecutionDAO.getById(execution.turnId)
         if (current?.status == execution.status &&
@@ -751,12 +724,6 @@ class ConversationRepository(
     /**
      * 获取指定 Master 会话的所有 Child 会话
      */
-    suspend fun getChildConversations(parentConversationId: Uuid): List<Conversation> = database.withTransaction {
-        conversationDAO.getChildConversations(parentConversationId.toString()).map { entity ->
-            conversationEntityToConversation(entity, loadMessageNodes(entity.id))
-        }
-    }
-
     internal suspend fun getChildConversationSnapshots(
         parentConversationId: Uuid,
     ): List<ConversationAggregateSnapshot> = database.withTransaction {

@@ -15,6 +15,30 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class McpOAuthDiscoveryTest {
     @Test
+    fun `IPv6 discovery preserves bracketed authority port and encoded resource path`() = runBlocking {
+        val origin = "https://[2001:db8::1]:9443"
+        val requested = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            requested += request.url.toString()
+            val body = when (request.url.encodedPath) {
+                "/.well-known/oauth-protected-resource/mcp%20api" -> """{"resource":"$origin/mcp%20api","authorization_servers":["$origin/issuer"]}"""
+                "/.well-known/oauth-authorization-server/issuer" -> """{"issuer":"$origin/issuer","authorization_endpoint":"$origin/authorize","token_endpoint":"$origin/token"}"""
+                else -> ""
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(if (body.isEmpty()) 404 else 200).message("fixture").body(body.toResponseBody()).build()
+        }.build()
+        try {
+            val client = McpOAuthClient(http)
+            val metadata = client.discoverProtectedResource("$origin/mcp%20api")!!
+            assertEquals("$origin/token", client.discoverAuthorizationServer(metadata.authorizationServers.single()).tokenEndpoint)
+            assertEquals(listOf("$origin/mcp%20api", "$origin/.well-known/oauth-protected-resource/mcp%20api",
+                "$origin/.well-known/oauth-authorization-server/issuer"), requested)
+        } finally { http.dispatcher.executorService.shutdown(); http.connectionPool.evictAll() }
+    }
+
+    @Test
     fun `only missing metadata permits trying the next discovery endpoint`() = runBlocking {
         for (status in listOf(404, 410, 401, 403, 500, 200)) {
             val requested = java.util.Collections.synchronizedList(mutableListOf<String>())

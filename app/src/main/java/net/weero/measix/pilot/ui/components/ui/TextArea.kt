@@ -40,6 +40,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import net.weero.measix.pilot.ui.components.toast.ToastType
+import kotlinx.coroutines.CancellationException
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,7 +66,6 @@ import net.weero.measix.pilot.ui.modifier.onClick
  * @param readOnly Whether the text field is read-only
  * @param supportedFileTypes Array of MIME types to filter in file picker (default: text files)
  * @param enableFullscreen Whether to enable fullscreen editing mode
- * @param onImportError Callback when file import fails (optional)
  */
 @Composable
 fun TextArea(
@@ -76,8 +78,7 @@ fun TextArea(
     enabled: Boolean = true,
     readOnly: Boolean = false,
     supportedFileTypes: Array<String> = arrayOf("text/*", "application/json"),
-    enableFullscreen: Boolean = true,
-    onImportError: ((String) -> Unit)? = null
+    enableFullscreen: Boolean = true
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -85,12 +86,13 @@ fun TextArea(
     var isFullScreen by remember { mutableStateOf(false) }
 
     val importSuccessText = stringResource(R.string.text_area_import_success)
-    val importFailedText = stringResource(R.string.text_area_import_failed)
+    var importFailure by remember(state) { mutableStateOf<String?>(null) }
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
             scope.launch {
+                importFailure = null
                 try {
                     val content = withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(uri)?.bufferedReader()
@@ -99,13 +101,12 @@ fun TextArea(
                     }
                     state.setTextAndPlaceCursorAtEnd(content)
                     toaster.show(importSuccessText, type = ToastType.Success)
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    val errorMessage = e.message ?: importFailedText
-                    onImportError?.invoke(errorMessage) ?: toaster.show(
-                        message = errorMessage,
-                        type = ToastType.Error
-                    )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    logDiagnosticFailure("TextArea", "Text file import failed", error)
+                    val detail = error.userVisibleDiagnostic()
+                    importFailure = detail
                 }
             }
         }
@@ -116,6 +117,7 @@ fun TextArea(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        importFailure?.let { ErrorNotice(detail = it, onDismiss = { importFailure = null }) }
         // Header with label, fullscreen and import button
         if (label.isNotEmpty()) {
             Row(

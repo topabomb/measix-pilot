@@ -61,6 +61,7 @@ import net.weero.measix.pilot.service.workspace.WorkspaceTerminalReadiness
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalScreenUiModel
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalTabUiModel
 import net.weero.measix.pilot.service.workspace.WorkspaceTerminalViewClient
+import net.weero.measix.pilot.ui.components.ui.ErrorNotice
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.theme.ColorMode
@@ -79,11 +80,13 @@ fun WorkspaceTerminalPage(id: String) {
             stringResource(R.string.workspace_terminal_limit_reached, error.maximum)
         }
         WorkspaceTerminalCommandError.NotReady -> stringResource(R.string.workspace_terminal_not_installed)
-        WorkspaceTerminalCommandError.Unexpected -> stringResource(R.string.workspace_terminal_command_failed)
+        is WorkspaceTerminalCommandError.Unexpected -> stringResource(R.string.workspace_terminal_command_failed)
         null -> null
     }
 
+    val errorDetail = (commandError as? WorkspaceTerminalCommandError.Unexpected)?.detail
     LaunchedEffect(commandError, commandErrorMessage) {
+        if (errorDetail != null) return@LaunchedEffect
         val message = commandErrorMessage ?: return@LaunchedEffect
         toaster.show(message, type = ToastType.Error)
         vm.consumeCommandError()
@@ -106,18 +109,28 @@ fun WorkspaceTerminalPage(id: String) {
             },
         ) { padding ->
             val selection = state.selection
-            key(selection) { WorkspaceTerminalContent(
-                state = state,
-                contentPadding = padding,
-                bindViewport = { tab, view -> selection?.let { vm.bindViewport(it, tab, view) } ?: false },
-                unbindViewport = vm::unbindViewport,
-                writeTerminal = { tab, text -> selection?.let { vm.write(it, tab, text) } },
-                onCreate = { selection?.let(vm::create) },
-                onSelect = { tab -> selection?.let { vm.select(it, tab) } },
-                onClose = { tab -> selection?.let { vm.close(it, tab) } },
-                onRename = { tab, title -> selection?.let { vm.rename(it, tab, title) } },
-                onReorder = { ids -> selection?.let { vm.reorder(it, ids) } },
-            ) }
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+                errorDetail?.let { detail ->
+                    ErrorNotice(
+                        detail = detail,
+                        title = stringResource(R.string.workspace_terminal_command_failed),
+                        onDismiss = vm::consumeCommandError,
+                        modifier = Modifier.padding(8.dp),
+                    )
+                }
+                key(selection) { WorkspaceTerminalContent(
+                    state = state,
+                    contentPadding = PaddingValues(0.dp),
+                    bindViewport = { tab, view -> selection?.let { vm.bindViewport(it, tab, view) } ?: false },
+                    unbindViewport = vm::unbindViewport,
+                    writeTerminal = { tab, text -> selection?.let { vm.write(it, tab, text) } },
+                    onCreate = { selection?.let(vm::create) },
+                    onSelect = { tab -> selection?.let { vm.select(it, tab) } },
+                    onClose = { tab -> selection?.let { vm.close(it, tab) } },
+                    onRename = { tab, title -> selection?.let { vm.rename(it, tab, title) } },
+                    onReorder = { ids -> selection?.let { vm.reorder(it, ids) } },
+                ) }
+            }
         }
     }
 }

@@ -1,7 +1,6 @@
 package me.rerere.tts.provider.providers
 
-import me.rerere.common.http.SseEvent
-import me.rerere.tts.model.AudioFormat
+import okio.Buffer
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -31,37 +30,14 @@ class MiMoTTSProviderTest {
     }
 
     @Test
-    fun emits_single_terminal_chunk_on_done_and_closed() {
-        val processor = MiMoSseProcessor(model = "mimo-v2.5-tts", voice = "mimo_default")
-        val encoded = Base64.getEncoder().encodeToString(byteArrayOf(9, 8, 7))
-        val audioData = """{"choices":[{"delta":{"audio":{"data":"$encoded"}}}]}"""
-
-        val first = processor.process(SseEvent.Event(id = null, type = null, data = audioData))
-        val done = processor.process(SseEvent.Event(id = null, type = null, data = "[DONE]"))
-        val terminal = processor.process(SseEvent.Closed)
-
-        assertNotNull(first)
-        assertEquals(AudioFormat.PCM, first?.format)
-        assertFalse(first?.isLast ?: true)
-        assertNull(done)
-        assertNotNull(terminal)
-        assertTrue(terminal?.isLast ?: false)
+    fun complete_audio_preserves_multiline_sse_framing() {
+        val wire = ": comment\r\n\r\ndata: {\r\ndata: \"choices\":[{\"delta\":{\"audio\":{\"data\":\"CQgH\"}}}]}\r\n\r\ndata: [DONE]\r\n\r\n"
+        assertArrayEquals(byteArrayOf(9, 8, 7), readMiMoAudio(Buffer().writeUtf8(wire)))
     }
 
-    @Test
-    fun throws_when_stream_closed_without_audio() {
-        val processor = MiMoSseProcessor(model = "mimo-v2.5-tts", voice = "mimo_default")
-
-        var thrown: Throwable? = null
-        try {
-            processor.process(SseEvent.Event(id = null, type = null, data = "[DONE]"))
-            processor.process(SseEvent.Closed)
-        } catch (t: Throwable) {
-            thrown = t
-        }
-
-        assertNotNull(thrown)
-        assertTrue(thrown is IllegalStateException)
+    @Test(expected = IllegalStateException::class)
+    fun throws_when_stream_completes_without_audio() {
+        readMiMoAudio(Buffer().writeUtf8("data: [DONE]\n\n"))
     }
 
     @Test

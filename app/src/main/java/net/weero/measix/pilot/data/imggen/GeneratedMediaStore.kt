@@ -46,6 +46,7 @@ data class GeneratedMediaCleanupResult(
     val deleted: Int,
     val cleanupPending: Int,
     val failed: Int,
+    val failures: List<Throwable> = emptyList(),
 )
 
 sealed interface GeneratedMediaDeleteResult {
@@ -222,11 +223,6 @@ class GeneratedMediaStore(
         return file
     }
 
-    suspend fun delete(scope: ConfigurationScope, id: Int): Boolean = when (deleteDetailed(scope, id)) {
-        GeneratedMediaDeleteResult.Completed, is GeneratedMediaDeleteResult.CleanupPending -> true
-        GeneratedMediaDeleteResult.AlreadyAbsent, is GeneratedMediaDeleteResult.Failed -> false
-    }
-
     suspend fun deleteDetailed(scope: ConfigurationScope, id: Int): GeneratedMediaDeleteResult = withPersistLock {
         withContext(Dispatchers.IO) {
             val entity = genMediaRepository.getMediaById(id)?.takeIf { it.scope == scope }
@@ -246,15 +242,16 @@ class GeneratedMediaStore(
             var deleted = 0
             var cleanupPending = 0
             var failed = 0
+            val failures = mutableListOf<Throwable>()
             entities.forEach { entity ->
-                when (deleteEntityLocked(entity)) {
+                when (val result = deleteEntityLocked(entity)) {
                     GeneratedMediaDeleteResult.Completed -> deleted++
-                    is GeneratedMediaDeleteResult.CleanupPending -> cleanupPending++
-                    is GeneratedMediaDeleteResult.Failed -> failed++
+                    is GeneratedMediaDeleteResult.CleanupPending -> { cleanupPending++; failures += result.cause }
+                    is GeneratedMediaDeleteResult.Failed -> { failed++; failures += result.cause }
                     GeneratedMediaDeleteResult.AlreadyAbsent -> Unit
                 }
             }
-            GeneratedMediaCleanupResult(deleted, cleanupPending, failed)
+            GeneratedMediaCleanupResult(deleted, cleanupPending, failed, failures)
         }
     }
 

@@ -2,6 +2,8 @@ package net.weero.measix.pilot.service
 
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
+import net.weero.measix.pilot.utils.logDiagnosticFailure
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Job
@@ -26,6 +28,7 @@ data class FileCleanupResult(
     val cleanupPending: Int,
     val skippedInProgress: Int,
     val failed: Int,
+    val detail: String? = null,
 )
 
 /** Per-item receipts are published immediately, so cancelling a batch does not erase earlier outcomes. */
@@ -307,6 +310,10 @@ class FileManagementApplicationService internal constructor(
                         cleanupPending = result.cleanupPending,
                         skippedInProgress = result.skippedInProgress,
                         failed = result.failed,
+                        detail = result.failures.takeIf { it.isNotEmpty() }?.joinToString("\n\n") { error ->
+                            logDiagnosticFailure("FileCleanup", "File cleanup incomplete", error)
+                            error.userVisibleDiagnostic()
+                        },
                     )
                 }
                 FileCleanupCategory.GENERATED_IMAGES -> generatedMediaStore.deleteCreatedBefore(selection.access.scope, cutoff).let { result ->
@@ -315,6 +322,10 @@ class FileManagementApplicationService internal constructor(
                         cleanupPending = result.cleanupPending,
                         skippedInProgress = 0,
                         failed = result.failed,
+                        detail = result.failures.takeIf { it.isNotEmpty() }?.joinToString("\n\n") { error ->
+                            logDiagnosticFailure("FileCleanup", "File cleanup incomplete", error)
+                            error.userVisibleDiagnostic()
+                        },
                     )
                 }
             }
@@ -325,13 +336,6 @@ class FileManagementApplicationService internal constructor(
         recoveryGate.awaitReady()
         return sessions.withSelectedRealmSelection(key.selection) {
             artifactStore.deleteUserRequested(key.selection.access.scope, key.artifactId).toOutcome()
-        }
-    }
-
-    suspend fun deleteGenerated(key: ManagedFileKey.Generated): Boolean {
-        recoveryGate.awaitReady()
-        return sessions.withSelectedRealmSelection(key.selection) {
-            generatedMediaStore.delete(key.selection.access.scope, key.mediaId)
         }
     }
 

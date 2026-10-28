@@ -50,7 +50,7 @@ class RecoveryCostDecouplingTest {
 
         coVerify(exactly = 1) { repo.getNonTerminalTurnExecutionsWithScope() }
         // 健康库（无非终态 turn）：零会话加载、零恢复树写入
-        coVerify(exactly = 0) { repo.getConversationById(any()) }
+        coVerify(exactly = 0) { repo.getConversationSnapshotById(any()) }
         // 恢复入口取消全部运行中资源（lease + pending ask_user）
         coVerify(exactly = 1) { runGate.cancelAllRuns("app_restarted") }
         coVerify(exactly = 1) { runGate.cancelPendingInteractions() }

@@ -507,7 +507,7 @@ class ConversationTurnService internal constructor(
                             reportFailure(error)
                         } finally {
                             submission?.close()
-                            runtime.releaseTurnWorker(turnId, requestWorker)
+                            releaseRequestWorker(runtime, turnId, requestWorker)
                         }
                     }
                 }
@@ -811,7 +811,7 @@ class ConversationTurnService internal constructor(
                         }
                         if (committed) item.submission?.close()
                     } finally {
-                        runtime.releaseTurnWorker(turnId, requestWorker)
+                        releaseRequestWorker(runtime, turnId, requestWorker)
                     }
                 }
             }
@@ -1056,7 +1056,7 @@ class ConversationTurnService internal constructor(
                                 } catch (cancelled: CancellationException) {
                                     result = InputQueueRequestOutcome.CANCELLED
                                     throw cancelled
-                                } finally { withContext(NonCancellable) { runtime.releaseTurnWorker(owner.turnId, worker) } }
+                                } finally { withContext(NonCancellable) { releaseRequestWorker(runtime, owner.turnId, worker) } }
                             }
                             resumeJob.invokeOnCompletion { cause ->
                                 if (installed) notifyQueueRequestFinished(runtime, resumeJob, queueEpoch,
@@ -1071,6 +1071,19 @@ class ConversationTurnService internal constructor(
                     )
                 }
             }
+        }
+    }
+
+    /** Cleanup failure keeps the Runtime owner retryable and must remain visible to its conversation. */
+    private suspend fun releaseRequestWorker(runtime: ConversationRuntime, turnId: Uuid, worker: Job) {
+        try {
+            runtime.releaseTurnWorker(turnId, worker)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            logDiagnosticFailure(TAG, "Conversation request resource cleanup failed", error)
+            chatErrorStore.add(error, runtime.id, context.getString(R.string.error_title_operation))
+            throw error
         }
     }
 

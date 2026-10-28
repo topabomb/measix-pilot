@@ -2154,8 +2154,8 @@
   <string name="webdav_no_current">Текущий WebDAV не выбран. Добавьте или выберите сервер.</string>
   <string name="webdav_current">Используется сейчас</string>
   <string name="webdav_delete_connection">Удалить %1$s? Файлы на сервере сохранятся. Настройки, использующие этот сервер, станут недоступны.</string>
-  <string name="webdav_connection_name">Название сервера</string>
-  <string name="webdav_root_url">Корневой URL WebDAV</string>
+  <string name="webdav_connection_name">Название (необязательно)</string>
+  <string name="webdav_root_url">Адрес сервера WebDAV</string>
   <string name="webdav_save">Сохранить</string>
   <string name="webdav_file_manager">Файловый менеджер WebDAV</string>
   <string name="webdav_switch_server">Сменить сервер</string>
@@ -2252,4 +2252,9 @@
   <string name="qr_camera_permission">Разрешите доступ к камере для сканирования QR-кода. Если разрешение заблокировано, включите его в настройках.</string>
   <string name="qr_scan_failed">Не удалось отсканировать код камерой. Проверьте подробности и повторите попытку.</string>
   <string name="file_preview_resources_failed">Не удалось загрузить некоторые ресурсы</string>
+  <string name="webdav_address_help">Введите полный адрес WebDAV, предоставленный сервисом, а не адрес MCP или путь к папке.</string>
+  <string name="webdav_invalid_url">Введите полный адрес WebDAV, начинающийся с http:// или https://, без параметров запроса и фрагмента.</string>
+  <string name="webdav_invalid_username">Имя пользователя не должно содержать двоеточие или перенос строки.</string>
+  <string name="webdav_name_help">Оставьте пустым, чтобы использовать имя хоста сервера.</string>
+  <string name="webdav_credentials_help">Для анонимного доступа оставьте поля пустыми. Иначе укажите учётные данные WebDAV, предоставленные сервисом.</string>
 </resources>

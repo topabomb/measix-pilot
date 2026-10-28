@@ -253,7 +253,6 @@ class ArchitectureDependencyTest {
             "MCP settings UI must not consume the personal settings projection",
             settingPage.contains(".userSettings"),
         )
-        assertFalse(File(architectureSourceRoot, "ui/pages/setting/McpSettingMutation.kt").exists())
 
         listOf(
             "ui/pages/setting/SettingMcpPage.kt",

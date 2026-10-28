@@ -2154,8 +2154,8 @@
   <string name="webdav_no_current">使用中の WebDAV がありません。サーバーを追加または選択してください。</string>
   <string name="webdav_current">使用中</string>
   <string name="webdav_delete_connection">%1$s を削除しますか？サーバー上のファイルは保持されます。このサーバーを使う設定は利用できなくなります。</string>
-  <string name="webdav_connection_name">サーバー名</string>
-  <string name="webdav_root_url">WebDAV ルート URL</string>
+  <string name="webdav_connection_name">表示名（任意）</string>
+  <string name="webdav_root_url">WebDAV サーバーアドレス</string>
   <string name="webdav_save">保存</string>
   <string name="webdav_file_manager">WebDAV ファイルマネージャー</string>
   <string name="webdav_switch_server">サーバーを切り替え</string>
@@ -2252,4 +2252,9 @@
   <string name="qr_camera_permission">QR コードを読み取るにはカメラへのアクセスを許可してください。権限がブロックされている場合は設定で有効にしてください。</string>
   <string name="qr_scan_failed">カメラでコードを読み取れませんでした。詳細を確認して再試行してください。</string>
   <string name="file_preview_resources_failed">一部のリソースを読み込めませんでした</string>
+  <string name="webdav_address_help">サービスから提供された完全な WebDAV アドレスを入力してください。MCP アドレスやフォルダーパスではありません。</string>
+  <string name="webdav_invalid_url">http:// または https:// で始まる完全な WebDAV アドレスを、クエリやフラグメントなしで入力してください。</string>
+  <string name="webdav_invalid_username">ユーザー名にコロンや改行は使用できません。</string>
+  <string name="webdav_name_help">空欄の場合はサーバーのホスト名を使用します。</string>
+  <string name="webdav_credentials_help">匿名アクセスでは空欄にできます。認証が必要な場合は、サービスから提供された WebDAV の認証情報を入力してください。</string>
 </resources>

@@ -129,7 +129,13 @@ Child clone 创建的历史附件由 `SubAssistantRunCoordinator` 持有到关�
 再发布该批 `OwnedArtifact`。关联失败才补偿未关联 Child；关联成功后的资源发布失败保留 Child 和已有引用。
 如果 disclosure/MCP/tool/context 准备在 Child `StartTurn` 前失败，真实 USER 与 link 保留，只提交 Caller 失败 metadata，绝不伪造 Child START；
 已 START 的取消/失败则必须携带原 `childTurnId`，`TurnFinalizer` 只终止身份匹配的活动执行，迟到清理不能终结更新的 Child Turn。
-finally 同样只以原 `childTurnId + runJob` 请求释放 active request 与 context；同 turn 的 stream 尚未关闭时保留 owner，不以 Job 已取消或显示 phase 代替终态提交。终态失败继续保留事实与原 owner，成功清空 stream 后才可释放。该批资源不交给通用 Tool Result lease 作用域。
+Child 获取模型或 MCP 资源前，`SubAssistantRunCoordinator` 将固定 Runtime、`childTurnId + runJob` 的
+`TurnFinalizer.ChildExecution` 登记到原父 `ActiveTurnSession`；父身份来自实际工具 locator 对应的 Turn owner。
+finally 取消并等待该 Child worker，再请求释放其执行资源。清理成功立即移除父责任；失败保留原 Child 和父 owner，
+通过基础设施异常中止父生成，不转成可继续采样的普通工具失败。RunGate 结束不代表资源已清理。
+同 turn 的 stream 尚未关闭时只保留责任，原终态提交异常继续传播；取消仍以取消传播，额外清理错误保留诊断。
+显式父停止在父会话锁外先以固定 Child 身份完成停止和资源释放，再提交父终态；迟到清理不取消替代 worker。
+父的交互继续移交同一组责任，失败重试不重放 Provider 或新建 Child。该批资源不交给通用 Tool Result lease 作用域。
 
 ### 会话分支关联（Lineage）
 

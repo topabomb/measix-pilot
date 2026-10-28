@@ -37,10 +37,11 @@ Gradle daemon 的堆配置不影响测试进程。超时报告须检查 suppress
 | 工具压缩与缓存 | `ToolOutputCompactionPlannerTest`、`ToolOutputProtocolTest`、`ClaudeProviderPromptCacheTest` | 只处理本次成功请求可见且已消费的历史结果；三种保留策略、保护窗口和净回收阈值由 `ContextBudget` 约束，缓存稳定不能阻止必要压缩 |
 | 工具交互与子助手 | `ToolApprovalReducerTest`、`ToolCallRuntimeTest`、`TurnInteractionContinuationIntegrationTest`、`SubAssistantRunCoordinatorTest` | Mock Runner 委托只证明入口；continuation、Parent/Child 终态与正式页面需观察真实边界 |
 | Settings 与启动恢复 | `SettingsStartupTest`、`ApplicationRecoveryCoordinatorTest` | 真实 DataStore 文件/migration 的保全重试、observer 归属，以及恢复顺序、门禁、取消与 retry |
-| WebDAV 配置与传输 | `WebDavSettingsTest`、`WebDavSettingsMigrationTest`、`WebDavClientTest`、`WebDavConnectionRecoveryTest`、`WebDavApplicationServiceTest`、`WebDavTransferServiceTest`、`ArtifactStreamingTest` | 旧凭据及备份偏好迁移保全、个人引用及备份 round-trip、标准 DAV HTTP/207、根目录隔离、任意附件流式传输、条件写、池连接关闭后的读取恢复、正文断流不重放、写入 503 不重发、资源交接和取消；本机服务测试不代替真实服务器、大文件与设备界面验收 |
+| WebDAV 配置与传输 | `WebDavSettingsTest`、`WebDavSettingsMigrationTest`、`WebDavSettingsVMTest`、`WebDavCredentialsTest`、`WebDavClientTest`、`WebDavConnectionRecoveryTest`、`WebDavApplicationServiceTest`、`WebDavTransferServiceTest`、`ArtifactStreamingTest` | 旧凭据及备份偏好迁移保全、个人引用及备份 round-trip、匿名与 Basic 实际请求头、同域配置读取失败的显式重试、标准 DAV HTTP/207、根目录隔离、任意附件流式传输、条件写、池连接关闭后的读取恢复、正文断流不重放、写入 503 不重发、资源交接和取消；本机服务测试不代替真实服务器、大文件与设备界面验收 |
 | WebDAV 企业备份 | `EnterpriseWebDavServiceTest`、`ConfigurationApplicationServiceTest` | 显式资源选择与按域持久化、企业 Bearer/条件上传、只读提前拒绝、绑定变化禁止恢复发布且清理临时文件 |
-| WebDAV 原生界面 | `WebDavPageAndroidTest` | 企业受管设置及备份的大字体布局、未下发资源说明、显式备份选择、矮窗口大字体下浏览器改选不改当前配置、原资源被删除后可选择剩余授权资源；保存截图供人工检查 |
+| WebDAV 原生界面 | `WebDavPageAndroidTest` | 个人连接完整地址的字段校验、可省略名称及匿名凭据、不强制联网测试、连接失败后保留输入与重试；企业受管设置及备份的大字体布局、未下发资源说明、显式备份选择、矮窗口大字体下浏览器改选不改当前配置、原资源被删除后可选择剩余授权资源；保存截图供人工检查 |
 | 企业 Session、退出与页面恢复 | `RealmAccessTest`、`EnterpriseExitServiceTest`、`PlatformSessionNetworkTest`、`RemoteWorkspaceServiceTest`、`ConversationQueryServiceTest`、`ChatPageLifecycleTest` | 旧到期事件、撤权、迟到结果和重试不误用新 Session；读失败保留原异常与输入，真实撤权关闭原 lease |
+| 企业聊天入口与抽屉 | `ConversationPageAccessTest`、`ChatDrawerTargetTest`、`ChatNavigationAndroidTest`、`EnterprisePageAndroidTest`、`ChatScrollEntryAndroidTest` | 当前聊天助手独立于默认助手；新建清理旧返回栈，异步返回复验原选择及来源路由，同助手加载保留文件夹筛选；关闭抽屉后不覆盖新页面，设置入口不依赖聊天授权 |
 | Starter 与平台合同 | `StarterOpeningSelectionTest`、`StarterOpeningConcurrencyTest`、`ConversationPageAccessTest`；`PlatformContractSourceTest`、`PlatformCoreStarterContractTest`、`PlatformWireTest`、`EnterpriseStarterAppliedStoreTest` | 完整定义比较、原发布身份、选择 CAS、精确补偿、v4/v5 消费、ETag/304 与 Applied 重开 |
 | Android 上下文与首发 | `EnterpriseStarterPersistenceAndroidTest`、`StarterSubmissionOwnershipAndroidTest`；`ChatContextFlowAndroidTest`、`ChatDocumentContextFlowAndroidTest`、`ConversationContextAndroidTest`、`StarterEntryFlowAndroidTest`、`StarterV5ChatFlowAndroidTest` | Keystore/AtomicFile、Room、附件归还、取消和页面重开；分别标明 Mock 的配置、网络与 Provider 边界 |
 
@@ -151,6 +152,7 @@ SDK 或宿主网络变化后重新验证，不额外重复传入 `-netsim-args -
 | 场景 | 启用参数与前提 | 证据边界 |
 | --- | --- | --- |
 | Starter v5 隔离 Mock | `starterV5MockLive=true`；专用且从未绑定企业的设备 | 实际 UI、Applied、Session、Room 与 adapter，HTTP 为 Mock |
+| 空账号企业聊天入口 | `EnterpriseEmptyAccountNavigationAndroidTest`、`enterpriseEmptyAccountLive=true`；专用且从未绑定企业、无自有 Provider 配置的 Debug 设备 | 未配置个人 Provider、无企业默认助手下接入后立即返回、Starter 首发、聊天内外新建及抽屉历史；真实应用与 Room，企业 HTTP 为隔离 Mock，不证明真实 Core/Provider |
 | Starter v5 Core | `starterV5CoreLive=true` 与 `coreStarterInput` | 真实 Snapshot/Starter/临时接入资料，输入读取后删除；区分确定性 adapter 和实际 Provider |
 | 已接入平台上下文 | `platformContextLive=true`；可选 `platformContextModelSwitch=true` | 记录发布身份、实际版本与 Provider 结果；v4 不证明 v5 opening |
 | 远程文件 | `remoteWorkspaceInput`；未接入专用设备和独立 Core/Agent Space | 配置文件与主机配合步骤见下文，普通门禁无输入时跳过 |

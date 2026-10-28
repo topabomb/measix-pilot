@@ -89,6 +89,7 @@ class TurnRunner(
 
     internal suspend fun run(inputs: TurnRunInputs): TurnRunResult = withContext(Dispatchers.IO) {
         val state = TurnRunState(inputs, context)
+        var executionFailure: Throwable? = null
         val result = try {
             inputs.onAssistantObserved(state.messages.last())
             runLoop(state)
@@ -103,6 +104,7 @@ class TurnRunner(
             state.unpublishedResources.discardAll()?.let { error.addSuppressed(it) }
             throw error
         } catch (error: Throwable) {
+            executionFailure = error
             logDiagnosticFailure(TAG, "Turn execution failed", error)
             TurnOutcome.fromFailure(error)
         }
@@ -129,7 +131,14 @@ class TurnRunner(
         state.unpublishedResources.discardAll()?.let { cleanupFailure ->
             commitFailure = commitFailure?.apply { addSuppressed(cleanupFailure) } ?: cleanupFailure
         }
-        commitFailure?.let { throw it }
+        commitFailure?.let { failure ->
+            if (executionFailure != null && executionFailure !== failure) {
+                throw java.io.IOException("Turn finalization failed after execution failure", failure).apply {
+                    addSuppressed(executionFailure)
+                }
+            }
+            throw failure
+        }
         result
     }
 

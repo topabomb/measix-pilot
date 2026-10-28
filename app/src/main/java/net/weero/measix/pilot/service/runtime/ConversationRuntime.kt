@@ -2,6 +2,7 @@ package net.weero.measix.pilot.service.runtime
 import net.weero.measix.pilot.data.ai.mcp.McpExecutionLease
 
 import net.weero.measix.pilot.service.turn.TurnContext
+import net.weero.measix.pilot.service.turn.TurnFinalizer
 
 import me.rerere.common.configuration.ConfigurationReference
 import android.util.Log
@@ -313,6 +314,7 @@ class ConversationRuntime internal constructor(
         turnContext: TurnContext? = null,
         var modelExecutionLease: ModelExecutionLease? = null,
         var mcpExecutionLease: McpExecutionLease? = null,
+        val childExecutions: MutableSet<TurnFinalizer.ChildExecution> = linkedSetOf(),
     ) {
         var releaseStarted = false
         private val _phase = AtomicReference(phase)
@@ -395,7 +397,9 @@ class ConversationRuntime internal constructor(
      */
     private val ownedRequests = ConcurrentHashMap<Uuid, ActiveTurnSession>()
     internal val hasExecutionLeases: Boolean
-        @Synchronized get() = ownedRequests.values.any { it.modelExecutionLease != null || it.mcpExecutionLease != null }
+        @Synchronized get() = ownedRequests.values.any {
+            it.modelExecutionLease != null || it.mcpExecutionLease != null || it.childExecutions.isNotEmpty()
+        }
     private class AuxiliaryWorker(val access: RealmAccess, val assistantId: ConfigurationReference) {
         val models = linkedSetOf<ModelExecutionLease>()
     }
@@ -649,6 +653,7 @@ class ConversationRuntime internal constructor(
         turnContext: TurnContext? = null,
         modelExecutionLease: ModelExecutionLease? = null,
         mcpExecutionLease: McpExecutionLease? = null,
+        childExecutions: Collection<TurnFinalizer.ChildExecution> = emptyList(),
         requireQueueOutcome: Boolean = false,
     ): InstalledTurnWorker {
         cancelIdleCheck()
@@ -668,6 +673,7 @@ class ConversationRuntime internal constructor(
             turnContext = turnContext,
             modelExecutionLease = modelExecutionLease,
             mcpExecutionLease = mcpExecutionLease,
+            childExecutions = childExecutions.toMutableSet(),
         )
         ownedRequests[turnId] = installed
         publishActive(installed)
@@ -725,8 +731,9 @@ class ConversationRuntime internal constructor(
             turnContext = context,
             modelExecutionLease = current.modelExecutionLease,
             mcpExecutionLease = current.mcpExecutionLease,
+            childExecutions = current.childExecutions,
             requireQueueOutcome = requireQueueOutcome,
-        ).also { current.modelExecutionLease = null; current.mcpExecutionLease = null }
+        ).also { current.modelExecutionLease = null; current.mcpExecutionLease = null; current.childExecutions.clear() }
     }
 
     /** The accepting worker hands off immediately after capture, before suspending preparation. */
@@ -748,6 +755,43 @@ class ConversationRuntime internal constructor(
         }
         check(current.mcpExecutionLease == null) { "mcp_execution_already_bound" }
         current.mcpExecutionLease = lease
+    }
+
+    /** The committed tool locator identifies its original parent request, including during replacement. */
+    @Synchronized
+    internal fun bindChildExecution(assistantMessageId: Uuid, execution: TurnFinalizer.ChildExecution): Uuid {
+        val current = requireNotNull(ownedRequests.values.singleOrNull { it.handle?.assistantMessageId == assistantMessageId }) {
+            "parent_turn_execution_owner_missing"
+        }
+        current.worker.ensureActive()
+        check(!current.releaseStarted) { "parent_turn_execution_owner_changed" }
+        check(execution.runtime.durable.header.parentConversationId == id && execution.runtime.durable.header.scope == durable.header.scope) {
+            "child_execution_parent_mismatch"
+        }
+        check(current.childExecutions.add(execution)) { "child_execution_already_bound" }
+        return current.turnId
+    }
+
+    internal suspend fun releaseChildExecution(turnId: Uuid, execution: TurnFinalizer.ChildExecution, stopReason: String? = null) {
+        if (synchronized(this) { ownedRequests[turnId]?.childExecutions?.contains(execution) != true }) return
+        if (execution.release(stopReason)) {
+            synchronized(this) { ownedRequests[turnId]?.childExecutions?.remove(execution) }
+        }
+    }
+
+    /** Child finalization and worker joins must happen before taking the parent's command lock. */
+    internal suspend fun releaseChildExecutions(turnId: Uuid, worker: Job?, stopReason: String? = null) {
+        val children = synchronized(this) {
+            val current = ownedRequests[turnId] ?: return
+            if (worker != null && current.worker !== worker) return
+            current.childExecutions.toList()
+        }
+        var failure: Throwable? = null
+        children.forEach { child ->
+            try { releaseChildExecution(turnId, child, stopReason) }
+            catch (error: Throwable) { failure = combineReleaseFailure(failure, error) }
+        }
+        failure?.let { throw it }
     }
 
     internal fun processingReporter(): (String?) -> Unit {
@@ -796,15 +840,44 @@ class ConversationRuntime internal constructor(
             owned.releaseStarted = true
             owned
         }
-        current.mcpExecutionLease?.release()
-        current.modelExecutionLease?.release()
-        synchronized(this) { retireTurnWorker(current) }
+        var failure: Throwable? = null
+        try { releaseChildExecutions(turnId, current.worker) }
+        catch (error: Throwable) { failure = error }
+        current.mcpExecutionLease?.let { lease ->
+            try {
+                lease.release()
+                synchronized(this) { current.mcpExecutionLease = null }
+            } catch (error: Throwable) { failure = combineReleaseFailure(failure, error) }
+        }
+        current.modelExecutionLease?.let { lease ->
+            try {
+                lease.release()
+                synchronized(this) { current.modelExecutionLease = null }
+            } catch (error: Throwable) { failure = combineReleaseFailure(failure, error) }
+        }
+        failure?.let { throw it }
+        synchronized(this) {
+            if (current.childExecutions.isEmpty()) retireTurnWorker(current) else _activeTurnRevision.value++
+        }
+    }
+
+    private fun combineReleaseFailure(previous: Throwable?, error: Throwable): Throwable {
+        if (previous == null || previous === error) return error
+        val cancelled = (previous as? CancellationException) ?: (error as? CancellationException)
+        val primary = cancelled ?: previous
+        return (if (cancelled != null) CancellationException("Conversation resource cleanup cancelled").apply {
+            initCause(cancelled)
+        } else java.io.IOException("Conversation resource cleanup failed", primary)).apply {
+            addSuppressed(if (primary === previous) error else previous)
+        }
     }
 
     private fun retireTurnWorker(current: ActiveTurnSession) {
         val turnId = current.turnId
         if (!ownedRequests.remove(turnId, current)) return
         val pending = snapshot.value.stream?.turnId?.takeIf { it != turnId }?.let { ownedRequests[it] }
+            // A superseded request may still own failed cleanup after its durable Turn has ended.
+            ?: ownedRequests.values.firstOrNull()
         if (_activeTurn.compareAndSet(current, pending)) {
             _lastTerminatedRequestTurnId.set(turnId)
             _activeTurnRevision.value++
@@ -819,7 +892,8 @@ class ConversationRuntime internal constructor(
 
     @Synchronized
     private fun completeActiveWorker(request: ActiveTurnSession) {
-        if (snapshot.value.stream?.turnId != request.turnId && request.modelExecutionLease == null && request.mcpExecutionLease == null && !request.releaseStarted) {
+        if (snapshot.value.stream?.turnId != request.turnId && request.modelExecutionLease == null && request.mcpExecutionLease == null &&
+            request.childExecutions.isEmpty() && !request.releaseStarted) {
             retireTurnWorker(request)
         }
     }

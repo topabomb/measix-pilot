@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.configuration.WebDavConnection
 import net.weero.measix.pilot.data.configuration.WebDavConnectionChange
+import net.weero.measix.pilot.data.configuration.WebDavConnectionValidationException
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.ConfigurationApplicationService
@@ -24,7 +25,7 @@ internal data class WebDavConnectionDraft(
 )
 
 internal class WebDavSettingsVM(
-    queries: ConfigurationQueryService,
+    private val queries: ConfigurationQueryService,
     private val commands: ConfigurationApplicationService,
     private val webDav: net.weero.measix.pilot.service.webdav.WebDavApplicationService,
 ) : ViewModel() {
@@ -32,9 +33,11 @@ internal class WebDavSettingsVM(
     val configuration = _configuration.asStateFlow()
     val draft = MutableStateFlow<WebDavConnectionDraft?>(null)
     val error = MutableStateFlow<String?>(null)
+    val validationError = MutableStateFlow<WebDavConnectionValidationException?>(null)
     val busy = MutableStateFlow(false)
     val tested = MutableStateFlow(false)
     private var operation: Job? = null
+    private var configurationJob: Job? = null
     private var selectedRealm: RealmSelection? = null
 
     init {
@@ -43,22 +46,22 @@ internal class WebDavSettingsVM(
                 selectedRealm = selection
                 if (draft.value?.selection?.let { it != selection } == true ||
                     (_configuration.value as? WebDavConfigurationReadState.Available)?.selection?.let { it != selection } == true) {
-                    operation?.cancel()
-                    draft.value = null
-                    error.value = null
-                    tested.value = false
+                    dismissDraft()
                 }
             }
         }
-        viewModelScope.launch {
+        observeConfiguration()
+    }
+
+    private fun observeConfiguration() {
+        configurationJob?.cancel()
+        _configuration.value = WebDavConfigurationReadState.Loading
+        configurationJob = viewModelScope.launch {
             queries.observeWebDavConfiguration().collect { value ->
                 val before = (_configuration.value as? WebDavConfigurationReadState.Available)?.selection
                 val after = (value as? WebDavConfigurationReadState.Available)?.selection
                 if (after != null && (draft.value?.selection?.let { it != after } == true || before?.let { it != after } == true)) {
-                    operation?.cancel()
-                    draft.value = null
-                    error.value = null
-                    tested.value = false
+                    dismissDraft()
                 }
                 _configuration.value = value
             }
@@ -66,8 +69,12 @@ internal class WebDavSettingsVM(
     }
 
     fun refresh() {
-        val current = configuration.value as? WebDavConfigurationReadState.Available ?: return
         if (busy.value) return
+        val current = configuration.value as? WebDavConfigurationReadState.Available
+        if (current == null) {
+            observeConfiguration()
+            return
+        }
         busy.value = true
         error.value = null
         operation = viewModelScope.launch {
@@ -86,39 +93,48 @@ internal class WebDavSettingsVM(
         val current = configuration.value as? WebDavConfigurationReadState.Available ?: return
         if (current.selection != selectedRealm || current.selection.access != RealmAccess.Personal || busy.value) return
         error.value = null
+        validationError.value = null
         tested.value = false
         draft.value = WebDavConnectionDraft(current.selection, connection,
             connection ?: WebDavConnection(name = "", rootUrl = ""))
     }
 
     fun updateDraft(transform: (WebDavConnection) -> WebDavConnection) {
+        if (busy.value) return
+        error.value = null
+        validationError.value = null
         tested.value = false
-        if (!busy.value) draft.value = draft.value?.let { it.copy(connection = transform(it.connection)) }
+        draft.value = draft.value?.let { it.copy(connection = transform(it.connection)) }
     }
 
     fun dismissDraft() {
         operation?.cancel()
         draft.value = null
         error.value = null
+        validationError.value = null
         tested.value = false
     }
 
     fun save() {
         val pending = draft.value ?: return
-        submit(pending.selection, WebDavConnectionChange.Save(pending.connection, pending.expected), closeEditor = true)
+        if (busy.value) return
+        val connection = validate(pending.connection) ?: return
+        submit(pending.selection, WebDavConnectionChange.Save(connection, pending.expected), closeEditor = true)
     }
 
     fun test() {
         val pending = draft.value ?: return
         if (busy.value) return
+        val connection = validate(pending.connection) ?: return
         busy.value = true
-        error.value = null
-        tested.value = false
         operation = viewModelScope.launch {
             try {
-                webDav.testConnection(pending.selection, pending.connection)
+                webDav.testConnection(pending.selection, connection)
                 if (draft.value == pending) tested.value = true
             } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: WebDavConnectionValidationException) {
+                if (draft.value == pending) validationError.value = failure
+            }
             catch (failure: Exception) {
                 logDiagnosticFailure("WebDavSettings", "WebDAV connection test failed", failure)
                 if (draft.value == pending) error.value = failure.userVisibleDiagnostic()
@@ -129,6 +145,17 @@ internal class WebDavSettingsVM(
     fun change(change: WebDavConnectionChange) {
         val current = configuration.value as? WebDavConfigurationReadState.Available ?: return
         submit(current.selection, change, closeEditor = false)
+    }
+
+    private fun validate(connection: WebDavConnection): WebDavConnection? {
+        error.value = null
+        validationError.value = null
+        tested.value = false
+        return try { connection.validated() }
+        catch (failure: WebDavConnectionValidationException) {
+            validationError.value = failure
+            null
+        }
     }
 
     private fun submit(selection: RealmSelection, change: WebDavConnectionChange, closeEditor: Boolean) {
@@ -142,6 +169,11 @@ internal class WebDavSettingsVM(
                     draft.value = null
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: WebDavConnectionValidationException) {
+                if (selectedRealm == selection) {
+                    if (closeEditor) validationError.value = failure else error.value = failure.userVisibleDiagnostic()
+                }
+            }
             catch (failure: Exception) {
                 logDiagnosticFailure("WebDavSettings", "WebDAV configuration could not be saved", failure)
                 if (selectedRealm == selection) {

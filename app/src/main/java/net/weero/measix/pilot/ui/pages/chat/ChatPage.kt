@@ -185,6 +185,7 @@ fun ChatPage(
         }
     )
     val navController = LocalNavController.current
+    val configurationQueries: net.weero.measix.pilot.service.ConfigurationQueryService = koinInject()
     val chatNavigation = rememberChatNavigation(navController)
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
@@ -261,6 +262,15 @@ fun ChatPage(
     // individual flows remain only as the initial loading fallback; rendering and append
     // coordination must never combine revisions from separate runtime streams.
     val currentSnapshot = conversationUiModel?.snapshot ?: stateSnapshot
+    val activity = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
+        ?: error("Chat page requires a ComponentActivity host")
+    val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
+    val drawerTarget = conversationUiModel?.configuration?.target?.let {
+        net.weero.measix.pilot.service.ConversationFolderAccess(it.conversation.selection, it.assistantId)
+    }
+    LaunchedEffect(drawerVm, drawerTarget, isActiveRoute) {
+        if (isActiveRoute && drawerTarget != null) drawerVm.bindTarget(drawerTarget)
+    }
     val currentTurnPresentation = conversationUiModel?.presentation ?: turnPresentation
     val turnFeedbackUpdates = remember(vm) {
         combine(vm.conversationUiModel, vm.settings) { model, settings ->
@@ -275,6 +285,23 @@ fun ChatPage(
     val favoriteNodeIds by vm.favoriteNodeIds.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val navigateFromDrawer: (net.weero.measix.pilot.data.enterprise.RealmSelection?, () -> Unit) -> Unit = { selection, navigate ->
+        scope.launch {
+            if (drawerState.isOpen) drawerState.close()
+            if (!activeRoute || !navController.isCurrentConversation(request)) return@launch
+            if (selection != null) {
+                try {
+                    configurationQueries.requireSelection(selection)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    logDiagnosticFailure("ChatPage", "Drawer navigation rejected", error)
+                    return@launch
+                }
+            }
+            if (activeRoute && navController.isCurrentConversation(request)) navigate()
+        }
+    }
     val softwareKeyboardController = LocalSoftwareKeyboardController.current
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     if (vm.savingQueuedInput) {
@@ -386,6 +413,9 @@ fun ChatPage(
                     ) {
                         if (sidebarWidth > 0.dp) {
                             ChatDrawerContent(
+                                drawerVm = drawerVm,
+                                conversationSelection = drawerTarget?.selection,
+                                navigateFromDrawer = navigateFromDrawer,
                                 navController = navController,
                                 currentConversationId = currentSnapshot.conversationId,
                                 currentAssistantId = currentSnapshot.header.assistantId,
@@ -411,6 +441,7 @@ fun ChatPage(
                     // 聊天详情区从真实铰链右边界开始；平面宽屏则占满固定侧栏后的剩余宽度。
                     Box(Modifier.weight(1f).fillMaxHeight()) {
                         ChatPageContent(
+                            drawerVm = drawerVm,
                             isActiveRoute = isActiveRoute,
                             inputState = inputState,
                             turnPresentation = currentTurnPresentation,
@@ -445,6 +476,8 @@ fun ChatPage(
                     drawerState = drawerState,
                     drawerContent = {
                         ChatDrawerContent(
+                            drawerVm = drawerVm,
+                            conversationSelection = drawerTarget?.selection,
                             navController = navController,
                             currentConversationId = currentSnapshot.conversationId,
                             currentAssistantId = currentSnapshot.header.assistantId,
@@ -456,16 +489,12 @@ fun ChatPage(
                             vm = vm,
                             showErrors = drawerState.isOpen,
                             settings = setting,
-                            navigateFromDrawer = { navigate ->
-                                scope.launch {
-                                    drawerState.close()
-                                    navigate()
-                                }
-                            },
+                            navigateFromDrawer = navigateFromDrawer,
                         )
                     }
                 ) {
                     ChatPageContent(
+                        drawerVm = drawerVm,
                         isActiveRoute = isActiveRoute,
                         inputState = inputState,
                         turnPresentation = currentTurnPresentation,
@@ -568,6 +597,7 @@ internal fun ConversationUnavailable(
 
 @Composable
 private fun ChatPageContent(
+    drawerVm: ChatDrawerVM,
     isActiveRoute: Boolean,
     inputState: ChatInputState,
     turnPresentation: ConversationPresentation,
@@ -588,11 +618,10 @@ private fun ChatPageContent(
     onClearAllErrors: () -> Unit,
     assistantDetailsRequest: Int,
 ) {
-    val activity = androidx.activity.compose.LocalActivity.current as? androidx.activity.ComponentActivity
-        ?: error("Chat page requires a ComponentActivity host")
-    val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
     val draftFolder by drawerVm.draftFolder.collectAsStateWithLifecycle()
-    val chatNavigation = rememberChatNavigation(navController, draftFolder = draftFolder)
+    val chatNavigation = rememberChatNavigation(navController,
+        renderedSelection = conversationUiModel?.configuration?.target?.conversation?.selection,
+        draftFolder = draftFolder)
     val pendingInputs by vm.pendingInputs.collectAsStateWithLifecycle()
     KeepScreenOn(enabled = turnPresentation.isActive)
 
@@ -827,7 +856,7 @@ private fun ChatPageContent(
                         loading = turnPresentation.isActive,
                         previewMode = previewMode,
                         onNewChat = {
-                            chatNavigation.newChat()
+                            chatNavigation.newChat(snapshot.header.assistantId)
                         },
                         onClickMenu = {
                             previewMode = !previewMode
@@ -1031,8 +1060,10 @@ private fun ChatPageContent(
                     vm.inputState.setContents(it.parts)
                 },
                 onForkMessage = {
+                    val sourceEntry = navController.currentEntry
                     scope.launch {
                         val fork = vm.forkMessage(message = it) ?: return@launch
+                        if (navController.currentEntry !== sourceEntry) return@launch
                         chatNavigation.existingChat(chatId = fork)
                     }
                 },

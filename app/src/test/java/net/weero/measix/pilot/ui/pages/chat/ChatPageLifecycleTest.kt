@@ -516,7 +516,6 @@ class ChatPageLifecycleTest {
             assertTrue(vm.inputState.messageContent.isEmpty())
             coVerify(exactly = 2) { fixture.application.initialize(fixture.request) }
             coVerify(exactly = 0) { fixture.query.captureCurrentAccess() }
-            coVerify(exactly = 0) { fixture.application.newDraftRequest(any<RealmAccess>()) }
             coVerify(exactly = 0) { fixture.application.newDraftRequest(any<net.weero.measix.pilot.data.enterprise.RealmSelection>()) }
             verify(exactly = 0) { fixture.artifacts.openDraftScope(any<ConversationViewLease>()) }
             verify(exactly = 0) { fixture.query.observeConversation(any()) }

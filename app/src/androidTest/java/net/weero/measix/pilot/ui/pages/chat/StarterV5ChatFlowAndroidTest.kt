@@ -1261,7 +1261,7 @@ class StarterV5ChatFlowAndroidTest {
 }
 
 /** Local Core control and OpenAI runtime endpoints, with captured requests and no upstream forwarding. */
-private class StarterV5HttpMock(private val fixture: JsonObject) : AutoCloseable {
+internal class StarterV5HttpMock(private val fixture: JsonObject) : AutoCloseable {
     private val socket = ServerSocket(0, 16, java.net.InetAddress.getByName("127.0.0.1"))
     val origin = "http://127.0.0.1:${socket.localPort}"
     val deploymentId = fixture.getValue("snapshot").jsonObject.getValue("deploymentId").jsonPrimitive.content

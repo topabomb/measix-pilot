@@ -361,6 +361,65 @@ class ConversationPageAccessTest {
         io.mockk.confirmVerified(settings)
     }
 
+    @Test fun `new draft reports missing or unavailable selection without replacing it and accepts an explicit assistant`() = runTest {
+        val packet = exampleEnterprisePackage()
+        val sessions = sessions().apply { enrollFixture(packet) }
+        val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val resolved = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
+            net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope,
+            net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
+        val assistant = requireNotNull(resolved.selections.assistantId)
+        var configuration = resolved
+        val settings = mockk<SettingsStore>()
+        coEvery { settings.withResolvedConfiguration<ConversationOpenRequest.NewDraft>(any(), any(), any()) } coAnswers {
+            thirdArg<suspend (net.weero.measix.pilot.data.configuration.ResolvedConfiguration) -> ConversationOpenRequest.NewDraft>()
+                .invoke(configuration)
+        }
+        val repository = mockk<ConversationRepository>()
+        val coordinator = mockk<ConversationCommandCoordinator>()
+        val service = application(repository, coordinator, sessions, settings)
+        for ((selected, reason) in listOf(null to "conversation_assistant_missing",
+            ConfigurationReference.random() to "conversation_assistant_unavailable")) {
+            configuration = resolved.copy(selections = resolved.selections.copy(assistantId = selected))
+            try {
+                service.newDraftRequest(selection)
+                fail("An unavailable default must request an explicit choice")
+            } catch (error: ConversationAssistantUnavailableException) {
+                assertEquals(reason, error.message)
+            }
+            val explicit = service.newDraftRequest(selection, assistant)
+            assertEquals(assistant, explicit.assistantId)
+            assertEquals(selection.access, explicit.access)
+            assertEquals(selected, configuration.selections.assistantId)
+        }
+        try {
+            service.newDraftRequest(selection, ConfigurationReference.random())
+            fail("An explicit unavailable assistant must not fall back to the default")
+        } catch (error: ConversationAssistantUnavailableException) {
+            assertEquals("conversation_assistant_unavailable", error.message)
+        }
+        io.mockk.confirmVerified(repository, coordinator)
+    }
+
+    @Test fun `new draft and startup preserve configuration read failures instead of requesting another assistant`() = runTest {
+        val packet = exampleEnterprisePackage()
+        val sessions = sessions().apply { enrollFixture(packet) }
+        val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
+        val settings = mockk<SettingsStore>()
+        coEvery { settings.lastConversation(packet.identity.scope) } returns null
+        val failure = java.io.IOException("configuration read failed")
+        coEvery { settings.withResolvedConfiguration<ConversationOpenRequest.NewDraft>(any(), any(), any()) } throws failure
+        val service = application(mockk(), mockk(), sessions, settings)
+        for (open in listOf<suspend () -> Any>({ service.newDraftRequest(selection) }, { service.initialRequest(true) })) {
+            try {
+                open()
+                fail("A read error must not become a missing assistant")
+            } catch (error: java.io.IOException) {
+                assertSame(failure, error)
+            }
+        }
+    }
+
     @Test fun `draft folder captures original directory and rejects foreign assistant or selection`() = runTest {
         val packet = exampleEnterprisePackage()
         val sessions = sessions()

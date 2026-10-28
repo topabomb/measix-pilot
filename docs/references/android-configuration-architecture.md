@@ -113,6 +113,11 @@ JSON codec 使用 `ignoreUnknownKeys=true` 和 `encodeDefaults=true`。
 `ConfigurationApplicationService.changeWebDavConnection` 通过原 Settings writer 增量修改这两个字段，
 首项保存时选中，后续添加不抢占，删除当前项清空选择；失效引用不回退第一项。
 编辑使用原定义比较，迟到草稿不能复活已删除连接或覆盖其他编辑。企业域不消费这些个人选择。
+个人连接地址必须是完整 HTTP(S) URL，不推断协议或企业托管地址；名称留空时使用已校验地址的主机名，
+HTTP(S) 方案名不区分大小写。用户名和密码均为空时不发送认证头，任一非空时保留原值用于 Basic 认证。
+`WebDavConnection.validated` 统一规范化地址并以类型化字段错误报告地址或用户名问题；
+编辑页在测试或保存前复用此校验，Settings 提交仍复验。测试只读取服务器根信息，不保存；保存不要求网络测试成功。
+配置读取失败保留草稿，设置页的显式重试重新订阅原查询，不要求切域，也不自动循环重试。
 Settings 在创建或更改地址、用户名、密码时重新分配 `accessRevision`；重命名保留该身份。
 执行时核对捕获的身份，配置值快速往返或删除重建不能恢复旧访问；密码轮换不清除同一远端目标的待核实写入。
 

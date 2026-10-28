@@ -10,12 +10,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationOpenRequest
 import net.weero.measix.pilot.service.ConversationQueryService
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.ConversationAssistantUnavailableException
+import net.weero.measix.pilot.data.enterprise.RealmAccess
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
 
@@ -38,30 +45,64 @@ fun rememberChatNavigation(
 ): ChatNavigation {
     val query = koinInject<ConversationQueryService>()
     val application = koinInject<ConversationApplicationService>()
+    val configuration = koinInject<ConfigurationQueryService>()
     val selection by remember(query) { query.observeCurrentSelection() }.collectAsStateWithLifecycle(null)
     val scope = rememberCoroutineScope()
     val toaster = LocalToaster.current
     val failure = stringResource(R.string.error_title_operation)
     val capturedSelection = renderedSelection ?: selection
-    return remember(navigator, capturedSelection, draftFolder, application, scope, toaster, failure) {
+    return remember(navigator, capturedSelection, draftFolder, application, configuration, scope, toaster, failure) {
         ChatNavigation(
             create = { assistant, text, files ->
                 val original = capturedSelection
+                val sourceEntry = navigator.currentEntry
                 if (original == null) toaster.show(failure, type = ToastType.Error) else scope.launch {
+                    if (navigator.currentEntry !== sourceEntry) return@launch
                     try {
-                        val request = application.newDraftRequest(original, assistant, draftFolder)
+                        val request = try {
+                            application.newDraftRequest(original, assistant, draftFolder)
+                        } catch (error: ConversationAssistantUnavailableException) {
+                            if (assistant != null || original.access !is RealmAccess.Enterprise) throw error
+                            configuration.requireSelection(original)
+                            if (navigator.currentEntry !== sourceEntry) return@launch
+                            navigator.clearAndNavigate(Screen.Enterprise)
+                            return@launch
+                        }
+                        configuration.requireSelection(original)
+                        if (navigator.currentEntry !== sourceEntry) return@launch
                         navigator.clearAndNavigate(Screen.Chat(request, text, files.map(Uri::toString)))
                     } catch (cancelled: CancellationException) {
                         throw cancelled
-                    } catch (_: Exception) {
-                        toaster.show(failure, type = ToastType.Error)
+                    } catch (error: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        logDiagnosticFailure("ChatNavigation", "New conversation request failed", error)
+                        try {
+                            configuration.requireSelection(original)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            return@launch
+                        }
+                        if (navigator.currentEntry !== sourceEntry) return@launch
+                        toaster.show("$failure\n${error.userVisibleDiagnostic()}", type = ToastType.Error)
                     }
                 }
             },
             open = { id, node ->
                 val original = capturedSelection
-                if (original == null) toaster.show(failure, type = ToastType.Error) else {
-                    navigator.clearAndNavigate(Screen.Chat(ConversationOpenRequest.OpenExisting(id, original.access), nodeId = node?.toString()))
+                val sourceEntry = navigator.currentEntry
+                if (original == null) toaster.show(failure, type = ToastType.Error) else scope.launch {
+                    if (navigator.currentEntry !== sourceEntry) return@launch
+                    try {
+                        configuration.requireSelection(original)
+                        if (navigator.currentEntry !== sourceEntry) return@launch
+                        navigator.clearAndNavigate(Screen.Chat(ConversationOpenRequest.OpenExisting(id, original.access), nodeId = node?.toString()))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        logDiagnosticFailure("ChatNavigation", "Existing conversation navigation rejected", error)
+                    }
                 }
             },
         )

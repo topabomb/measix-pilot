@@ -2154,8 +2154,8 @@
   <string name="webdav_no_current">尚未选择当前 WebDAV，请添加或选择服务器。</string>
   <string name="webdav_current">当前使用</string>
   <string name="webdav_delete_connection">移除 %1$s？服务器上的文件会保留，使用此服务器的选择将不可用。</string>
-  <string name="webdav_connection_name">服务器名称</string>
-  <string name="webdav_root_url">WebDAV 根目录地址</string>
+  <string name="webdav_connection_name">显示名称（可选）</string>
+  <string name="webdav_root_url">WebDAV 服务器地址</string>
   <string name="webdav_save">保存</string>
   <string name="webdav_file_manager">WebDAV 文件管理器</string>
   <string name="webdav_switch_server">切换服务器</string>
@@ -2252,4 +2252,9 @@
   <string name="qr_camera_permission">请允许使用相机扫描二维码。若权限已被禁止，请在设置中开启。</string>
   <string name="qr_scan_failed">相机无法扫描二维码，请查看详情后重试。</string>
   <string name="file_preview_resources_failed">部分资源未能加载</string>
+  <string name="webdav_address_help">填写服务商提供的完整 WebDAV 地址，不是 MCP 地址或单独的目录路径。</string>
+  <string name="webdav_invalid_url">请输入以 http:// 或 https:// 开头的完整 WebDAV 地址，不含查询参数或片段。</string>
+  <string name="webdav_invalid_username">用户名不能包含冒号或换行。</string>
+  <string name="webdav_name_help">留空时使用服务器域名。</string>
+  <string name="webdav_credentials_help">匿名访问可留空；需要认证时，填写服务商提供的 WebDAV 用户名和密码。</string>
 </resources>

@@ -4,8 +4,6 @@ import net.weero.measix.pilot.utils.logDiagnosticFailure
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
@@ -110,7 +108,6 @@ import net.weero.measix.pilot.ui.modifier.onClick
 import net.weero.measix.pilot.ui.context.rememberChatNavigation
 import net.weero.measix.pilot.utils.toDp
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
-import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
 
@@ -118,6 +115,8 @@ import kotlin.uuid.Uuid
 fun ChatDrawerContent(
     navController: Navigator,
     vm: ChatVM,
+    drawerVm: ChatDrawerVM,
+    conversationSelection: net.weero.measix.pilot.data.enterprise.RealmSelection?,
     settings: Settings,
     currentConversationId: Uuid,
     currentAssistantId: ConfigurationReference,
@@ -126,21 +125,19 @@ fun ChatDrawerContent(
     permanent: Boolean = false,
     showErrors: Boolean = false,
     onCollapse: (() -> Unit)? = null,
-    navigateFromDrawer: ((() -> Unit) -> Unit) = { navigate -> navigate() },
+    navigateFromDrawer: (net.weero.measix.pilot.data.enterprise.RealmSelection?, () -> Unit) -> Unit = { _, navigate -> navigate() },
 ) {
     val scope = rememberCoroutineScope()
-    val chatNavigation = rememberChatNavigation(navController)
+    val chatNavigation = rememberChatNavigation(navController, renderedSelection = conversationSelection)
     val context = LocalContext.current
     val isPlayStore = rememberIsPlayStoreVersion()
     val conversationQueryService = koinInject<ConversationQueryService>()
 
-    val activity = LocalActivity.current as? ComponentActivity
-        ?: error("ChatDrawerContent requires a ComponentActivity host")
-    val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
     val webDavConfiguration by drawerVm.webDavConfiguration.collectAsStateWithLifecycle()
 
     val assistantCatalogState by drawerVm.assistantCatalog.collectAsStateWithLifecycle()
     val assistantCatalog = (assistantCatalogState as? AssistantCatalogReadState.Available)?.catalog
+        ?.takeIf { it.selection == conversationSelection }
     val assistantCatalogFailure = (assistantCatalogState as? AssistantCatalogReadState.Unavailable)?.detail
     val conversations = drawerVm.conversations.collectAsLazyPagingItems()
     val folderDirectory = drawerVm.folderDirectory.collectAsStateWithLifecycle().value
@@ -354,7 +351,7 @@ fun ChatDrawerContent(
                         BackupReminderCard(
                             settings = settings,
                             onClick = {
-                                navigateFromDrawer { navController.navigate(Screen.Backup) }
+                                navigateFromDrawer(null) { navController.navigate(Screen.Backup) }
                             },
                         )
 
@@ -394,7 +391,7 @@ fun ChatDrawerContent(
                                     try {
                                         val request = drawerVm.selectAssistant(catalog.selection, selectedAssistantId,
                                             context.readBooleanPreference("create_new_conversation_on_start", true))
-                                        navigateFromDrawer { navController.clearAndNavigate(Screen.Chat(request)) }
+                                        navigateFromDrawer(catalog.selection) { navController.clearAndNavigate(Screen.Chat(request)) }
                                         true
                                     } catch (cancelled: CancellationException) { throw cancelled }
                                     catch (error: Exception) {
@@ -411,11 +408,11 @@ fun ChatDrawerContent(
                                             it.key.reference == currentAssistantId
                                     }?.access?.unavailableReason == null
                                 ) {
-                                    { navigateFromDrawer(onViewCurrentAssistant) }
+                                    { navigateFromDrawer(null, onViewCurrentAssistant) }
                                 } else null,
                                 onViewAssistant = { selected ->
                                     if (selected.id == currentAssistantId) {
-                                        navigateFromDrawer(onViewCurrentAssistant)
+                                        navigateFromDrawer(null, onViewCurrentAssistant)
                                     } else {
                                         assistantPreview = selected
                                     }
@@ -456,7 +453,7 @@ fun ChatDrawerContent(
                                         leadingIcon = { Icon(HugeIcons.Image02, null) },
                                         onClick = {
                                             showMenuPopup = false
-                                            navigateFromDrawer { navController.navigate(Screen.ImageGen) }
+                                            navigateFromDrawer(null) { navController.navigate(Screen.ImageGen) }
                                         }
                                     )
                                 }
@@ -470,7 +467,7 @@ fun ChatDrawerContent(
                                     Text(stringResource(R.string.favorite_page_title))
                                 },
                                 onClick = {
-                                    navigateFromDrawer { navController.navigate(Screen.Favorite) }
+                                    navigateFromDrawer(null) { navController.navigate(Screen.Favorite) }
                                 },
                             )
 
@@ -482,7 +479,7 @@ fun ChatDrawerContent(
                                     Text(stringResource(R.string.stats_page_title))
                                 },
                                 onClick = {
-                                    navigateFromDrawer { navController.navigate(Screen.Stats) }
+                                    navigateFromDrawer(null) { navController.navigate(Screen.Stats) }
                                 },
                             )
 
@@ -492,7 +489,7 @@ fun ChatDrawerContent(
                                 enabled = (webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available)?.current != null,
                                 onClick = {
                                     val current = webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available
-                                    if (current?.current != null) navigateFromDrawer { navController.navigate(Screen.WebDavFiles(selection = current.selection)) }
+                                    if (current?.current != null) navigateFromDrawer(null) { navController.navigate(Screen.WebDavFiles(selection = current.selection)) }
                                 },
                             )
 
@@ -504,7 +501,7 @@ fun ChatDrawerContent(
                                 },
                                 label = { Text(stringResource(R.string.settings)) },
                                 onClick = {
-                                    navigateFromDrawer {
+                                    navigateFromDrawer(null) {
                                         navController.navigate(Screen.Setting)
                                     }
                                 },
@@ -514,7 +511,7 @@ fun ChatDrawerContent(
                 },
                 modifier = Modifier.fillMaxSize(),
                 onClick = {
-                    navigateFromDrawer {
+                    navigateFromDrawer(null) {
                         chatNavigation.existingChat(it.id)
                     }
                 },
@@ -824,7 +821,7 @@ fun ChatDrawerContent(
             onDismiss = { pendingSharedNavigation = null },
             onConfirm = {
                 pendingSharedNavigation = null
-                navigateFromDrawer { navController.navigate(destination) }
+                navigateFromDrawer(null) { navController.navigate(destination) }
             },
         )
     }
@@ -843,7 +840,7 @@ fun ChatDrawerContent(
                 if (assistantCatalog?.selection?.access is net.weero.measix.pilot.data.enterprise.RealmAccess.Enterprise) {
                     pendingSharedNavigation = destination
                 } else {
-                    navigateFromDrawer { navController.navigate(destination) }
+                    navigateFromDrawer(null) { navController.navigate(destination) }
                 }
             } },
         )
@@ -854,14 +851,14 @@ fun ChatDrawerContent(
 @Composable
 private fun DrawerActions(
     navController: Navigator,
-    navigateFromDrawer: ((() -> Unit) -> Unit),
+    navigateFromDrawer: (net.weero.measix.pilot.data.enterprise.RealmSelection?, () -> Unit) -> Unit,
 ) {
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             // 搜索入口
             Surface(
                 onClick = {
-                    navigateFromDrawer { navController.navigate(Screen.MessageSearch) }
+                    navigateFromDrawer(null) { navController.navigate(Screen.MessageSearch) }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -894,7 +891,7 @@ private fun DrawerActions(
             // 历史记录入口
             Surface(
                 onClick = {
-                    navigateFromDrawer { navController.navigate(Screen.History) }
+                    navigateFromDrawer(null) { navController.navigate(Screen.History) }
                 },
                 modifier = Modifier
                     .fillMaxWidth()

@@ -39,14 +39,14 @@ internal class WebDavClient(
     // Body consumption stays outside OkHttp recovery, so a partial download is never appended twice.
     private val readClient = client.newBuilder().retryOnConnectionFailure(true).build()
 
-    suspend fun list(root: String, authorization: String, path: String = "", depth: Int = 1): DavDirectory {
+    suspend fun list(root: String, authorization: String?, path: String = "", depth: Int = 1): DavDirectory {
         return properties(root, authorization, path, depth, directory = true).also {
             check(it.self?.directory == true) { "webdav_not_directory" }
         }
     }
 
     /** A direct query, so a partial or capped parent listing can never imply absence. */
-    suspend fun stat(root: String, authorization: String, path: String): DavFile? = try {
+    suspend fun stat(root: String, authorization: String?, path: String): DavFile? = try {
         properties(root, authorization, path, 0, directory = path.isEmpty()).self
     } catch (failure: DavHttpException) {
         if (failure.status == 404) null else throw failure
@@ -54,7 +54,7 @@ internal class WebDavClient(
         if (failure.failures == listOf(path to 404)) null else throw failure
     }
 
-    private suspend fun properties(root: String, authorization: String, path: String, depth: Int, directory: Boolean): DavDirectory {
+    private suspend fun properties(root: String, authorization: String?, path: String, depth: Int, directory: Boolean): DavDirectory {
         require(depth == 0 || depth == 1)
         val paths = WebDavPaths(root)
         val request = request(paths, path, authorization, "PROPFIND", PROPERTIES.toRequestBody(XML), directory = directory)
@@ -91,7 +91,7 @@ internal class WebDavClient(
         }
     }
 
-    suspend fun download(root: String, authorization: String, path: String, output: OutputStream,
+    suspend fun download(root: String, authorization: String?, path: String, output: OutputStream,
         etag: String? = null, progress: (Long, Long?) -> Unit = { _, _ -> }, maxBytes: Long = Long.MAX_VALUE,
         contentType: (String?) -> Unit = {}): Long {
         val builder = request(WebDavPaths(root), path, authorization, "GET")
@@ -106,7 +106,7 @@ internal class WebDavClient(
         }
     }
 
-    suspend fun mediaMetadata(root: String, authorization: String, path: String): DavMediaMetadata =
+    suspend fun mediaMetadata(root: String, authorization: String?, path: String): DavMediaMetadata =
         execute(request(WebDavPaths(root), path, authorization, "HEAD").build()) { response ->
             requireStatus(response, path, 200)
             requireIdentityEncoding(response)
@@ -117,7 +117,7 @@ internal class WebDavClient(
             DavMediaMetadata(length, etag)
         }
 
-    suspend fun mediaRange(root: String, authorization: String, path: String, metadata: DavMediaMetadata,
+    suspend fun mediaRange(root: String, authorization: String?, path: String, metadata: DavMediaMetadata,
         position: Long, count: Int): ByteArray {
         require(position >= 0 && position < metadata.length && count in 1..8 * 1024 * 1024)
         val length = minOf(count.toLong(), metadata.length - position)
@@ -147,7 +147,7 @@ internal class WebDavClient(
         }
     }
 
-    suspend fun upload(root: String, authorization: String, path: String, length: Long?, input: () -> InputStream,
+    suspend fun upload(root: String, authorization: String?, path: String, length: Long?, input: () -> InputStream,
         existingEtag: String? = null, sent: () -> Unit = {}, progress: (Long, Long?) -> Unit = { _, _ -> }) {
         require(path.isNotEmpty() && (length == null || length >= 0)) { "webdav_upload_target_invalid" }
         val context = currentCoroutineContext()
@@ -184,13 +184,13 @@ internal class WebDavClient(
         execute(builder.build(), sent, cancelResources = { activeInput.get()?.close() }) { response -> requireStatus(response, path, 200, 201, 204) }
     }
 
-    suspend fun mkdir(root: String, authorization: String, path: String, sent: () -> Unit = {}) {
+    suspend fun mkdir(root: String, authorization: String?, path: String, sent: () -> Unit = {}) {
         require(path.isNotEmpty()) { "webdav_root_mutation_forbidden" }
         val builder = request(WebDavPaths(root), path, authorization, "MKCOL", EMPTY, directory = true)
         execute(builder.build(), sent) { response -> requireStatus(response, path, 201) }
     }
 
-    suspend fun mutate(root: String, authorization: String, path: String, method: String, destination: String? = null,
+    suspend fun mutate(root: String, authorization: String?, path: String, method: String, destination: String? = null,
         sourceEtag: String? = null, destinationEtag: String? = null, sent: () -> Unit = {}, directory: Boolean = false) {
         require(method in setOf("COPY", "MOVE", "DELETE"))
         val paths = WebDavPaths(root)
@@ -217,9 +217,10 @@ internal class WebDavClient(
         }
     }
 
-    private fun request(paths: WebDavPaths, path: String, authorization: String, method: String,
+    private fun request(paths: WebDavPaths, path: String, authorization: String?, method: String,
         body: RequestBody? = null, directory: Boolean = false): Request.Builder = Request.Builder()
-        .url(paths.url(path, directory)).header("Authorization", authorization).header("Accept-Encoding", "identity")
+        .url(paths.url(path, directory)).apply { if (authorization != null) header("Authorization", authorization) }
+        .header("Accept-Encoding", "identity")
         .method(method, body)
 
     private suspend fun <T> execute(request: Request, sent: () -> Unit = {}, cancelResources: () -> Unit = {},

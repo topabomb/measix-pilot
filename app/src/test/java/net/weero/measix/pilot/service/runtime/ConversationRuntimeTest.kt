@@ -58,6 +58,88 @@ import kotlin.uuid.Uuid
  */
 class ConversationRuntimeTest {
 
+    @Test fun `cleanup cancellation is propagated after independent releases and retains other failure diagnostics`() = runTest {
+        for (cancelMcp in listOf(true, false)) {
+            val rt = runtime(backgroundScope)
+            val turn = Uuid.random()
+            val worker = Job()
+            val cancellation = kotlinx.coroutines.CancellationException("original cleanup cancellation")
+            val io = java.io.IOException("other cleanup failure")
+            var failing = true
+            rt.installTurnWorker(turn, worker)
+            rt.bindMcpExecution(turn, worker, rt.durable.header.assistantId,
+                net.weero.measix.pilot.data.ai.mcp.McpExecutionLease {
+                    if (failing) throw if (cancelMcp) cancellation else io
+                })
+            rt.bindModelExecution(turn, worker, rt.durable.header.assistantId,
+                ModelExecutionLease(releaseOwner = {
+                    if (failing) throw if (cancelMcp) io else cancellation
+                }) { error("no request") })
+            worker.complete()
+            try { rt.releaseTurnWorker(turn, worker, false); fail("cancellation lost") }
+            catch (error: kotlinx.coroutines.CancellationException) {
+                val causes = generateSequence<Throwable>(error) { it.cause }.toList()
+                assertTrue(causes.any { it.message == cancellation.message })
+                assertTrue(causes.flatMap { it.suppressed.toList() }.any { it.message == io.message })
+            }
+            failing = false
+            rt.releaseTurnWorker(turn, worker, false)
+            assertNull(rt.currentWorker())
+        }
+    }
+
+    @Test fun `failed MCP release still releases model and retries only retained resources`() = runTest {
+        val rt = runtime(backgroundScope)
+        val turn = Uuid.random()
+        val worker = Job()
+        var failMcp = true
+        var mcpReleases = 0
+        var modelReleases = 0
+        rt.installTurnWorker(turn, worker)
+        rt.bindMcpExecution(turn, worker, rt.durable.header.assistantId,
+            net.weero.measix.pilot.data.ai.mcp.McpExecutionLease {
+                mcpReleases++
+                if (failMcp) throw java.io.IOException("MCP close detail")
+            })
+        rt.bindModelExecution(turn, worker, rt.durable.header.assistantId,
+            ModelExecutionLease(releaseOwner = { modelReleases++ }) { error("no request") })
+        worker.complete()
+        try { rt.releaseTurnWorker(turn, worker, false); fail("cleanup failure lost") }
+        catch (error: java.io.IOException) { assertEquals("MCP close detail", error.message) }
+        assertEquals(1, modelReleases)
+        assertSame(worker, rt.currentWorker())
+        failMcp = false
+        rt.releaseTurnWorker(turn, worker, false)
+        assertEquals(2, mcpReleases)
+        assertEquals(1, modelReleases)
+        assertNull(rt.currentWorker())
+    }
+
+    @Test fun `independent cleanup failures retain both diagnostics and retry both leases`() = runTest {
+        val rt = runtime(backgroundScope)
+        val turn = Uuid.random()
+        val worker = Job()
+        val mcp = java.io.IOException("MCP cleanup")
+        val model = java.io.IOException("Model cleanup")
+        var failRelease = true
+        rt.installTurnWorker(turn, worker)
+        rt.bindMcpExecution(turn, worker, rt.durable.header.assistantId,
+            net.weero.measix.pilot.data.ai.mcp.McpExecutionLease { if (failRelease) throw mcp })
+        rt.bindModelExecution(turn, worker, rt.durable.header.assistantId,
+            ModelExecutionLease(releaseOwner = { if (failRelease) throw model }) { error("no request") })
+        worker.complete()
+        try { rt.releaseTurnWorker(turn, worker, false); fail("cleanup failure lost") }
+        catch (error: java.io.IOException) {
+            assertEquals("Conversation resource cleanup failed", error.message)
+            val causes = generateSequence<Throwable>(error) { it.cause }.toList()
+            assertTrue(causes.any { it === mcp })
+            assertTrue(causes.flatMap { it.suppressed.toList() }.any { it.message == model.message })
+        }
+        failRelease = false
+        rt.releaseTurnWorker(turn, worker, false)
+        assertNull(rt.currentWorker())
+    }
+
     @Test
     fun `failed preparation cleanup retains the exact lease owner for stop and retry`() = runTest {
         var evicted = false
@@ -81,7 +163,7 @@ class ConversationRuntimeTest {
         val replacement = Job()
         rt.installTurnWorker(Uuid.random(), replacement)
         replacement.complete()
-        assertEquals(null, rt.currentWorker())
+        assertSame(worker, rt.currentWorker())
         val stopped = requireNotNull(rt.captureAndRequestStop("retry"))
         assertSame(worker, stopped.worker)
         assertTrue(rt.ownsStoppedWorker(stopped))
@@ -96,6 +178,55 @@ class ConversationRuntimeTest {
         assertTrue(evicted)
         try { lease.execute { org.junit.Assert.fail("released lease started I/O") } }
         catch (error: IllegalStateException) { assertEquals("model_execution_lease_closed", error.message) }
+    }
+
+    @Test
+    fun `failed superseded cleanup remains visible and retryable after replacement exits`() = runTest {
+        val rt = runtime(backgroundScope)
+        val originalTurn = Uuid.random()
+        val originalWorker = Job()
+        var rejectCleanup = true
+        var releases = 0
+        rt.installTurnWorker(originalTurn, originalWorker)
+        rt.bindModelExecution(originalTurn, originalWorker, rt.durable.header.assistantId,
+            ModelExecutionLease(releaseOwner = {
+                releases++
+                if (rejectCleanup) throw java.io.IOException("original resource still open")
+            }) { error("no request") })
+        originalWorker.complete()
+        try { rt.releaseTurnWorker(originalTurn, originalWorker); fail("cleanup failure lost") }
+        catch (error: java.io.IOException) { assertEquals("original resource still open", error.message) }
+
+        val replacementTurn = Uuid.random()
+        val replacementWorker = Job()
+        val installed = rt.installTurnWorker(replacementTurn, replacementWorker)
+        try {
+            rt.releaseTurnWorker(requireNotNull(installed.previousTurnId), installed.previousWorker)
+            fail("superseded cleanup failure lost")
+        } catch (error: java.io.IOException) {
+            assertEquals("original resource still open", error.message)
+        } finally {
+            rt.releaseTurnWorker(replacementTurn, replacementWorker)
+            replacementWorker.complete()
+        }
+
+        assertEquals(2, releases)
+        assertTrue(rt.hasExecutionLeases)
+        assertTrue(rt.mustQueueInput())
+        assertSame(originalWorker, rt.currentWorker())
+        assertEquals(originalTurn, rt.currentTurnPresentation().activeTurnId)
+        assertTrue(rt.currentTurnPresentation().isActive)
+        val stop = requireNotNull(rt.captureAndRequestStop("user_stop"))
+        assertEquals(originalTurn, stop.turnId)
+        assertSame(originalWorker, stop.worker)
+
+        rejectCleanup = false
+        rt.releaseTurnWorker(stop.turnId, stop.worker, retainPendingTurnOwner = false)
+        assertEquals(3, releases)
+        assertTrue(!rt.hasExecutionLeases)
+        assertNull(rt.currentWorker())
+        assertTrue(!rt.currentTurnPresentation().isActive)
+        assertTrue(!rt.mustQueueInput())
     }
 
     @Test
@@ -125,6 +256,70 @@ class ConversationRuntimeTest {
         second.await()
         assertEquals(1, releases)
         assertTrue(!rt.hasExecutionLeases)
+    }
+
+    @Test
+    fun `child cleanup waits for its worker and removes the parent responsibility on success`() = runTest {
+        val parent = runtime(backgroundScope)
+        val parentTurn = Uuid.random()
+        val handle = parent.startTurn(parentTurn, Uuid.random())
+        val childConversation = Conversation(assistantId = DEFAULT_ASSISTANT_ID, parentConversationId = parent.id, messageNodes = emptyList())
+        val child = ConversationRuntime(childConversation.id, childConversation.toSnapshot(), backgroundScope, {})
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val childWorker = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try { awaitCancellation() }
+            finally { withContext(NonCancellable) { entered.complete(Unit); release.await() } }
+        }
+        val childTurn = Uuid.random()
+        var resourceReleases = 0
+        child.installTurnWorker(childTurn, childWorker)
+        child.bindModelExecution(childTurn, childWorker, DEFAULT_ASSISTANT_ID,
+            ModelExecutionLease(releaseOwner = { resourceReleases++ }) { error("no request") })
+        val finalizer = net.weero.measix.pilot.service.turn.TurnFinalizer(
+            io.mockk.mockk(), io.mockk.mockk(), io.mockk.mockk(), net.weero.measix.pilot.utils.JsonInstant)
+        val execution = finalizer.ownChildExecution(child, childTurn, childWorker)
+        assertEquals(parentTurn, parent.bindChildExecution(handle.assistantMessageId, execution))
+        val cleanup = async { parent.releaseChildExecution(parentTurn, execution) }
+        entered.await()
+        assertTrue(!cleanup.isCompleted)
+        assertTrue(parent.hasExecutionLeases)
+        assertEquals(0, resourceReleases)
+        release.complete(Unit)
+        cleanup.await()
+        assertTrue(childWorker.isCompleted)
+        assertEquals(1, resourceReleases)
+        assertTrue(!parent.hasExecutionLeases)
+        assertNull(child.currentWorker())
+        parent.releaseChildExecution(parentTurn, execution)
+        assertEquals(1, resourceReleases)
+        parent.applyCommand(FinalizeTurn(handle, null, TurnExecutionStatus.CANCELLED, null))
+        parent.releaseTurnWorker(parentTurn, parent.currentWorker())
+    }
+
+    @Test
+    fun `late parent child cleanup cannot cancel a replacement child worker`() = runTest {
+        val parent = runtime(backgroundScope)
+        val parentTurn = Uuid.random()
+        val handle = parent.startTurn(parentTurn, Uuid.random())
+        val childConversation = Conversation(assistantId = DEFAULT_ASSISTANT_ID, parentConversationId = parent.id, messageNodes = emptyList())
+        val child = ConversationRuntime(childConversation.id, childConversation.toSnapshot(), backgroundScope, {})
+        val childTurn = Uuid.random()
+        val original = Job()
+        child.installTurnWorker(childTurn, original)
+        val finalizer = net.weero.measix.pilot.service.turn.TurnFinalizer(
+            io.mockk.mockk(), io.mockk.mockk(), io.mockk.mockk(), net.weero.measix.pilot.utils.JsonInstant)
+        val execution = finalizer.ownChildExecution(child, childTurn, original)
+        parent.bindChildExecution(handle.assistantMessageId, execution)
+        val replacement = Job()
+        child.installTurnWorker(childTurn, replacement)
+        parent.releaseChildExecution(parentTurn, execution)
+        assertSame(replacement, child.currentWorker())
+        assertTrue(replacement.isActive)
+        assertTrue(!parent.hasExecutionLeases)
+        replacement.cancel()
+        parent.applyCommand(FinalizeTurn(handle, null, TurnExecutionStatus.CANCELLED, null))
+        parent.releaseTurnWorker(parentTurn, parent.currentWorker())
     }
 
     @Test
@@ -413,6 +608,17 @@ class ConversationRuntimeTest {
         var mcpReleases = 0
         rt.bindMcpExecution(turnId, initialWorker, context.assistant.id,
             net.weero.measix.pilot.data.ai.mcp.McpExecutionLease { mcpReleases++ })
+        val childConversation = Conversation(assistantId = DEFAULT_ASSISTANT_ID, parentConversationId = rt.id, messageNodes = emptyList())
+        val child = ConversationRuntime(childConversation.id, childConversation.toSnapshot(), scope, {})
+        val childTurn = Uuid.random()
+        val childWorker = Job()
+        var childReleases = 0
+        child.installTurnWorker(childTurn, childWorker)
+        child.bindModelExecution(childTurn, childWorker, DEFAULT_ASSISTANT_ID,
+            ModelExecutionLease(releaseOwner = { childReleases++ }) { error("no request") })
+        val finalizer = net.weero.measix.pilot.service.turn.TurnFinalizer(
+            io.mockk.mockk(), io.mockk.mockk(), io.mockk.mockk(), net.weero.measix.pilot.utils.JsonInstant)
+        rt.bindChildExecution(handle.assistantMessageId, finalizer.ownChildExecution(child, childTurn, childWorker))
         rt.bindTurnContext(turnId, initialWorker, context)
         assertSame(context, rt.requireTurnContext(turnId, initialWorker))
         assertThrows(IllegalStateException::class.java) {
@@ -432,6 +638,7 @@ class ConversationRuntimeTest {
         rt.releaseTurnWorker(turnId, initialWorker, false)
         assertTrue(inspection.execute { it === net.weero.measix.pilot.test.exampleModelTarget })
         assertEquals(0, mcpReleases)
+        assertEquals(0, childReleases)
         assertNull(rt.captureAndRequestStop("managed_snapshot_required", turnId = Uuid.random()))
         assertTrue(continuationWorker.isActive)
         val stopped = requireNotNull(rt.captureAndRequestStop("managed_snapshot_required", turnId = turnId))
@@ -441,6 +648,7 @@ class ConversationRuntimeTest {
         try { inspection.execute { fail("released continuation reached I/O") }; fail("closed inspection accepted") }
         catch (error: IllegalStateException) { assertEquals("model_execution_lease_closed", error.message) }
         assertEquals(1, mcpReleases)
+        assertEquals(1, childReleases)
         scope.cancel()
     }
 

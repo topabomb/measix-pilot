@@ -58,14 +58,15 @@ class ChatDrawerVM internal constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, AssistantCatalogReadState.Loading)
 
     private val selectedFolder = MutableStateFlow<Pair<ConversationFolderAccess, Uuid>?>(null)
-    private val assistantTarget = assistantCatalog.map { catalog ->
-        (catalog as? AssistantCatalogReadState.Available)?.catalog?.let { available ->
-            available.selected.reference?.let { ConversationFolderAccess(available.selection, it) }
-        }
-    }.distinctUntilChanged().onEach {
+    private val assistantTarget = MutableStateFlow<ConversationFolderAccess?>(null)
+
+    /** The visible conversation owns the drawer identity, independently of the next-chat default. */
+    internal fun bindTarget(target: ConversationFolderAccess) {
+        if (assistantTarget.value == target) return
         selectedFolder.value = null
         saveScrollPosition(0, 0)
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+        assistantTarget.value = target
+    }
 
     val selectedFolderId: StateFlow<Uuid?> = combine(assistantTarget, selectedFolder) { target, selected ->
         selected?.takeIf { it.first == target }?.second

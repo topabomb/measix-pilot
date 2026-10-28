@@ -2162,8 +2162,8 @@
   <string name="webdav_no_current">No current WebDAV. Add or select a server.</string>
   <string name="webdav_current">Currently in use</string>
   <string name="webdav_delete_connection">Remove %1$s? Server files will be kept. Any selection using this server will become unavailable.</string>
-  <string name="webdav_connection_name">Server name</string>
-  <string name="webdav_root_url">WebDAV root URL</string>
+  <string name="webdav_connection_name">Display name (optional)</string>
+  <string name="webdav_root_url">WebDAV server address</string>
   <string name="webdav_save">Save</string>
   <string name="webdav_file_manager">WebDAV file manager</string>
   <string name="webdav_switch_server">Switch server</string>
@@ -2260,4 +2260,9 @@
   <string name="qr_camera_permission">Allow camera access to scan a QR code. If permission is blocked, enable it in Settings.</string>
   <string name="qr_scan_failed">The camera could not scan the code. Check the details and retry.</string>
   <string name="file_preview_resources_failed">Some resources could not be loaded</string>
+  <string name="webdav_address_help">Use the full WebDAV address from your service, not an MCP address or a folder path.</string>
+  <string name="webdav_invalid_url">Enter a complete http:// or https:// WebDAV address without a query or fragment.</string>
+  <string name="webdav_invalid_username">The username cannot contain a colon or a line break.</string>
+  <string name="webdav_name_help">Leave blank to use the server hostname.</string>
+  <string name="webdav_credentials_help">Leave credentials blank for anonymous access. Otherwise, use the WebDAV credentials from your service.</string>
 </resources>

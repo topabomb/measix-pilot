@@ -335,9 +335,8 @@ class EnterpriseExitServiceTest {
             assertEquals(EnterpriseSessionPhase.CLOSING, f.manifest.phase)
             assertEquals(EnterpriseExitReason.IDENTITY_DELETED, f.manifest.exitReason)
             entered.await()
-            val completion = async { f.service.invalidate(access, EnterpriseExitReason.IDENTITY_DELETED) }
             release.complete(Unit)
-            completion.await()
+            f.sessions.state.first { (it as? EnterpriseState.Available)?.manifest?.phase == EnterpriseSessionPhase.SIGNED_OUT }
             assertEquals(EnterpriseSessionPhase.SIGNED_OUT, f.manifest.phase)
         }
     }

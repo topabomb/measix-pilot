@@ -71,9 +71,7 @@ internal class WebDavApplicationService(
         require(selection.access == RealmAccess.Personal) { "webdav_enterprise_configuration_read_only" }
         queries.requireSelection(selection)
         val connection = draft.validated()
-        check(client.list(connection.rootUrl, Credentials.basic(connection.username, connection.password), depth = 0).self?.directory == true) {
-            "webdav_root_not_directory"
-        }
+        client.list(connection.rootUrl, authorization(connection), depth = 0)
         queries.requireSelection(selection)
     }
 
@@ -81,6 +79,10 @@ internal class WebDavApplicationService(
         queries.requireSelection(selection)
         if (selection.access is RealmAccess.Enterprise) remoteWorkspace.refresh(selection)
     }
+
+    private fun authorization(connection: WebDavConnection): String? =
+        if (connection.username.isEmpty() && connection.password.isEmpty()) null
+        else Credentials.basic(connection.username, connection.password)
 
     suspend fun open(selection: RealmSelection, id: String? = null): WebDavHandle {
         queries.requireSelection(selection)
@@ -278,7 +280,7 @@ internal class WebDavApplicationService(
     }
 
     private suspend fun write(handle: WebDavHandle, paths: Set<String>, replay: Boolean = true,
-        block: suspend (WebDavClient, String, sent: () -> Unit) -> Unit) {
+        block: suspend (WebDavClient, String?, sent: () -> Unit) -> Unit) {
         var sent = false
         operation(handle, onFailure = { failure ->
             val definiteRejection = failure is DavHttpException && failure.status in setOf(400, 401, 403, 404, 405, 409, 412, 415, 423, 501) ||
@@ -347,9 +349,9 @@ internal class WebDavApplicationService(
     }
 
     private suspend fun <T> request(handle: WebDavHandle, replay: Boolean = true,
-        onRejected: () -> Unit = {}, writing: Boolean = false, action: suspend (WebDavClient, String) -> T): T {
+        onRejected: () -> Unit = {}, writing: Boolean = false, action: suspend (WebDavClient, String?) -> T): T {
         val target = handle.target
-        if (target is WebDavTarget.Personal) return action(client, Credentials.basic(target.connection.username, target.connection.password))
+        if (target is WebDavTarget.Personal) return action(client, authorization(target.connection))
         target as WebDavTarget.Enterprise
         val lease = sessions.capturePlatformOperation(target.access.sessionId)
         try {

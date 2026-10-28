@@ -412,6 +412,12 @@ class SubAssistantRunCoordinatorTest {
         }
         val runtimeRegistry = mockk<ConversationRuntimeRegistry>(relaxed = true)
         every { runtimeRegistry.findRuntime(any()) } returns null
+        val parentRuntime = mockk<ConversationRuntime>(relaxed = true)
+        every { parentRuntime.snapshot } returns MutableStateFlow(ConversationRuntimeSnapshot(
+            durable = Conversation.ofId(masterId, callerId, scope = configurationScope).toSnapshot(), stream = null,
+        ))
+        every { parentRuntime.bindChildExecution(any(), any()) } returns Uuid.random()
+        every { runtimeRegistry.findRuntime(masterId) } returns parentRuntime
         val commandCoordinator = mockk<ConversationCommandCoordinator>()
         val artifactStore = mockk<ArtifactStore>(relaxed = true)
         val conversationRepo = mockk<ConversationRepository>(relaxed = true)

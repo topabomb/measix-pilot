@@ -5,6 +5,8 @@ import androidx.navigation3.runtime.NavKey
 import net.weero.measix.pilot.Screen
 
 class Navigator(private val backStack: MutableList<NavKey>) {
+    internal val currentEntry: NavKey? get() = backStack.lastOrNull()
+
     fun isCurrentConversation(request: net.weero.measix.pilot.service.ConversationOpenRequest): Boolean =
         (backStack.lastOrNull() as? Screen.Chat)?.request == request
 

@@ -24,6 +24,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.WebDavConnection
+import net.weero.measix.pilot.data.configuration.WebDavConnectionChange
 import net.weero.measix.pilot.data.configuration.WebDavBackupPreferences
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.enterprise.RealmAccess
@@ -68,10 +69,111 @@ class WebDavPageAndroidTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val bitmap = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
         try {
-            File(instrumentation.targetContext.getExternalFilesDir(null), name).outputStream().use {
+            val directory = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")?.let(::File)
+                ?: requireNotNull(instrumentation.targetContext.getExternalFilesDir(null))
+            directory.mkdirs()
+            File(directory, name).outputStream().use {
                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
             }
         } finally { bitmap.recycle() }
+    }
+
+    @Test fun personalEditorExplainsInvalidPathAndSavesWithoutARequiredNameOrNetworkTest() {
+        val selection = RealmSelection(RealmAccess.Personal, 1)
+        val queries = mockk<ConfigurationQueryService> {
+            every { observeWebDavConfiguration() } returns flowOf(WebDavConfigurationReadState.Available(selection, emptyList(), null))
+            every { observeSelectedRealmSelection() } returns flowOf(selection)
+        }
+        val commands = mockk<ConfigurationApplicationService>()
+        val dav = mockk<WebDavApplicationService>()
+        val saved = slot<WebDavConnectionChange>()
+        coEvery { commands.changeWebDavConnection(selection, capture(saved)) } returns Unit
+        lateinit var vm: WebDavSettingsVM
+        compose.runOnUiThread { vm = WebDavSettingsVM(queries, commands, dav).also { store.put("settings", it) } }
+        show {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1.3f)) { SettingWebDavPage(vm) }
+        }
+        compose.onNodeWithText(text(R.string.webdav_add_connection)).performClick()
+        compose.onNodeWithTag("webdav_address").performTextInput("/")
+        compose.onNodeWithText(text(R.string.webdav_save)).performClick()
+        compose.onNodeWithText(text(R.string.webdav_invalid_url)).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.chat_conversation_diagnostics)).assertDoesNotExist()
+        coVerify(exactly = 0) { dav.testConnection(any(), any()) }
+        coVerify(exactly = 0) { commands.changeWebDavConnection(any(), any()) }
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        capture("webdav-editor-invalid-path-large-font.png")
+        compose.onNodeWithTag("webdav_address").performTextReplacement("https://files.example.com/dav")
+        compose.onNodeWithText(text(R.string.webdav_invalid_url)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.webdav_save)).assertIsDisplayed().performClick()
+        compose.waitUntil(5_000) { vm.draft.value == null }
+        val connection = (saved.captured as WebDavConnectionChange.Save).connection
+        assertEquals("files.example.com", connection.name)
+        assertEquals("https://files.example.com/dav/", connection.rootUrl)
+        assertEquals("", connection.username)
+        assertEquals("", connection.password)
+        coVerify(exactly = 0) { dav.testConnection(any(), any()) }
+    }
+
+    @Test fun configurationRetryIsReachableFromTheEditorAndPreservesInput() {
+        val selection = RealmSelection(RealmAccess.Personal, 1)
+        val available = WebDavConfigurationReadState.Available(selection, emptyList(), null)
+        val failRead = CompletableDeferred<Unit>()
+        var subscriptions = 0
+        val queries = mockk<ConfigurationQueryService> {
+            every { observeSelectedRealmSelection() } returns flowOf(selection)
+            every { observeWebDavConfiguration() } returns kotlinx.coroutines.flow.flow<WebDavConfigurationReadState> {
+                subscriptions++
+                emit(available)
+                if (subscriptions == 1) {
+                    failRead.await()
+                    emit(WebDavConfigurationReadState.Unavailable("Configuration read failed"))
+                }
+            }
+        }
+        lateinit var vm: WebDavSettingsVM
+        compose.runOnUiThread { vm = WebDavSettingsVM(queries, mockk(), mockk()).also { store.put("settings", it) } }
+        show { SettingWebDavPage(vm) }
+        compose.onNodeWithText(text(R.string.webdav_add_connection)).performClick()
+        compose.onNodeWithTag("webdav_address").performTextInput("https://files.example.com/unsaved/")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        compose.runOnIdle { failRead.complete(Unit) }
+        compose.onNode(hasText(text(R.string.application_recovery_retry)) and hasAnyAncestor(isDialog()))
+            .performScrollTo().performClick()
+        compose.waitUntil(5_000) { subscriptions == 2 && vm.configuration.value is WebDavConfigurationReadState.Available }
+        assertEquals("https://files.example.com/unsaved/", requireNotNull(vm.draft.value).connection.rootUrl)
+        compose.onNodeWithTag("webdav_connection_editor").assertExists()
+        compose.onNodeWithText(text(R.string.application_recovery_retry)).assertDoesNotExist()
+    }
+
+    @Test fun personalEditorConnectionFailureKeepsEditableInputAndRetryClearsTheError() {
+        val selection = RealmSelection(RealmAccess.Personal, 1)
+        val queries = mockk<ConfigurationQueryService> {
+            every { observeWebDavConfiguration() } returns flowOf(WebDavConfigurationReadState.Available(selection, emptyList(), null))
+            every { observeSelectedRealmSelection() } returns flowOf(selection)
+        }
+        val dav = mockk<WebDavApplicationService>()
+        coEvery { dav.testConnection(selection, any()) } throws java.io.IOException("HTTP 401: WebDAV credentials rejected")
+        lateinit var vm: WebDavSettingsVM
+        compose.runOnUiThread { vm = WebDavSettingsVM(queries, mockk(), dav).also { store.put("settings", it) } }
+        show { SettingWebDavPage(vm) }
+        compose.onNodeWithText(text(R.string.webdav_add_connection)).performClick()
+        compose.onNodeWithTag("webdav_address").performTextInput("https://files.example.com/dav/")
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        compose.onNodeWithTag("webdav_test_connection").performScrollTo().performClick()
+        compose.onNodeWithText("HTTP 401", substring = true).assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.chat_conversation_diagnostics)).performClick()
+        compose.onNodeWithContentDescription(text(R.string.chat_page_copy_error)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
+        compose.onNodeWithTag("webdav_password").performScrollTo().performTextInput("new-test-password")
+        compose.onNodeWithText("HTTP 401", substring = true).assertDoesNotExist()
+        coEvery { dav.testConnection(selection, any()) } returns Unit
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        compose.onNodeWithTag("webdav_test_connection").performScrollTo().performClick()
+        compose.onNodeWithText(text(R.string.backup_page_connection_success)).assertIsDisplayed()
+        capture("webdav-editor-tested.png")
+        assertNotNull(vm.draft.value)
+        assertTrue(vm.draft.value!!.connection.name.isEmpty())
     }
 
     @Test fun enterpriseSettingsShowsReadonlyCurrentWithoutPersonalEditor() {

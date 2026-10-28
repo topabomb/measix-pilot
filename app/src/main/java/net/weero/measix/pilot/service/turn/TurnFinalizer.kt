@@ -54,6 +54,26 @@ class TurnFinalizer(
         internal val auxiliaryWorkers: List<Job> = emptyList(),
     )
 
+    /** The parent retains this exact Child execution until its worker, Turn and resources have exited. */
+    internal inner class ChildExecution(
+        internal val runtime: ConversationRuntime,
+        internal val captured: CapturedTurnWorker,
+    ) {
+        internal suspend fun release(stopReason: String? = null): Boolean = withContext(NonCancellable) {
+            captured.worker?.cancel()
+            if (stopReason != null) {
+                finishStop(StopRequest(runtime.id, runtime, captured, stopReason))
+            } else {
+                captured.worker?.join()
+                runtime.releaseTurnWorker(captured.turnId, captured.worker)
+            }
+            !runtime.ownsStoppedWorker(captured)
+        }
+    }
+
+    internal fun ownChildExecution(runtime: ConversationRuntime, turnId: Uuid, worker: Job): ChildExecution =
+        ChildExecution(runtime, CapturedTurnWorker(turnId, worker))
+
     /** Caller must retain this ownership across lock release and finish it even on cancellation. */
     internal fun captureStop(conversationId: Uuid, reason: String = TurnTerminalReasons.USER_STOP,
         assistantId: me.rerere.common.configuration.ConfigurationReference? = null, turnId: Uuid? = null): StopRequest? {
@@ -108,6 +128,7 @@ class TurnFinalizer(
         captured.pending?.let { pending ->
             finishStop(StopRequest(request.conversationId, request.runtime, pending, request.reason))
         }
+        request.runtime.releaseChildExecutions(captured.turnId, captured.worker, request.reason)
         val release = commandCoordinator.withResidentRuntime(request.conversationId) { runtime ->
             val execution = conversationRepository.getTurnExecution(captured.turnId.toString())
             if (execution?.status in setOf(TurnExecutionStatus.RUNNING, TurnExecutionStatus.AWAITING_USER)) {

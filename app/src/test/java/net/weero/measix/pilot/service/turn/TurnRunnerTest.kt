@@ -512,6 +512,32 @@ class TurnRunnerTest {
     }
 
     @Test
+    fun `terminal commit failure preserves the earlier execution failure in diagnostics`() = runTest {
+        val harness = createProviderHarness()
+        listOf(
+            java.io.IOException("original execution failed") to TurnOutcome.Failed::class,
+            me.rerere.ai.util.HttpException("original execution incomplete",
+                terminalStatus = me.rerere.ai.util.ProviderTerminalStatus.INCOMPLETE) to TurnOutcome.Incomplete::class,
+        ).forEach { (executionFailure, outcomeType) ->
+            val capture = TurnRunCapture()
+            val thrown = runCatching {
+                harness.handler.run(turnRunInputsFixture(
+                    conversationId = Uuid.random(), settings = harness.settings, model = harness.model,
+                    mediaCapabilities = RequestMediaCapabilities.NONE, messages = listOf(UIMessage.user("hello")),
+                    assistant = harness.assistant, promptInputs = testPromptInputs(), maxSteps = 1, capture = capture,
+                    onAssistantObserved = { throw executionFailure },
+                    onResult = { throw IllegalStateException("terminal commit failed") },
+                ))
+            }.exceptionOrNull()
+            val diagnostic = requireNotNull(thrown).stackTraceToString()
+            assertTrue(diagnostic.contains("terminal commit failed"))
+            assertTrue(diagnostic.contains(requireNotNull(executionFailure.message)))
+            assertEquals(1, capture.results.size)
+            assertEquals(outcomeType, requireNotNull(capture.result)::class)
+        }
+    }
+
+    @Test
     fun `cancel after STARTED checkpoint before execute does not run the tool`() = runTest {
         val model = Model(modelId = "test-model", displayName = "Test Model")
         val providerSetting = ProviderSetting.OpenAI(models = listOf(model))

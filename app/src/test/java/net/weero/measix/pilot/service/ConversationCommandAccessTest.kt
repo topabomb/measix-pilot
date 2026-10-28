@@ -49,6 +49,67 @@ import kotlin.uuid.Uuid
 class ConversationCommandAccessTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `ordinary and queued request cleanup failures are reported and retain stop retry ownership`() = runTest {
+        for (queued in listOf(false, true)) fixture { f ->
+            f.enableGeneration()
+            f.failMcpCleanup()
+            coEvery { f.runner.run(any()) } throws java.io.IOException("provider rejected")
+            if (queued) f.turns.enqueueMessage(ConversationAssistantTarget(f.page.commandTarget, DEFAULT_ASSISTANT_ID),
+                listOf(UIMessagePart.Text("queued")), true, null)
+            else f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("start")))
+            runCurrent()
+            val worker = requireNotNull(f.runtime.currentWorker())
+            worker.join()
+            assertTrue(worker.isCompleted)
+            assertTrue(f.runtime.currentTurnPresentation().isActive)
+            assertNull(f.runtime.snapshot.value.stream)
+            assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.any { it.detail.contains("MCP cleanup detail") })
+            f.cleanupFails = false
+            f.application.stopGeneration(f.page.commandTarget)
+            assertNull(f.runtime.currentWorker())
+            assertFalse(f.runtime.currentTurnPresentation().isActive)
+        }
+    }
+
+    @Test fun `continued interaction cleanup failure is reported and preserves the original owner for stop retry`() = runTest {
+        fixture { f ->
+            f.enableGeneration()
+            f.failMcpCleanup()
+            var calls = 0
+            lateinit var locator: me.rerere.ai.core.ToolCallLocator
+            coEvery { f.runner.run(any()) } coAnswers {
+                val input = firstArg<net.weero.measix.pilot.service.turn.TurnRunInputs>()
+                if (++calls == 1) {
+                    val assistant = input.messages.last()
+                    val parts = assistant.parts.map {
+                        if (it is UIMessagePart.Step) it.copy(modelResult = net.weero.measix.pilot.testkit.sampledModelResult()) else it
+                    }
+                    val step = parts.filterIsInstance<UIMessagePart.Step>().single()
+                    val tool = UIMessagePart.Tool(localCallId = Uuid.random(), stepId = step.stepId,
+                        providerCallId = "call", toolName = "ask_user", input = "{}",
+                        interactionState = me.rerere.ai.ui.ToolInteractionState.AwaitingInput)
+                    locator = me.rerere.ai.core.ToolCallLocator(assistant.id, step.stepId, tool.localCallId)
+                    input.onCheckpoint(ModelResponseCheckpoint(input.handle, StepHandle(step.stepId),
+                        assistant.copy(parts = parts + tool), TurnExecutionStatus.AWAITING_USER))
+                    net.weero.measix.pilot.service.turn.TurnPause(listOf(
+                        net.weero.measix.pilot.data.ai.tools.PendingToolInteraction(locator, tool.interactionState)))
+                } else throw java.io.IOException("continuation provider rejected")
+            }
+            val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("start"))))
+            requireNotNull(f.runtime.currentWorker()).join()
+            assertTrue(f.errors.errors.value.toString(), f.runtime.isAwaitingUser(receipt.turnId))
+            f.turns.submitToolDecision(f.page.commandTarget, locator, ToolInteractionDecision.Answer("answer"))
+            runCurrent()
+            requireNotNull(f.runtime.currentWorker()).join()
+            assertNull(f.runtime.snapshot.value.stream)
+            assertTrue(f.runtime.currentTurnPresentation().isActive)
+            assertTrue(f.errors.errors.value.toString(), f.errors.errors.value.any { it.detail.contains("MCP cleanup detail") })
+            f.cleanupFails = false
+            f.application.stopGeneration(f.page.commandTarget)
+            assertNull(f.runtime.currentWorker())
+        }
+    }
+
     @Test fun `invalid summary limits reject before starting work or changing history`() = runTest {
         fixture { f ->
             val before = f.runtime.durable
@@ -1552,6 +1613,18 @@ class ConversationCommandAccessTest {
         val runner = mockk<net.weero.measix.pilot.service.turn.TurnRunner>()
         val memory = mockk<MemoryService>()
         val mcp = mockk<net.weero.measix.pilot.data.ai.mcp.McpRuntimeCoordinator>()
+        var cleanupFails = true
+        fun failMcpCleanup() {
+            coEvery { mcp.prepareTurnCapabilities(any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+                val owner = arg<ConversationRuntime>(2)
+                val captured = arg<CapturedModelConfiguration>(1)
+                owner.bindMcpExecution(arg(3), arg(4), captured.assistant.id,
+                    net.weero.measix.pilot.data.ai.mcp.McpExecutionLease {
+                        if (cleanupFails) throw java.io.IOException("MCP cleanup detail", IllegalStateException("transport close cause"))
+                    })
+                net.weero.measix.pilot.data.ai.mcp.TurnMcpCapabilitySnapshot.EMPTY
+            }
+        }
         val turns by lazy {
             val context = mockk<android.app.Application>()
             every { context.getString(any()) } returns "operation"

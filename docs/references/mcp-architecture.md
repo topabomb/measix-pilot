@@ -241,6 +241,8 @@ server 会主动建立其自身连接。恢复目录后仍为 `Idle`，表示按
 移除先封闭准入并取消 runtime scope，由 AppScope 接受关闭任务，在状态锁外等待原任务完成并关闭原始 transport，
 然后才从注册表移除。超时/失败保留 Runtime 与资源，公开错误并由后续命令重试；重新启用也须先完成旧资源清理。
 SDK Client 即使已经丢失 transport 引用，清理仍使用 Runtime 持有的原 transport。
+Turn 结束时逐个尝试关闭其拥有的 MCP Runtime，单项失败不阻断其他独立连接的关闭，失败诊断保留 suppressed。
+成功项退出该 Turn 的待清理集合，停止重试只处理剩余项；所有连接关闭成功后才释放它们依赖的企业 binding。
 所有远程或持久化 I/O 在锁外执行，完成时以 generation/client/definition lease 重新验收。同 fingerprint 的重复触发合并到
 已有 operation，definition 变化则取消旧 operation、推进 generation 并替换。跨 server 的 connect、首次 discovery 和健康
 session 的 catalog refresh 共用一个全局 semaphore，最多 4 路并行；工具调用永不经过该门。连接/目录 attempt 的 timeout 从

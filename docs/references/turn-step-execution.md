@@ -70,6 +70,8 @@ UI 等待命令结果后关闭对话框，错误可见，取消继续传播。
 同一 turnId 的替代 worker 不能被迟到停止影响。producer finally 与 Job completion 共用 releaseTurnWorker：
 同 turn stream 未关闭就保留原 owner，不以显示 phase 或 Job 已结束判断提交成功，Child 也不能强制提前释放。OS 前台超时由专用 application
 命令捕获当时的工作任务，UI 不使用该全局停止入口。
+替代请求退出后，仍有清理失败的旧请求时，Runtime 从原 `ownedRequests` 恢复可见停止目标；
+即使旧 Turn 已结束或尚未建立，也须完成其资源清理后才能恢复空闲和待发输入处理。
 
 删除、撤销删除、消息删除和克隆在停止结束后重新验证原选择，再取得完整父子锁集合，检查 lineage 未变、全部主体一致且无活动 turn。
 删除的数据库提交与 Runtime 驱逐在同一个已取得所有权的不可取消段完成。克隆只读取授权时捕获的父子快照，创建新树前再次验证原页面。
@@ -157,6 +159,11 @@ UI 仅消费公开回执与 `ConversationInputQueueUiModel`，不持有附件 su
 
 ### Draft 与首条提交
 
+`newDraftRequest` 只接受调用方捕获的 `RealmSelection`，在读取配置前复验原选择 revision 和 Session。
+未显式指定助手时使用原域的助手选择；缺失或失效通过 `ConversationAssistantUnavailableException` 报告，
+不改写偏好或选择目录首项。冷启动的新建分支复用同一解析；企业隐式默认不可用时进入空间选择，
+显式助手不可用仍保留失败原因。配置读取及授权失败不解释为缺少助手。
+
 新聊天先是非持久化 Draft，首条 `AppendUserMessage` 单事务创建会话并原位晋升 Ready。共享预设附件在安装 Draft 前由 ArtifactStore 复制到目标域，创建令牌随原 Runtime 保留；重复打开不重复复制。提交失败保持 Draft 与附件，提交后沿原会话协议发布，闲置丢弃时同步交还 GC。细节见多模态持久化参考。
 
 聊天页新建时捕获抽屉的原 `ConversationFolderAccess` 与文件夹 ID，经应用服务核对原选择和助手后写入
@@ -204,6 +211,11 @@ USER 预处理按原 RealmAccess 的已解析助手执行。START 前由 `ModelE
 `ModelExecutionLease` 在取得企业 binding 前交给原 Runtime 的 PREPARING owner；上下文只能绑定该 owner 已持有的同一 lease。每次完成请求装配后，StepRunner 经 lease 在原 Session/配置门禁内启动属于原 worker 的请求，网络等待在锁外完成。个人资源只从原 credential owner 刷新凭据，wire shape 保持冻结；企业资源保留原 Applied revision 的私有 binding，并在下一次请求前复验权限和固定绑定。子助手还复验 Caller → Target 的调用资格。
 
 等待用户时，继续 worker 接手同一上下文及 lease；旧 worker 的结束不能释放它。终态或准备失败的资源释放在 Session/会话锁外等待；清理失败保留原 Runtime owner 供 stop 重试。持有执行 lease 的 Runtime 不得被空闲回收、显式驱逐或删除，清理成功后才移除 owner。
+普通发送、队列发送和交互继续的资源释放失败沿会话错误存储保留完整诊断，不只写入后台日志。
+MCP 与模型资源分别尝试释放，成功项从原 owner 移除，失败项及全部诊断保留供停止重试；
+终态消息已提交不表示资源已经退出，清理完成前停止按钮仍反映原活动 owner。
+父 Turn 的同一 owner 还持有已关联 Child 的执行清理责任，交互继续时一起交接；
+Child 清理成功才移除该责任，失败后父停止入口仍可重试，具体边界见[子助手架构](sub-assistant-architecture.md)。
 
 ### 用户交互继续
 
@@ -271,6 +283,7 @@ Detail 保存脱敏的完整异常类型、message、cause 和 suppressed，
 不使用模型可见错误摘要的截断规则。嵌套 Provider incomplete 仍保持独立终态，诊断保全外层和协议原因；
 受信任的企业运行 Problem 继续保存原结构化 detail，供预算与授权诊断解析。
 完整诊断与运行边界堆栈继续隐藏凭据字段、裸 Provider key 和嵌入图片 payload，不截断定位所需的普通正文。
+执行失败后终态提交或资源回滚再次失败时，保留两次异常的完整诊断；不把提交失败重新作为生成失败提交。
 
 `TurnOutcome` 仅含 Completed / Failed / Cancelled / Incomplete；`TurnPause` 携带非空 pending locator 列表，
 其 AWAITING_USER checkpoint 已由 Runner 提交。取消传播到调用者，`NonCancellable` 只用于已有所有权的终态

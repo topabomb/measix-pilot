@@ -790,9 +790,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                 onOpenDraft = { request ->
                     original.portal?.let(vm::dismissPortal)
                     starterPicker = null
-                    nav.navigate(Screen.Chat(request.request, text = request.text.base64Encode())) {
-                        popUpTo(Screen.Enterprise) { inclusive = true }
-                    }
+                    nav.clearAndNavigate(Screen.Chat(request.request, text = request.text.base64Encode()))
                 }, onDismiss = { starterPicker = null })
         }
     }

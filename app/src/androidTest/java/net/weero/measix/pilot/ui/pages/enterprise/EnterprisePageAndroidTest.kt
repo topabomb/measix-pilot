@@ -122,6 +122,32 @@ class EnterprisePageAndroidTest {
         coVerify(exactly = 0) { fixture.conversations.initialRequest(any()) }
     }
 
+    @Test fun enterpriseNewChatClearsPreviousChatsSettingsAndSpaceEntries() {
+        val old = Screen.Chat(ConversationOpenRequest.NewDraft(Uuid.random(), RealmAccess.Personal, ConfigurationReference.random()))
+        val fixture = Fixture(overview(), mutableListOf(old, Screen.Setting, Screen.Enterprise, Screen.EnterpriseUsage))
+        val selection = requireNotNull(fixture.state.value.selection)
+        val assistant = net.weero.measix.pilot.data.model.Assistant(
+            id = ConfigurationReference.Enterprise((selection.access.scope as ConfigurationScope.Enterprise).authority, "asd_available"),
+            name = "Entry assistant")
+        every { fixture.configurationQueries.observeEnterpriseStarters(selection) } returns MutableStateFlow(
+            EnterpriseStarterReadState.Available(EnterpriseStarterCatalogUiModel("Enterprise", emptyList())))
+        every { fixture.configurationQueries.observeAssistantCatalog() } returns MutableStateFlow(AssistantCatalogReadState.Available(
+            AssistantCatalogUiModel(selection, net.weero.measix.pilot.data.configuration.ConfigurationSelection(null, null),
+                mapOf(assistant.id to assistant), emptyList())))
+        val request = ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant.id)
+        coEvery { fixture.conversations.selectAssistantRequest(selection, assistant.id, true) } returns request
+        fixture.show()
+        compose.onNodeWithTag("space-start-conversation").performClick()
+        compose.onNodeWithContentDescription(text(R.string.safe_mode_switch_assistant)).performClick()
+        compose.onNodeWithText(assistant.name).performClick()
+        compose.waitUntil(5_000) { fixture.backStack.lastOrNull() is Screen.Chat }
+        compose.runOnIdle {
+            assertEquals(listOf(Screen.Chat(request, text = "")), fixture.backStack)
+            Navigator(fixture.backStack).popBackStack()
+            assertEquals(listOf(Screen.Chat(request, text = "")), fixture.backStack)
+        }
+    }
+
     @Test
     fun unknownWorkspaceStaysHiddenAndItsFirstFailureIsLocalToTheConnection() {
         val fixture = Fixture(overview())
@@ -1125,6 +1151,9 @@ class EnterprisePageAndroidTest {
         lateinit var vm: EnterpriseVM
 
         fun show(withVerticalHinge: Boolean = false, restoration: StateRestorationTester? = null) {
+            coEvery { configurationQueries.requireSelection(any()) } coAnswers {
+                check(firstArg<RealmSelection>() == state.value.selection) { "enterprise_source_changed" }
+            }
             every { conversationQuery.observeCurrentSelection() } returns state.map { it.selection }
             every { configurationQueries.observeWebDavConfiguration() } returns state.map {
                 it.selection?.let { selection ->

@@ -60,6 +60,8 @@ internal sealed interface InitialConversationRequest {
     data object SelectEnterpriseAssistant : InitialConversationRequest
 }
 
+internal class ConversationAssistantUnavailableException(reason: String) : IllegalStateException(reason)
+
 /** 用户会话命令、创建、删除与 fork 的唯一 Application owner。 */
 class ConversationApplicationService internal constructor(
     private val settingsStore: SettingsStore,
@@ -129,16 +131,6 @@ class ConversationApplicationService internal constructor(
         answer: String,
     ): Boolean = withRootCommand(target) {
         subAssistantRunGate.completeAnswer(target.conversationId, target.selection.access, runId, interactionId, answer)
-    }
-
-    suspend fun newDraftRequest(
-        access: RealmAccess,
-        assistantId: ConfigurationReference? = null,
-    ): ConversationOpenRequest.NewDraft {
-        recoveryGate.awaitReady()
-        return sessions.withSelectedRealmAccess(access) {
-            createDraftRequest(RealmSelection(access, sessions.selectionRevision.value), assistantId)
-        }
     }
 
     suspend fun newDraftRequest(
@@ -272,8 +264,11 @@ class ConversationApplicationService internal constructor(
     private suspend fun createDraftRequest(selection: RealmSelection, assistantId: ConfigurationReference?) =
         settingsStore.withResolvedConfiguration(selection.access.scope, sessions.state.value) { configuration ->
             sessions.requirePublishedSelection(selection)
-            val selected = requireNotNull(assistantId ?: configuration.selections.assistantId) { "conversation_assistant_missing" }
-            check(configuration.selection(ConfigurationCategory.ASSISTANT, selected).isAvailable) { "conversation_assistant_unavailable" }
+            val selected = assistantId ?: configuration.selections.assistantId
+                ?: throw ConversationAssistantUnavailableException("conversation_assistant_missing")
+            if (!configuration.selection(ConfigurationCategory.ASSISTANT, selected).isAvailable) {
+                throw ConversationAssistantUnavailableException("conversation_assistant_unavailable")
+            }
             ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, selected)
         }
 
@@ -362,16 +357,10 @@ class ConversationApplicationService internal constructor(
                 check(header.scope == access.scope && header.parentConversationId == null) { "conversation_scope_mismatch" }
                 InitialConversationRequest.Open(ConversationOpenRequest.OpenExisting(requireNotNull(existing), access,
                     StartupConversationResume(header.assistantId, sessions.selectionRevision.value)))
-            } else settingsStore.withResolvedConfiguration(access.scope, sessions.state.value) { configuration ->
-                sessions.requirePublishedRealmAccess(access)
-                val selected = configuration.selections.assistantId
-                val available = selected != null && configuration.selection(ConfigurationCategory.ASSISTANT, selected).isAvailable
-                if (!available && access is RealmAccess.Enterprise) InitialConversationRequest.SelectEnterpriseAssistant
-                else {
-                    requireNotNull(selected) { "conversation_assistant_missing" }
-                    check(available) { "conversation_assistant_unavailable" }
-                    InitialConversationRequest.Open(ConversationOpenRequest.NewDraft(Uuid.random(), access, selected))
-                }
+            } else try {
+                InitialConversationRequest.Open(createDraftRequest(RealmSelection(access, sessions.selectionRevision.value), null))
+            } catch (error: ConversationAssistantUnavailableException) {
+                if (access is RealmAccess.Enterprise) InitialConversationRequest.SelectEnterpriseAssistant else throw error
             }
         }
     }

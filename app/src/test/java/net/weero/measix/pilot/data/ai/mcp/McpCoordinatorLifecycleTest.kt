@@ -38,6 +38,59 @@ internal class McpCoordinatorLifecycleTest : McpRuntimeCoordinatorTestBase() {
     private val borrowerAssistant = Assistant(mcpServers = setOf(SERVER_ID))
     private val turnLeases = mutableListOf<McpExecutionLease>()
 
+    @Test fun `turn MCP cleanup timeout is an IO failure with its timeout cause and remains retryable`() = runTest(dispatcher) {
+        emit(listOf(serverConfig()))
+        val fixture = enterpriseFixture()
+        fixture.prepare()
+        val transport = createdTransports.single()
+        transport.closeAction = { kotlinx.coroutines.awaitCancellation() }
+        val lease = turnLeases.single()
+        val started = testScheduler.currentTime
+        try { lease.release(); fail("cleanup timeout lost") }
+        catch (error: java.io.IOException) {
+            assertEquals("MCP resource cleanup timed out; retry required", error.message)
+            assertTrue(generateSequence<Throwable>(error) { it.cause }.any { it is kotlinx.coroutines.TimeoutCancellationException })
+        }
+        assertEquals(McpServerRuntimePolicy.CLIENT_CLOSE_TIMEOUT_MS, testScheduler.currentTime - started)
+        io.mockk.coVerify(exactly = 0) { fixture.binding.release() }
+        transport.closeAction = {}
+        lease.release()
+        assertEquals(2, transport.closeCalls)
+        io.mockk.coVerify(exactly = 1) { fixture.binding.release() }
+    }
+
+    @Test fun `turn cleanup closes independent MCP runtimes after failure and retains binding until retry`() = runTest(dispatcher) {
+        val first = serverConfig()
+        val second = first.copy(id = me.rerere.common.configuration.ConfigurationReference.random())
+        val third = first.copy(id = me.rerere.common.configuration.ConfigurationReference.random())
+        emit(listOf(first, second, third))
+        val fixture = enterpriseFixture(Assistant(mcpServers = setOf(first.id, second.id, third.id)))
+        fixture.prepare()
+        assertEquals(3, createdTransports.size)
+        val failed = createdTransports[0]
+        val alsoFailed = createdTransports[1]
+        val completed = createdTransports[2]
+        failed.closeAction = { throw java.io.IOException("first MCP cleanup") }
+        alsoFailed.closeAction = { throw java.io.IOException("second MCP cleanup") }
+        val lease = turnLeases.single()
+        try { lease.release(); fail("cleanup failure lost") }
+        catch (error: java.io.IOException) {
+            assertEquals("MCP resource cleanup failed", error.message)
+            assertTrue(generateSequence<Throwable>(error) { it.cause }.any { it.message == "first MCP cleanup" })
+            assertTrue(generateSequence<Throwable>(error) { it.cause }
+                .flatMap { it.suppressed.asSequence() }.any { it.message == "second MCP cleanup" })
+        }
+        assertEquals(1, completed.closeCalls)
+        io.mockk.coVerify(exactly = 0) { fixture.binding.release() }
+        failed.closeAction = {}
+        alsoFailed.closeAction = {}
+        lease.release()
+        assertEquals(2, failed.closeCalls)
+        assertEquals(2, alsoFailed.closeCalls)
+        assertEquals(1, completed.closeCalls)
+        io.mockk.coVerify(exactly = 1) { fixture.binding.release() }
+    }
+
     @Test
     fun `enterprise preparation waits for durable initialization but not a connection when catalog exists`() = runTest(dispatcher) {
         val config = serverConfig()
@@ -243,11 +296,10 @@ internal class McpCoordinatorLifecycleTest : McpRuntimeCoordinatorTestBase() {
         tools = listOf(McpCatalogTool("search", inputSchema = JsonObject(emptyMap()))),
     )
 
-    private fun enterpriseFixture(): EnterpriseFixture {
+    private fun enterpriseFixture(assistant: Assistant = borrowerAssistant): EnterpriseFixture {
         val packet = exampleEnterprisePackage()
         val access = RealmAccess.Enterprise(packet.identity.scope, "fixture-session")
         val version = EnterpriseAppliedVersion("fixture-revision", packet.configuration.generation, "config", "execution")
-        val assistant = borrowerAssistant
         val configuration = mockk<ResolvedConfiguration> {
             every { scope } returns access.scope
             every { enterpriseConfiguration } returns packet.configuration
@@ -284,7 +336,7 @@ internal class McpCoordinatorLifecycleTest : McpRuntimeCoordinatorTestBase() {
         every { owner.bindMcpExecution(any(), any(), any(), capture(lease)) } answers { turnLeases += lease.captured }
         val captured = CapturedModelConfiguration(effective.snapshot, configuration, assistant,
             mockk { every { enterpriseVersion } returns version }, 0, Uuid.random())
-        return EnterpriseFixture(access, assistant, captured, owner)
+        return EnterpriseFixture(access, assistant, captured, owner, binding)
     }
 
     private inner class EnterpriseFixture(
@@ -292,6 +344,7 @@ internal class McpCoordinatorLifecycleTest : McpRuntimeCoordinatorTestBase() {
         val assistant: Assistant,
         val captured: CapturedModelConfiguration,
         val owner: ConversationRuntime,
+        val binding: EnterpriseExecutionLease,
     ) {
         val key = McpRuntimeKey(SERVER_ID, access, "int_${captured.interactionId}")
         suspend fun prepare() = manager.prepareTurnCapabilities(access, captured, owner, Uuid.random(), Job()) {}

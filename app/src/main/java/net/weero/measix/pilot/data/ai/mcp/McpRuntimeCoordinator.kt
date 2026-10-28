@@ -530,7 +530,28 @@ class McpRuntimeCoordinator internal constructor(
         var bindings: EnterpriseExecutionLease? = null
         val owned = mutableListOf<McpServerRuntime>()
         val lease = McpExecutionLease {
-            owned.forEach { it.closeAndAwait() }
+            val failures = mutableListOf<Throwable>()
+            val remaining = owned.iterator()
+            while (remaining.hasNext()) {
+                val runtime = remaining.next()
+                try {
+                    runtime.closeAndAwait()
+                    remaining.remove()
+                } catch (error: Throwable) {
+                    failures += error
+                }
+            }
+            if (failures.size == 1) throw failures.single()
+            if (failures.isNotEmpty()) {
+                val cancelled = failures.filterIsInstance<CancellationException>().firstOrNull()
+                val primary = cancelled ?: failures.first()
+                // Coroutine stack recovery may replace an awaited exception; aggregate on our own owner.
+                val failure = if (cancelled != null) CancellationException("MCP resource cleanup cancelled").apply {
+                    initCause(cancelled)
+                } else java.io.IOException("MCP resource cleanup failed", primary)
+                failures.filter { it !== primary }.forEach(failure::addSuppressed)
+                throw failure
+            }
             bindings?.release()
         }
         owner.bindMcpExecution(turnId, worker, captured.assistant.id, lease)

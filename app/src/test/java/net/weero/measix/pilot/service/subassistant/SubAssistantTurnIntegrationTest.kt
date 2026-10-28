@@ -100,9 +100,19 @@ class SubAssistantTurnIntegrationTest {
     @Test(timeout = 30_000)
     fun `in flight caller revocation persists the same stop reason in parent and child`() = runScenario(false, revokeDuringRequest = true)
 
+    @Test(timeout = 30_000)
+    fun `child resource cleanup failure retains parent stop until original resources are released`() =
+        runScenario(false, failChildCleanup = true)
+
+    @Test(timeout = 30_000)
+    fun `parent cancellation remains cancellation when child cleanup fails and stop retries cleanup`() =
+        runScenario(false, failChildCleanup = true, cancelDuringRequest = true)
+
     private enum class ExitWindow { CREATE, LINK, CHILD_START }
 
-    private fun runScenario(failChildTerminal: Boolean, exitWindow: ExitWindow? = null, revokeDuringRequest: Boolean = false) = runBlocking {
+    private fun runScenario(failChildTerminal: Boolean, exitWindow: ExitWindow? = null,
+        revokeDuringRequest: Boolean = false, failChildCleanup: Boolean = false,
+        cancelDuringRequest: Boolean = false) = runBlocking {
         val appScope = AppScope(Dispatchers.Default)
         val root = java.nio.file.Files.createTempDirectory("child-exit-test").toFile()
         val entered = CompletableDeferred<Unit>()
@@ -188,7 +198,7 @@ class SubAssistantTurnIntegrationTest {
             coEvery { resolver.withImages<Any?>(any(), any(), any()) } coAnswers {
                 thirdArg<suspend (AttachmentResolveResult) -> Any?>()(AttachmentResolveResult.Success(emptyList()))
             }
-            val attempts = if (revokeDuringRequest) listOf(
+            val attempts = if (revokeDuringRequest || cancelDuringRequest) listOf(
                 ProviderAttempt.Stream(listOf(toolCallDelta("parent-call", "assistant_call", "{}"), finishChunk("tool_calls"))),
                 ProviderAttempt.Stream(emptyList(), beforeFirstOutput = release),
                 ProviderAttempt.Stream(listOf(textDelta("Child stopped"), finishChunk())),
@@ -206,13 +216,26 @@ class SubAssistantTurnIntegrationTest {
                     params: me.rerere.ai.provider.TextGenerationParams,
                 ): kotlinx.coroutines.flow.Flow<me.rerere.ai.ui.MessageChunk> {
                     val stream = provider.streamText(providerSetting, messages, params)
-                    if (revokeDuringRequest && provider.dispatches.size == 2) entered.complete(Unit)
+                    if ((revokeDuringRequest || cancelDuringRequest) && provider.dispatches.size == 2) entered.complete(Unit)
                     return stream
                 }
             }
             val runner = TurnRunner(mockk<Context>(relaxed = true), scriptedProviderManager(observedProvider), JsonInstant, resolver, ToolOutputStore(artifacts), artifacts)
             val tools = mockk<TurnToolSetFactory>(relaxed = true)
             coEvery { tools.prepareMcpCapabilities(any(), any(), any(), any(), any(), any()) } returns TurnMcpCapabilitySnapshot.EMPTY
+            val rejectChildCleanup = java.util.concurrent.atomic.AtomicBoolean(failChildCleanup)
+            val childCleanupAttempts = java.util.concurrent.atomic.AtomicInteger()
+            if (failChildCleanup) {
+                coEvery { tools.prepareMcpCapabilities(any(), any(), any(), any(), any(), any()) } coAnswers {
+                    val owner = thirdArg<net.weero.measix.pilot.service.runtime.ConversationRuntime>()
+                    owner.bindMcpExecution(arg(3), arg(4), child.id,
+                        net.weero.measix.pilot.data.ai.mcp.McpExecutionLease {
+                            childCleanupAttempts.incrementAndGet()
+                            if (rejectChildCleanup.get()) throw java.io.IOException("child transport still open")
+                        })
+                    TurnMcpCapabilitySnapshot.EMPTY
+                }
+            }
             coEvery { tools.buildTools(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } returns listOf(buildAskUserTool())
             val pipeline = mockk<TurnPipelineFactory>()
             every { pipeline.input() } returns emptyList()
@@ -238,13 +261,15 @@ class SubAssistantTurnIntegrationTest {
                 val id = firstArg<String>()
                 synchronized(writes) { writes.mapNotNull { it.executionFacts?.turn }.lastOrNull { it.turnId == id } }
             }
+            var childCallFailure: Throwable? = null
             val parentTool = Tool(
                 name = "assistant_call", description = "Delegate a choice", execute = { emptyList() },
                 contextualExecute = {
-                    childRuns.executeCall(parent.id, runtime.id, access, child.id, "Choose a color", this,
+                    try { childRuns.executeCall(parent.id, runtime.id, access, child.id, "Choose a color", this,
                         turnTtsContext = net.weero.measix.pilot.data.ai.tools.local.TtsToolPlaybackContext(
                             sessionId = runtime.getTtsQueueSessionId(false), capture = mockk(), assistantId = parent.id,
-                            assistantName = parent.name, sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL))
+                            assistantName = parent.name, sourceType = net.weero.measix.pilot.data.ai.tts.TtsPlaybackSource.SourceType.NORMAL)) }
+                    catch (error: Throwable) { childCallFailure = error; throw error }
                 },
             )
             val turnId = Uuid.random()
@@ -254,8 +279,9 @@ class SubAssistantTurnIntegrationTest {
             var pausedStepId: Uuid? = null
             var pausedLocalCallId: Uuid? = null
             val worker = appScope.async(start = CoroutineStart.LAZY) {
+                val requestWorker = requireNotNull(coroutineContext[Job])
                 val started = TurnCommitter.start(commands, runtime, turnId, finalizer, model)
-                runner.run(turnRunInputsFixture(
+                try { runner.run(turnRunInputsFixture(
                     conversationId = runtime.id, settings = settings, model = model,
                     mediaCapabilities = me.rerere.ai.provider.RequestMediaCapabilities.NONE,
                     messages = runtime.durable.currentMessages(), assistant = parent, tools = listOf(parentTool),
@@ -290,20 +316,47 @@ class SubAssistantTurnIntegrationTest {
                             assertFalse(runGate.completeAnswer(runtime.id, net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, metadata.runId, interaction.interactionId, "red"))
                         }
                     },
-                ))
+                )) } finally {
+                    if (failChildCleanup) withContext(NonCancellable) {
+                        runtime.releaseTurnWorker(turnId, requestWorker)
+                    }
+                }
+            }
+            val gate = ApplicationRecoveryGate().apply { ready() }
+            val application = ConversationApplicationService(settingsStore, repository, mockk(), registry, commands, gate,
+                SubAssistantLifecycle(repository, registry, commands, JsonInstant), mockk(), artifacts, mockk(), finalizer,
+                JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
+            suspend fun parentTarget(): ConversationCommandTarget {
+                sessions.captureSelectedRealmAccess()
+                val selection = requireNotNull(sessions.observeSelectedRealmSelection().first { it != null })
+                return ConversationCommandTarget(runtime.id, selection) {}
             }
             // Capture the confirmation before a transaction is deliberately held open. Admission
             // rechecks the same queue snapshot under Session -> conversation lock order.
             val exitAndRequest = if (exitWindow != null) {
-                val gate = ApplicationRecoveryGate().apply { ready() }
-                val application = ConversationApplicationService(settingsStore, repository, mockk(), registry, commands, gate,
-                    SubAssistantLifecycle(repository, registry, commands, JsonInstant), mockk(), artifacts, mockk(), finalizer,
-                    JsonInstant, mockk(), ConversationTitleCoordinator(), sessions, runGate)
                 val synchronization = mockk<EnterpriseSynchronizationService> { coEvery { cancelAndAwait(any()) } returns Unit }
                 val exit = EnterpriseExitService(sessions, synchronization, application, gate, CoroutineScope(appScope.coroutineContext + Dispatchers.Unconfined), net.weero.measix.pilot.service.portal.PortalDocumentRegistry(), mockk(relaxed = true), mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, mcp = mockk { io.mockk.coEvery { closeRealm(any()) } returns Unit }, speech = mockk(relaxed = true), identityData = mockk(relaxed = true), remoteWorkspace = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, webDav = mockk { io.mockk.coEvery { cancelAndAwait(any()) } returns Unit }, platformLogout = {})
                 exit to requireNotNull(exit.captureRequest())
             } else null
             registry.installAndStartTurnWorker(runtime.id, turnId, worker)
+            if (cancelDuringRequest) {
+                entered.await()
+                worker.cancel()
+                runCatching { worker.await() }
+                assertTrue(worker.isCancelled)
+                assertTrue(childCallFailure is kotlinx.coroutines.CancellationException)
+                assertTrue(requireNotNull(childCallFailure).stackTraceToString().contains("child transport still open"))
+                val childRuntime = requireNotNull(registry.findRuntime(headers.keys.single { it != runtime.id }))
+                assertTrue(childRuntime.hasExecutionLeases)
+                assertTrue(runtime.currentTurnPresentation().isActive)
+                rejectChildCleanup.set(false)
+                application.stopGeneration(parentTarget())
+                assertFalse(childRuntime.hasExecutionLeases)
+                assertFalse(childRuntime.currentTurnPresentation().isActive)
+                assertFalse(runtime.currentTurnPresentation().isActive)
+                assertEquals(2, provider.dispatches.size)
+                return@runBlocking
+            }
             if (revokeDuringRequest) {
                 entered.await()
                 settingsFlow.value = settings.copy(assistants = listOf(parent.copy(allowedSubAssistantIds = emptySet()), child))
@@ -356,8 +409,37 @@ class SubAssistantTurnIntegrationTest {
                 return@runBlocking
             }
             val result = runCatching { worker.await() }
+            if (failChildCleanup) {
+                val childId = Uuid.parse(requireNotNull(runtime.durable.currentMessages().flatMap { it.getTools() }
+                    .single().getSubAssistantCallMetadata(JsonInstant)?.childConversationId))
+                val childRuntime = requireNotNull(registry.findRuntime(childId))
+                assertTrue(childRuntime.hasExecutionLeases)
+                assertTrue("parent stop must remain available while child cleanup is owned", runtime.currentTurnPresentation().isActive)
+                assertTrue(runtime.mustQueueInput())
+                assertFalse(result.getOrNull() is TurnOutcome.Completed)
+                assertEquals("cleanup failure must not start another model request", 3, provider.dispatches.size)
+                val target = parentTarget()
+                val attemptsBeforeStop = childCleanupAttempts.get()
+                val stopFailure = runCatching { application.stopGeneration(target) }.exceptionOrNull()
+                assertTrue(stopFailure is java.io.IOException)
+                assertTrue(childCleanupAttempts.get() > attemptsBeforeStop)
+                assertTrue(runtime.currentTurnPresentation().isActive)
+                assertTrue(childRuntime.hasExecutionLeases)
+
+                rejectChildCleanup.set(false)
+                application.stopGeneration(target)
+                assertFalse(childRuntime.hasExecutionLeases)
+                assertFalse(childRuntime.currentTurnPresentation().isActive)
+                assertFalse(runtime.currentTurnPresentation().isActive)
+                assertFalse(runtime.mustQueueInput())
+                assertEquals(3, provider.dispatches.size)
+                assertEquals(1, writes.count { it.mutation.conversationId == childRuntime.id &&
+                    it.executionFacts?.turnOperation == TurnExecutionOperation.START })
+                return@runBlocking
+            }
             if (failChildTerminal) {
                 assertFalse(result.getOrNull() is TurnOutcome.Completed)
+                assertTrue(requireNotNull(childCallFailure).stackTraceToString().contains("child terminal commit failed"))
                 val failedRuntime = requireNotNull(registry.findRuntime(requireNotNull(failedChildId)))
                 val stream = requireNotNull(failedRuntime.snapshot.value.stream)
                 val retainedWorker = requireNotNull(failedRuntime.currentWorker())
@@ -365,9 +447,19 @@ class SubAssistantTurnIntegrationTest {
                 assertTrue(retainedWorker.isCancelled)
                 assertEquals(stream.turnId, failedRuntime.currentGenerationTurnId())
                 assertFalse(failedRuntime.currentTurnPresentation().phase == net.weero.measix.pilot.service.runtime.TurnLivePhase.STOPPING)
+                assertTrue(runtime.currentTurnPresentation().isActive)
+                rejectChildTerminal = false
+                application.stopGeneration(parentTarget())
+                assertFalse(runtime.currentTurnPresentation().isActive)
+                assertFalse(failedRuntime.currentTurnPresentation().isActive)
+                assertFalse(runtime.hasExecutionLeases)
+                assertFalse(failedRuntime.hasExecutionLeases)
+                assertEquals(0, repository.countUnfinishedTurns(access.scope))
+                assertEquals(3, provider.dispatches.size)
                 return@runBlocking
             }
             assertTrue(result.getOrThrow() is TurnOutcome.Completed)
+            assertFalse("successful child cleanup must leave no parent resource responsibility", runtime.hasExecutionLeases)
             assertTrue(answered)
             assertEquals(4, provider.dispatches.size)
             assertEquals("each sampled text is transformed once and closed Step text stays unchanged",

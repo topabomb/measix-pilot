@@ -5,6 +5,8 @@ import kotlinx.serialization.json.jsonObject
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.configuration.WebDavConnection
 import net.weero.measix.pilot.data.configuration.WebDavConnectionChange
+import net.weero.measix.pilot.data.configuration.WebDavConnectionField
+import net.weero.measix.pilot.data.configuration.WebDavConnectionValidationException
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.*
 import org.junit.Test
@@ -86,13 +88,49 @@ class WebDavSettingsTest {
 
     @Test
     fun `URL validation rejects embedded credentials and preserves password whitespace`() {
-        for (url in listOf("file:///tmp", "https://user:secret@dav.example/", "https://dav.example/?secret=x",
+        for (url in listOf("/", "dav.example/root", "https:///", "https://bad host/", "file:///tmp", "https://user:secret@dav.example/", "https://dav.example/?secret=x",
             "https://dav.example/#fragment", "https://dav.example/a/../", "https://dav.example:0/",
             "https://dav.example/a/%2e%2e/", "https://dav.example/a%2fb/", "https://dav.example/%00/")) {
-            assertThrows(IllegalArgumentException::class.java) { first.copy(rootUrl = url).validated() }
+            val failure = assertThrows(WebDavConnectionValidationException::class.java) { first.copy(rootUrl = url).validated() }
+            assertEquals(WebDavConnectionField.ADDRESS, failure.field)
+            assertEquals("webdav_root_url_invalid", failure.code)
+            assertEquals(failure.code, failure.message)
         }
         assertEquals(" secret ", first.validated().password)
         assertEquals("https://dav.example/root/", first.copy(rootUrl = "https://dav.example/root").validated().rootUrl)
         assertFalse(first.toString().contains("secret"))
+    }
+
+    @Test
+    fun `HTTP schemes are case insensitive without inferring a missing scheme`() {
+        for (scheme in listOf("http", "https", "HTTP", "HtTpS")) {
+            val connection = first.copy(rootUrl = "$scheme://dav.example/root").validated()
+            assertEquals("dav.example", java.net.URI(connection.rootUrl).host)
+            assertEquals("/root/", java.net.URI(connection.rootUrl).path)
+            assertTrue(java.net.URI(connection.rootUrl).scheme.equals(scheme, ignoreCase = true))
+        }
+        assertThrows(WebDavConnectionValidationException::class.java) {
+            first.copy(rootUrl = "dav.example/root").validated()
+        }
+    }
+
+    @Test
+    fun `anonymous connection defaults only its display name and username failures identify the field`() {
+        val unnamed = WebDavConnection(name = "  ", rootUrl = " https://dav.example/files ")
+        val saved = UserSettingsDocument.empty().withWebDavConnectionChange(WebDavConnectionChange.Save(unnamed, null))
+        val connection = saved.configuration.webDavConnections.single()
+        assertEquals("dav.example", connection.name)
+        assertEquals("https://dav.example/files/", connection.rootUrl)
+        assertEquals("", connection.username)
+        assertEquals("", connection.password)
+        assertEquals(connection.id, saved.personalSettings().currentWebDavConnectionId)
+        assertEquals("My files", connection.copy(name = " My files ").validated().name)
+        for (username in listOf("user:name", "user\nname", "user\rname")) {
+            val failure = assertThrows(WebDavConnectionValidationException::class.java) {
+                connection.copy(username = username).validated()
+            }
+            assertEquals(WebDavConnectionField.USERNAME, failure.field)
+            assertEquals("webdav_username_invalid", failure.code)
+        }
     }
 }

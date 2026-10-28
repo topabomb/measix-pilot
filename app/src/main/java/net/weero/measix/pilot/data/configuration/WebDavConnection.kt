@@ -1,8 +1,16 @@
 package net.weero.measix.pilot.data.configuration
 
 import java.net.URI
+import java.net.URISyntaxException
 import kotlinx.serialization.Serializable
 import kotlin.uuid.Uuid
+
+enum class WebDavConnectionField { ADDRESS, USERNAME }
+
+class WebDavConnectionValidationException(
+    val field: WebDavConnectionField,
+    val code: String,
+) : IllegalArgumentException(code)
 
 /** A personal file-manager connection; backup destinations have an independent lifecycle. */
 @Serializable
@@ -16,22 +24,23 @@ data class WebDavConnection(
     val accessRevision: Uuid = Uuid.NIL,
 ) {
     fun validated(): WebDavConnection {
-        require(name.isNotBlank()) { "webdav_name_required" }
-        val url = try { URI(rootUrl.trim()) } catch (_: Exception) {
-            throw IllegalArgumentException("webdav_root_url_invalid")
+        val url = try { URI(rootUrl.trim()) } catch (_: URISyntaxException) {
+            throw WebDavConnectionValidationException(WebDavConnectionField.ADDRESS, "webdav_root_url_invalid")
         }
-        require(url.scheme in setOf("http", "https") && !url.host.isNullOrBlank() &&
+        if (!(url.scheme?.lowercase() in setOf("http", "https") && !url.host.isNullOrBlank() &&
             url.rawUserInfo == null && url.rawQuery == null && url.rawFragment == null &&
-            url.port in -1..65535 && url.port != 0) { "webdav_root_url_invalid" }
-        require(!username.contains(':') && username.none { it == '\r' || it == '\n' }) {
-            "webdav_username_invalid"
+            url.port in -1..65535 && url.port != 0)) {
+            throw WebDavConnectionValidationException(WebDavConnectionField.ADDRESS, "webdav_root_url_invalid")
         }
-        require(url.path.orEmpty().split('/').none { it == "." || it == ".." } &&
+        if (!(url.path.orEmpty().split('/').none { it == "." || it == ".." } &&
             !Regex("%2f|%5c", RegexOption.IGNORE_CASE).containsMatchIn(url.rawPath.orEmpty()) &&
-            url.path.orEmpty().none { it == '\\' || it.code < 32 || it.code == 127 }) {
-            "webdav_root_url_invalid"
+            url.path.orEmpty().none { it == '\\' || it.code < 32 || it.code == 127 })) {
+            throw WebDavConnectionValidationException(WebDavConnectionField.ADDRESS, "webdav_root_url_invalid")
         }
-        return copy(name = name.trim(), rootUrl = url.toASCIIString().trimEnd('/') + "/")
+        if (username.contains(':') || username.any { it == '\r' || it == '\n' }) {
+            throw WebDavConnectionValidationException(WebDavConnectionField.USERNAME, "webdav_username_invalid")
+        }
+        return copy(name = name.trim().ifEmpty { url.host }, rootUrl = url.toASCIIString().trimEnd('/') + "/")
     }
 
     // Credentials must never enter generated data-class diagnostics.

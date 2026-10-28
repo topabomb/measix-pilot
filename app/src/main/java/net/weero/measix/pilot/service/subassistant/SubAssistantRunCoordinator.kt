@@ -27,7 +27,6 @@ import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -82,6 +81,7 @@ import net.weero.measix.pilot.data.ai.subassistant.ReadinessResult
 import net.weero.measix.pilot.data.ai.subassistant.LineageDecision
 import net.weero.measix.pilot.data.ai.subassistant.SubAssistantDeliverableArtifact
 import net.weero.measix.pilot.data.ai.tools.TurnToolSetFactory
+import net.weero.measix.pilot.data.ai.tools.ToolRuntimeInfrastructureException
 import net.weero.measix.pilot.data.ai.tools.buildMemoryTools
 import net.weero.measix.pilot.data.ai.tools.PendingToolInteraction
 import net.weero.measix.pilot.data.ai.tools.TurnInteractionCapability
@@ -473,13 +473,15 @@ class SubAssistantRunCoordinator internal constructor(
         val target = ready.target
         val model = ready.model
 
-        var settingsWatcher: kotlinx.coroutines.Job? = null
-        var runScope: CoroutineScope? = null
         var childConversationId: Uuid? = null
         var childTaskNodeId: Uuid? = null
         var childTurnId: Uuid? = null
         var childRunJob: Job? = null
         var ownedChildRuntime: ConversationRuntime? = null
+        var parentRuntime: ConversationRuntime? = null
+        var parentTurnId: Uuid? = null
+        var childExecution: TurnFinalizer.ChildExecution? = null
+        var runFailure: Throwable? = null
         var runState: SubAssistantRunStateReducer? = null
         try {
             configurations.requireAccess(realmAccess)
@@ -565,10 +567,15 @@ class SubAssistantRunCoordinator internal constructor(
             )
             val childRuntime = commandCoordinator.load(childConversationId)
             ownedChildRuntime = childRuntime
+            val execution = turnFinalizer.ownChildExecution(childRuntime, installedChildTurnId, runJob)
+            childExecution = execution
+            val parent = requireNotNull(runtimeRegistry.findRuntime(masterConversationId)) { "parent_turn_runtime_missing" }
+            parentRuntime = parent
+            coroutineContext.ensureActive()
+            parentTurnId = parent.bindChildExecution(execContext.locator.assistantMessageId, execution)
 
             // 运行中 Settings 撤权监听器：重算 caller/Target 关系，变化即取消 Child Job
-            runScope = CoroutineScope(coroutineContext + runJob)
-            settingsWatcher = runScope.launch {
+            CoroutineScope(coroutineContext + runJob).launch {
                 configurations.observe(realmAccess.scope).collect { latestConfiguration ->
                     configurations.requireAccess(realmAccess)
                     resolveActiveRunStopReason(
@@ -620,6 +627,7 @@ class SubAssistantRunCoordinator internal constructor(
                 extras = extras,
             )
         } catch (e: CancellationException) {
+            runFailure = e
             // materialize 阶段取消：无 Child 无 run，直接上抛
             val currentChild = childConversationId ?: throw e
             val currentTaskId = childTaskNodeId ?: throw e
@@ -651,6 +659,7 @@ class SubAssistantRunCoordinator internal constructor(
                     e.addSuppressed(finalizationFailure)
                     throw e
                 }
+                runFailure = finalizationFailure
                 throw finalizationFailure
             }
             if (masterCancelled) throw e
@@ -664,6 +673,7 @@ class SubAssistantRunCoordinator internal constructor(
                 extras = extras,
             )
         } catch (e: Exception) {
+            runFailure = e
             // materialize 阶段异常已由 materializeChild 分类；此处只剩 run 阶段失败
             val currentChild = childConversationId ?: throw e
             val currentTaskId = childTaskNodeId ?: throw e
@@ -689,6 +699,7 @@ class SubAssistantRunCoordinator internal constructor(
                 }
             } catch (finalizationFailure: Exception) {
                 finalizationFailure.addSuppressed(e)
+                runFailure = finalizationFailure
                 throw finalizationFailure
             }
             return buildSubAssistantCallResultParts(
@@ -702,17 +713,37 @@ class SubAssistantRunCoordinator internal constructor(
                 extras = extras,
             )
         } finally {
-            settingsWatcher?.cancel()
-            runScope?.cancel()
             val ownedChildId = childConversationId
             val ownedTurnId = childTurnId
             val ownedWorker = childRunJob
             try {
-                if (ownedChildId != null && ownedTurnId != null && ownedWorker != null) {
-                    runtimeRegistry.findRuntime(ownedChildId)?.releaseTurnWorker(
-                        turnId = ownedTurnId,
-                        worker = ownedWorker,
-                    )
+                withContext(NonCancellable) {
+                    val execution = childExecution
+                    val parentTurn = parentTurnId
+                    if (execution != null && parentTurn != null) {
+                        requireNotNull(parentRuntime).releaseChildExecution(parentTurn, execution)
+                    } else if (execution != null) {
+                        execution.release()
+                    } else {
+                        ownedWorker?.cancel()
+                        ownedWorker?.join()
+                        if (ownedChildId != null && ownedTurnId != null && ownedWorker != null) {
+                            runtimeRegistry.findRuntime(ownedChildId)?.releaseTurnWorker(ownedTurnId, ownedWorker)
+                        }
+                    }
+                }
+            } catch (cleanupFailure: Exception) {
+                val original = runFailure
+                if (original is CancellationException) {
+                    if (original !== cleanupFailure) original.addSuppressed(cleanupFailure)
+                    throw original
+                }
+                if (cleanupFailure is CancellationException) {
+                    if (original != null && original !== cleanupFailure) cleanupFailure.addSuppressed(original)
+                    throw cleanupFailure
+                }
+                throw ToolRuntimeInfrastructureException(original ?: cleanupFailure).apply {
+                    if (original != null && original !== cleanupFailure) addSuppressed(cleanupFailure)
                 }
             } finally {
                 ready.lease.close()

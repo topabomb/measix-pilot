@@ -33,8 +33,12 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import io.mockk.coEvery
+import io.mockk.coVerify
+import io.mockk.spyk
 import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -63,11 +67,13 @@ import net.weero.measix.pilot.ui.hooks.writeBooleanPreference
 import net.weero.measix.pilot.ui.theme.MeasixTheme
 import net.weero.measix.pilot.ui.pages.favorite.FavoritePage
 import net.weero.measix.pilot.ui.pages.search.SearchPage
+import net.weero.measix.pilot.ui.pages.setting.SettingPage
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.koin.core.context.GlobalContext
+import org.koin.dsl.module
 import kotlin.uuid.Uuid
 
 /** Real navigation entries, ChatVM, application commands and Room; no generated response is needed. */
@@ -128,6 +134,95 @@ class ChatScrollEntryAndroidTest {
         }
         navigate(second.route())
         assertTail(second)
+    }
+
+    @Test fun closingDrawerCannotNavigateOverThePageOpenedMeanwhile() = withHistory { first, _ ->
+        launch(first.route())
+        compose.onNodeWithContentDescription(activityText(R.string.chat_navigation_open_drawer)).performClick()
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithText(activityText(R.string.chat_page_search_chats)).performClick()
+            compose.runOnIdle { requireNotNull(navigator).navigate(Screen.Favorite) }
+            compose.mainClock.advanceTimeBy(1_000)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText(activityText(R.string.favorite_page_title)).assertIsDisplayed()
+        compose.onNodeWithText(activityText(R.string.search_page_title)).assertDoesNotExist()
+    }
+
+    @Test fun settingsNavigationDoesNotRequireTheConversationSelectionAgain() = withHistory { first, _ ->
+        val koin = GlobalContext.get()
+        val originalQueries = koin.get<ConfigurationQueryService>()
+        val guardedQueries = spyk(originalQueries)
+        koin.loadModules(listOf(module { single<ConfigurationQueryService> { guardedQueries } }), allowOverride = true)
+        try {
+            launch(first.route())
+            coEvery { guardedQueries.requireSelection(any()) } throws IllegalStateException("conversation_selection_unavailable")
+            compose.onNodeWithContentDescription(activityText(R.string.chat_navigation_open_drawer)).performClick()
+            compose.waitForIdle()
+            compose.onNodeWithContentDescription(activityText(R.string.settings)).performClick()
+            compose.waitUntil(30_000) { compose.onAllNodesWithTag("chat_input").fetchSemanticsNodes().isEmpty() }
+            compose.onNodeWithText(activityText(R.string.settings)).assertIsDisplayed()
+            coVerify(exactly = 0) { guardedQueries.requireSelection(any()) }
+        } finally {
+            koin.loadModules(listOf(module { single<ConfigurationQueryService> { originalQueries } }), allowOverride = true)
+        }
+    }
+
+    @Test fun completedForkKeepsItsSavedConversationWithoutReplacingThePageOpenedMeanwhile() = withHistory { first, _ ->
+        val koin = GlobalContext.get()
+        val originalApplication = koin.get<ConversationApplicationService>()
+        val delayedApplication = spyk(originalApplication)
+        val committed = CompletableDeferred<Uuid>()
+        val release = CompletableDeferred<Unit>()
+        coEvery { delayedApplication.forkAtMessage(any(), any()) } coAnswers {
+            val id = originalApplication.forkAtMessage(firstArg(), secondArg())
+            committed.complete(id)
+            release.await()
+            id
+        }
+        koin.loadModules(listOf(module { single<ConversationApplicationService> { delayedApplication } }), allowOverride = true)
+        var primary: Throwable? = null
+        try {
+            launch(first.route())
+            val actions = compose.onAllNodes(hasContentDescription(activityText(R.string.more_options)) and
+                hasAnyAncestor(historyMatcher()))
+            actions[actions.fetchSemanticsNodes().lastIndex].performScrollTo().performClick()
+            compose.onNodeWithText(activityText(R.string.create_fork)).performClick()
+            compose.waitUntil(30_000) { committed.isCompleted }
+            val fork = runBlocking { committed.await() }
+            compose.mainClock.autoAdvance = false
+            compose.runOnIdle {
+                requireNotNull(navigator).navigate(Screen.Favorite)
+                release.complete(Unit)
+            }
+            compose.waitForIdle()
+            compose.runOnIdle { assertEquals(Screen.Favorite, requireNotNull(navigator).currentEntry) }
+            assertNotNull(runBlocking { koin.get<ConversationRepository>().getConversationSnapshotById(fork) })
+        } catch (error: Throwable) {
+            primary = error
+            throw error
+        } finally {
+            var cleanupFailure: Throwable? = null
+            fun cleanup(action: () -> Unit) {
+                try { action() } catch (error: Throwable) {
+                    val original = primary ?: cleanupFailure
+                    if (original == null) cleanupFailure = error else original.addSuppressed(error)
+                }
+            }
+            release.complete(Unit)
+            compose.mainClock.autoAdvance = true
+            cleanup { activity?.close(); activity = null; navigator = null }
+            cleanup { koin.loadModules(listOf(module { single<ConversationApplicationService> { originalApplication } }), allowOverride = true) }
+            cleanup { if (committed.isCompleted) runBlocking { withTimeout(30_000) {
+                val lease = originalApplication.initialize(ConversationOpenRequest.OpenExisting(committed.await(), RealmAccess.Personal))
+                try { originalApplication.delete(lease.commandTarget) } finally { lease.close() }
+            } } }
+            cleanupFailure?.let { throw it }
+        }
     }
 
     @Test fun namedMessageJumpersMoveThroughHistoryAndReturnToItsStart() = withHistory { first, _ ->
@@ -313,7 +408,9 @@ class ChatScrollEntryAndroidTest {
         val query = koin.get<ConversationQueryService>()
         val repository = koin.get<ConversationRepository>()
         val assistant = runBlocking { requireNotNull(query.aggregateSnapshot(first.id)).header.assistantId }
-        val request = runBlocking { application.newDraftRequest(RealmAccess.Personal, assistant) }
+        val request = runBlocking {
+            application.newDraftRequest(requireNotNull(query.observeCurrentSelection().first()), assistant)
+        }
         val lease = runBlocking { application.initialize(request) }
         try {
             // A short available window makes the real personal configuration card taller than
@@ -507,6 +604,7 @@ class ChatScrollEntryAndroidTest {
                             entryProvider = entryProvider {
                                 entry<Screen.MessageSearch> { SearchPage() }
                                 entry<Screen.Favorite> { FavoritePage() }
+                                entry<Screen.Setting> { SettingPage() }
                                 entry<Screen.Chat> { key ->
                                     ChatPage(key.request, key.text, emptyList(), stack.lastOrNull() == key, key.nodeId?.let(Uuid::parse))
                                 }

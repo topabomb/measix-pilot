@@ -39,9 +39,7 @@ class ProviderSettingsApplicationService(
     private val providerManager: ProviderManager,
     private val settingsStore: SettingsStore,
 ) {
-    private val balanceCache = SimpleCache.builder<ProviderBalanceCacheKey, String>()
-        .expireAfterWrite(2, TimeUnit.MINUTES)
-        .build()
+    private val balanceCache = SimpleCache<ProviderBalanceCacheKey, String>(TimeUnit.MINUTES.toMillis(2))
 
     fun observeProvider(id: ConfigurationReference) = settingsStore.userSettings.map { settings ->
         settings.providers.firstOrNull { it.id == id }

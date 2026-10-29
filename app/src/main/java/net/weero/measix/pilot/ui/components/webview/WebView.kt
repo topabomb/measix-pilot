@@ -78,7 +78,7 @@ internal class MyWebViewClient(private val state: WebViewState) : WebViewClient(
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (state.allowSameDocumentAnchors && request.hasGesture() && request.url.fragment != null) {
-            val base = (state.content as? WebContent.Data)?.baseUrl
+            val base = state.content.baseUrl
             if (request.url.buildUpon().fragment(null).build().toString() == base) return false
         }
         val navigation = state.onNavigate ?: return super.shouldOverrideUrlLoading(view, request)
@@ -89,7 +89,6 @@ internal class MyWebViewClient(private val state: WebViewState) : WebViewClient(
     override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
         super.onPageStarted(view, url, favicon)
         state.isLoading = true
-        state.currentUrl = url // Update current URL
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
@@ -97,8 +96,6 @@ internal class MyWebViewClient(private val state: WebViewState) : WebViewClient(
         state.isLoading = false
         state.loadingProgress = 0f // Reset progress when finished
         state.pageTitle = view?.title // Update title
-        state.canGoBack = view?.canGoBack() == true
-        state.canGoForward = view?.canGoForward() == true
         if (view != null) restoreScroll(view, finalLayout = true)
     }
 }
@@ -195,42 +192,19 @@ fun WebView(
                     webView.addJavascriptInterface(obj, name)
                 }
                 Log.d(TAG, "AndroidView: Updating WebView")
-                // Ensure clients are updated if state changes (though unlikely here)
-                // webView.webChromeClient = webChromeClient
-                // webView.webViewClient = webViewClient
-
                 // Update settings that might change
                 webView.settings.javaScriptEnabled = state.javaScriptEnabled
 
-                when (val content = state.content) {
-                    is WebContent.Url -> {
-                        val url = content.url
-                        // Only load new URL if it's different from the current one or if the state forces reload
-                        // Also check if the webView's url is null or blank, which might happen initially
-                        val currentWebViewUrl = webView.url
-                        if (url.isNotEmpty() && (currentWebViewUrl.isNullOrBlank() || url != currentWebViewUrl || state.forceReload)) {
-                            webView.loadUrl(content.url, content.additionalHttpHeaders)
-                            state.forceReload = false // Reset force reload flag
-                        }
-                    }
-
-                    is WebContent.Data -> {
-                        if (content != state.lastLoadedData || state.forceReload) {
-                            webView.loadDataWithBaseURL(
-                                content.baseUrl,
-                                content.data,
-                                content.mimeType,
-                                content.encoding,
-                                content.historyUrl
-                            )
-                            state.lastLoadedData = content
-                            state.forceReload = false
-                        }
-                    }
-
-                    WebContent.NavigatorOnly -> {
-                        // NO-OP: State changes related to navigation are handled by the methods in WebViewState
-                    }
+                val content = state.content
+                if (content != state.lastLoadedData) {
+                    webView.loadDataWithBaseURL(
+                        content.baseUrl,
+                        content.data,
+                        content.mimeType,
+                        content.encoding,
+                        content.historyUrl
+                    )
+                    state.lastLoadedData = content
                 }
                 onUpdated(webView)
             }
@@ -246,24 +220,13 @@ fun WebView(
     }
 }
 
-// --- State and Content Definition ---
-sealed class WebContent {
-    data class Url(
-        val url: String,
-        val additionalHttpHeaders: Map<String, String> = emptyMap(),
-        val clearHistory: Boolean = false
-    ) : WebContent()
-
-    data class Data(
-        val data: String,
-        val baseUrl: String? = null,
-        val encoding: String = "utf-8",
-        val mimeType: String? = null,
-        val historyUrl: String? = null
-    ) : WebContent()
-
-    data object NavigatorOnly : WebContent()
-}
+data class WebContent(
+    val data: String,
+    val baseUrl: String? = null,
+    val encoding: String = "utf-8",
+    val mimeType: String? = null,
+    val historyUrl: String? = null
+)
 
 /** Small navigation state only; never retains a WebView, its Activity or decoded resources. */
 class WebViewScrollPosition(var x: Int = 0, var y: Int = 0) {
@@ -281,7 +244,7 @@ class WebViewScrollPosition(var x: Int = 0, var y: Int = 0) {
 
 @Stable // Mark as Stable for better Compose performance
 class WebViewState(
-    initialContent: WebContent = WebContent.NavigatorOnly,
+    initialContent: WebContent,
     val interfaces: Map<String, Any> = emptyMap(),
     val settings: WebSettings.() -> Unit = {},
     internal val interceptRequest: ((android.net.Uri) -> WebResourceResponse?)? = null,
@@ -292,9 +255,8 @@ class WebViewState(
 ) {
     internal var scrollRestored = false
     // --- Content State ---
-    var content: WebContent by mutableStateOf(initialContent)
-    internal var forceReload: Boolean by mutableStateOf(false) // Internal state to force URL reload if needed
-    internal var lastLoadedData: WebContent.Data? = null
+    val content: WebContent = initialContent
+    internal var lastLoadedData: WebContent? = null
 
     // --- Loading State ---
     var isLoading: Boolean by mutableStateOf(false)
@@ -305,15 +267,6 @@ class WebViewState(
     // --- Page Information ---
     var pageTitle: String? by mutableStateOf(null)
         internal set
-    var currentUrl: String? by mutableStateOf(null)
-        internal set
-
-    // --- Navigation State ---
-    var canGoBack: Boolean by mutableStateOf(false)
-        internal set
-    var canGoForward: Boolean by mutableStateOf(false)
-        internal set
-
     // --- Console Message ---
     var consoleMessages: List<ConsoleMessage> by mutableStateOf(emptyList())
         internal set
@@ -326,79 +279,12 @@ class WebViewState(
     // Be cautious with this reference, ensure it doesn't leak context.
     internal var webView: WebView? by mutableStateOf(null)
 
-    // --- Public Actions ---
-
-    fun loadUrl(
-        url: String,
-        additionalHttpHeaders: Map<String, String> = emptyMap()
-    ) {
-        // Determine if reload is needed: same URL or explicit force flag set elsewhere
-        forceReload =
-            (content is WebContent.Url && (content as WebContent.Url).url == url) || forceReload
-        content = WebContent.Url(url, additionalHttpHeaders)
-    }
-
-    fun loadData(
-        data: String,
-        baseUrl: String? = null,
-        encoding: String = "utf-8",
-        mimeType: String? = null,
-        historyUrl: String? = null
-    ) {
-        content = WebContent.Data(data, baseUrl, encoding, mimeType, historyUrl)
-    }
-
-    // --- Navigation Methods ---
-    fun goBack() {
-        webView?.goBack()
-    }
-
-    fun goForward() {
-        webView?.goForward()
-    }
-
-    fun reload() {
-        // Set forceReload flag for URL content type to ensure `update` block reloads
-        forceReload = true
-        // Trigger recomposition/update by changing the content reference slightly,
-        // even if the URL is the same. Assigning the same Url object might not trigger update.
-        // Or simply call webView?.reload() directly.
-        webView?.reload()
-        // If content is Data, reloading might mean re-setting the data.
-        if (content is WebContent.Data) {
-            // Re-assign to trigger update block if necessary
-            content = (content as WebContent.Data).copy()
-        }
-    }
-
-    fun stopLoading() {
-        webView?.stopLoading()
-    }
-
-    fun clearHistory() {
-        webView?.clearHistory()
-    }
-
     fun pushConsoleMessage(message: ConsoleMessage) {
         consoleMessages = consoleMessages + message
         if (consoleMessages.size > 64) { // Limit to 64 messages
             consoleMessages = consoleMessages.takeLast(64)
         }
     }
-}
-
-@Composable
-fun rememberWebViewState(
-    url: String = "about:blank",
-    additionalHttpHeaders: Map<String, String> = emptyMap(),
-    interfaces: Map<String, Any> = emptyMap(),
-    settings: WebSettings.() -> Unit = {},
-) = remember(url, additionalHttpHeaders) { // Use keys for better recomposition control
-    WebViewState(
-        initialContent = WebContent.Url(url, additionalHttpHeaders),
-        interfaces = interfaces,
-        settings = settings
-    )
 }
 
 @Composable
@@ -412,7 +298,7 @@ fun rememberWebViewState(
     settings: WebSettings.() -> Unit = {},
 ) = remember(data, baseUrl, encoding, mimeType, historyUrl) { // Use keys
     WebViewState(
-        initialContent = WebContent.Data(data, baseUrl, encoding, mimeType, historyUrl),
+        initialContent = WebContent(data, baseUrl, encoding, mimeType, historyUrl),
         interfaces = interfaces,
         settings = settings
     )

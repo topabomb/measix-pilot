@@ -40,8 +40,6 @@ internal class TurnPlaybackQueue {
 
     fun hasPending(): Boolean = pending.isNotEmpty()
 
-    fun pendingSize(): Int = pending.size
-
     fun chunkAt(index: Int): TtsChunk? = all.getOrNull(index)?.chunk
 
     fun totalChunkCount(): Int = all.size

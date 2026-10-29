@@ -1,6 +1,5 @@
 package me.rerere.search
 
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,8 +18,6 @@ import okhttp3.Credentials
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import java.net.URLEncoder
-
-private const val TAG = "SearXNGService"
 
 object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
     override fun parameters(options: SearchServiceOptions.SearXNGOptions): JsonObject? =
@@ -76,18 +73,10 @@ object SearXNGService : SearchService<SearchServiceOptions.SearXNGOptions> {
                 }
                 .build()
 
-            Log.i(TAG, "search: $url")
-
             httpClient.newCall(request).readResponse { response ->
                 if (response.isSuccessful) {
                     val bodyRaw = response.body.string()
-                    val searchResponse = runCatching {
-                        json.decodeFromString<SearXNGResponse>(bodyRaw)
-                    }.onFailure {
-                        it.printStackTrace()
-                        println("SearXNG response body: $bodyRaw")
-                        error("Failed to decode SearXNG response: ${it.message}")
-                    }.getOrThrow()
+                    val searchResponse = json.decodeFromString<SearXNGResponse>(bodyRaw)
 
                     // 转换为标准格式，取前 N 个结果
                     val items = searchResponse.results

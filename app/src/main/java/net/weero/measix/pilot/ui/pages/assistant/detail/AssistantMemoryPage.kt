@@ -52,6 +52,7 @@ import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
 import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.hooks.EditStateContent
 import net.weero.measix.pilot.ui.hooks.useEditState
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
@@ -67,7 +68,10 @@ fun AssistantMemoryPage(id: String) {
     val toaster = net.weero.measix.pilot.ui.context.LocalToaster.current
     val memoryFailureMessage = stringResource(R.string.memory_operation_failed)
     androidx.compose.runtime.LaunchedEffect(vm, memoryFailureMessage) {
-        vm.memoryFailures.collect { toaster.show(memoryFailureMessage, type = net.weero.measix.pilot.ui.components.toast.ToastType.Error) }
+        vm.memoryFailures.collect { error ->
+            toaster.show("$memoryFailureMessage\n${error.userVisibleDiagnostic()}",
+                type = net.weero.measix.pilot.ui.components.toast.ToastType.Error)
+        }
     }
     val assistant = vm.assistant.collectAsStateWithLifecycle().value
     val memories by vm.memories.collectAsStateWithLifecycle()

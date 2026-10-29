@@ -440,9 +440,6 @@ class ArtifactStore(
 
     fun mimeType(uri: Uri): String? = payloadStore.mimeType(uri)
 
-    fun isUploadUri(uri: Uri): Boolean =
-        payloadStore.relativePathForUri(uri)?.replace('\\', '/')?.startsWith("${FileFolders.UPLOAD}/") == true
-
     suspend fun materialize(ref: LocalArtifactRef): LocalArtifactRef? {
         if (ref.version != LocalArtifactRef.CURRENT_VERSION) return null
         val entity = artifactDAO.getByPathAndState(ref.relativePath, ArtifactState.ACTIVE.name) ?: return null

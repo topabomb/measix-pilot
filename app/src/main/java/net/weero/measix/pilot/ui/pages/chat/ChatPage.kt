@@ -582,7 +582,7 @@ internal fun ConversationUnavailable(
                 }
                 if (showSpaces) {
                     TextButton(
-                        onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } },
+                        onClick = { nav.navigate(Screen.Enterprise, launchSingleTop = true) },
                         modifier = Modifier.testTag("conversation-recovery-spaces"),
                     ) { Text(stringResource(R.string.enterprise_spaces)) }
                 }

@@ -128,8 +128,15 @@ class ProviderCreationAndroidTest {
             }
         }
         compose.onNodeWithText("Original").performTextReplacement("Edited before failure")
+        // Wait for IME insets to settle before scrolling to and clicking Save.
+        androidx.test.espresso.Espresso.closeSoftKeyboard()
+        compose.waitUntil(5_000) {
+            androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)
+                ?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) != true
+        }
         val save = compose.activity.getString(R.string.setting_provider_page_save)
         compose.onNodeWithText(save).performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, saves); assertTrue(saving.value) }
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.back)).assertIsNotEnabled()
         compose.runOnIdle { saving.value = false; error.value = "IOException: storage unavailable" }
         compose.onNodeWithText("Edited before failure").assertExists()

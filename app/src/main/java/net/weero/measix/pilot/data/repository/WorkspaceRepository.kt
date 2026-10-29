@@ -384,8 +384,28 @@ class WorkspaceRepository(
             restoreStagedWorkspace(workspace)
             throw error
         }
-        val journalWritten = withContext(Dispatchers.IO) {
-            manager.writeWorkspaceDeletionJournal(workspace.root, JsonInstant.encodeToString(journal).encodeToByteArray())
+        val journalWritten = try {
+            withContext(Dispatchers.IO) {
+                try {
+                    manager.writeWorkspaceDeletionJournal(workspace.root, JsonInstant.encodeToString(journal).encodeToByteArray())
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    try {
+                        check(restoreStagedWorkspace(workspace)) { "Workspace deletion rollback is pending: ${workspace.id}" }
+                    } catch (cleanup: Throwable) {
+                        if (cleanup !== error) error.addSuppressed(cleanup)
+                    }
+                    throw error
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            try {
+                check(restoreStagedWorkspace(workspace)) { "Workspace deletion rollback is pending: ${workspace.id}" }
+            } catch (cleanup: Throwable) {
+                if (cleanup !== cancelled) cancelled.addSuppressed(cleanup)
+            }
+            throw cancelled
         }
         if (!journalWritten) {
             restoreStagedWorkspace(workspace)
@@ -401,10 +421,21 @@ class WorkspaceRepository(
         return withContext(NonCancellable) {
             val deletionStarted = journal.copy(phase = WorkspaceDeletionPhase.DELETE_STARTED)
             val deletionJournalWritten = withContext(Dispatchers.IO) {
-                manager.writeWorkspaceDeletionJournal(
-                    workspace.root,
-                    JsonInstant.encodeToString(deletionStarted).encodeToByteArray(),
-                )
+                try {
+                    manager.writeWorkspaceDeletionJournal(
+                        workspace.root,
+                        JsonInstant.encodeToString(deletionStarted).encodeToByteArray(),
+                    )
+                } catch (error: Throwable) {
+                    try {
+                        check(rollbackPreparedWorkspaceDeletion(workspace, detachedAssistantWorkspaces)) {
+                            "Workspace deletion rollback is pending: ${workspace.id}"
+                        }
+                    } catch (cleanup: Throwable) {
+                        if (cleanup !== error) error.addSuppressed(cleanup)
+                    }
+                    throw error
+                }
             }
             if (!deletionJournalWritten) {
                 rollbackPreparedWorkspaceDeletion(workspace, detachedAssistantWorkspaces)

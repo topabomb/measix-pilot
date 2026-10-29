@@ -39,12 +39,10 @@
   <string name="assistant_page_background_opacity_desc">Настройте видимость фонового изображения чата</string>
   <string name="assistant_page_background_opacity_value">Прозрачность: %1$d%%</string>
   <string name="assistant_page_background_set">Фоновое изображение установлено</string>
-  <string name="assistant_page_balanced">Сбалансированный</string>
   <string name="assistant_page_body_key">Ключ тела</string>
   <string name="assistant_page_body_value">Значение тела (JSON)</string>
   <string name="assistant_page_cancel">Отмена</string>
   <string name="assistant_page_change_background">Изменить фоновое изображение</string>
-  <string name="assistant_page_chaotic">Хаотичный (Опасный)</string>
   <string name="assistant_page_chat_background">Фон чата</string>
   <string name="assistant_page_chat_background_desc">Установить фоновое изображение для страницы чата с ассистентом</string>
   <string name="assistant_page_chat_model">Модель чата</string>
@@ -52,8 +50,6 @@
   <string name="assistant_page_follow_default_model">Как у модели по умолчанию</string>
   <string name="assistant_page_clone">Клонировать</string>
   <string name="assistant_page_confirm">Подтвердить</string>
-  <string name="assistant_page_creative">Творческий</string>
-  <string name="assistant_page_current_assistant">Текущий ассистент</string>
   <string name="assistant_page_custom_bodies">Пользовательский контекст</string>
   <string name="assistant_page_custom_headers">Пользовательские заголовки</string>
   <string name="assistant_page_default_assistant">Ассистент по умолчанию</string>
@@ -119,7 +115,6 @@
   <string name="assistant_page_select_from_gallery">Выбрать из галереи</string>
   <string name="assistant_page_stream_output">Потоковый вывод</string>
   <string name="assistant_page_stream_output_desc">Включить потоковый вывод сообщений</string>
-  <string name="assistant_page_strict">Строгий</string>
   <string name="assistant_page_system_prompt">Системный промпт</string>
   <string name="assistant_page_tab_basic">Основные настройки</string>
   <string name="assistant_page_tab_extensions">Расширения</string>
@@ -142,7 +137,6 @@
   <string name="assistant_page_time_reminder_desc">Сообщать модели о долгих паузах между сообщениями.</string>
   <string name="assistant_page_title">Настройки ассистента</string>
   <string name="assistant_page_top_p">Top P</string>
-  <string name="assistant_page_top_p_value">Top P: %s</string>
   <string name="assistant_page_top_p_warning">Пожалуйста, не изменяйте это значение, если не уверены в своих действиях</string>
   <string name="assistant_page_use_assistant_avatar">Использовать аватар ассистента</string>
   <string name="assistant_page_use_assistant_avatar_desc">Использовать аватар и имя ассистента вместо аватара и имени модели в чатах</string>
@@ -161,7 +155,6 @@
   <string name="backup_page_backup_items">Элементы резервной копии</string>
   <string name="backup_page_backup_now">Создать резервную копию</string>
   <string name="backup_page_backup_success">Резервное копирование выполнено успешно</string>
-  <string name="backup_page_chat_records">История чатов</string>
   <string name="backup_page_connection_failed">Не удалось подключиться: %s</string>
   <string name="backup_page_connection_success">Соединение успешно</string>
   <string name="backup_page_delete">Удалить</string>
@@ -213,9 +206,7 @@
   <string name="backup_page_username">Имя пользователя</string>
   <string name="backup_page_webdav_backup">Резервное копирование WebDAV</string>
   <string name="backup_page_webdav_backup_files">Файлы резервного копирования WebDAV</string>
-  <string name="built_in_search_description">Включить встроенную функцию поиска модели</string>
   <string name="built_in_search_title">Встроенный поиск</string>
-  <string name="calculating">Вычисление...</string>
   <string name="cancel">Отмена</string>
   <string name="cancel_edit">Отменить редактирование</string>
   <string name="chain_of_thought_collapse">Свернуть</string>
@@ -378,7 +369,6 @@
   <string name="error_title_operation">Операция не выполнена</string>
   <string name="error_title_regenerate_message">Не удалось повторно сгенерировать сообщение</string>
   <string name="error_title_send_message">Не удалось отправить сообщение</string>
-  <string name="error_title_tool_approval">Сбой обработки вызова инструмента</string>
   <string name="error_title_tool_unavailable">Инструмент недоступен</string>
   <string name="export_cancel">Отмена</string>
   <string name="export_image_warning">Приведённый выше контент сгенерирован искусственным интеллектом и может содержать неточности.</string>
@@ -472,7 +462,6 @@
   <string name="imggen_page_title">Генерация изображений</string>
   <string name="imggen_page_error_no_model">Модель изображения не выбрана</string>
   <string name="imggen_page_error_generic">Не удалось сгенерировать изображение</string>
-  <string name="imggen_page_error_delete">Не удалось удалить изображение</string>
   <string name="mcp_picker_syncing">Синхронизация MCP-серверов…</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">Меню</string>
@@ -530,34 +519,21 @@
   <string name="placeholder_system_version">Версия системы</string>
   <string name="placeholder_timezone">Часовой пояс</string>
   <string name="placeholder_user">Пользователь</string>
-  <string name="prompt_page_add">Добавить</string>
-  <string name="prompt_page_add_entry">Добавить запись</string>
   <string name="prompt_page_add_mode_injection">Добавить внедрение подсказки</string>
   <string name="prompt_page_cancel">Отмена</string>
-  <string name="prompt_page_case_sensitive">С учетом регистра</string>
   <string name="prompt_page_confirm">Подтвердить</string>
-  <string name="prompt_page_constant_active">Всегда активно</string>
-  <string name="prompt_page_constant_active_desc">Срабатывание без совпадения ключевых слов</string>
   <string name="prompt_page_delete">Удалить</string>
-  <string name="prompt_page_description">Описание</string>
   <string name="prompt_page_disabled">Отключено</string>
-  <string name="prompt_page_edit">Редактировать</string>
-  <string name="prompt_page_edit_entry">Редактировать запись</string>
   <string name="prompt_page_edit_mode_injection">Изменить внедрение подсказки</string>
   <string name="prompt_page_empty_hint">Нажмите кнопку ниже, чтобы добавить</string>
   <string name="prompt_page_enabled">Включено</string>
   <string name="prompt_page_entries_count_format">%d записей</string>
-  <string name="prompt_page_entries_format">Записи (%d)</string>
   <string name="prompt_page_inject_depth">Расстояние от последнего сообщения (от 1)</string>
   <string name="prompt_page_injection_content">Содержимое инъекции</string>
   <string name="prompt_page_injection_position">Позиция инъекции</string>
   <string name="prompt_page_injection_role">Роль инъекции</string>
-  <string name="prompt_page_keywords_format">Ключевые слова: %s</string>
-  <string name="prompt_page_keywords_label">Ключевые слова</string>
   <string name="prompt_page_mode_injection_empty">Нет внедрений подсказок</string>
-  <string name="prompt_page_mode_injection_tab">Внедрения подсказок</string>
   <string name="prompt_page_name">Имя</string>
-  <string name="prompt_page_new_keyword">Новое ключевое слово</string>
   <string name="prompt_page_position_after_system">После системного приглашения</string>
   <string name="prompt_page_position_at_depth">На глубине</string>
   <string name="prompt_page_position_before_system">Перед системным приглашением</string>
@@ -567,11 +543,8 @@
   <string name="prompt_page_priority_label">Приоритет</string>
   <string name="prompt_page_role_assistant">Ассистент (предварительное заполнение)</string>
   <string name="prompt_page_role_user">Пользователь</string>
-  <string name="prompt_page_scan_depth">Глубина сканирования (сообщения)</string>
   <string name="prompt_page_title">Внедрение подсказок</string>
   <string name="prompt_page_unnamed">Без имени</string>
-  <string name="prompt_page_unnamed_entry">Безымянная запись</string>
-  <string name="prompt_page_use_regex">Использовать регулярные выражения</string>
   <string name="quick_messages_page_add_title">Добавить быстрое сообщение</string>
   <string name="quick_messages_page_delete_message">Вы уверены, что хотите удалить "%s"? Это действие нельзя отменить.</string>
   <string name="quick_messages_page_delete_title">Удалить быстрое сообщение</string>
@@ -581,16 +554,10 @@
   <string name="quick_messages_page_empty_title">Нет быстрых сообщений</string>
   <string name="quick_messages_page_untitled">Без названия</string>
   <string name="reasoning_auto">Авто</string>
-  <string name="reasoning_auto_desc">Позволить модели автоматически определить уровень рассуждений.</string>
-  <string name="reasoning_custom">Пользовательский бюджет рассуждений</string>
   <string name="reasoning_heavy">Высокая</string>
-  <string name="reasoning_heavy_desc">Модель будет использовать большое количество рассуждений для ответа на вопросы.</string>
   <string name="reasoning_light">Низкий</string>
-  <string name="reasoning_light_desc">Модель будет использовать небольшое количество рассуждений для ответа на вопросы.</string>
   <string name="reasoning_medium">Средний</string>
-  <string name="reasoning_medium_desc">Модель будет использовать более глубокое рассуждение для ответа на вопросы.</string>
   <string name="reasoning_off">Выключено</string>
-  <string name="reasoning_off_desc">Отключить функцию обоснования, модель будет отвечать на вопросы напрямую.</string>
   <string name="reasoning_picker_hint">Не все модели поддерживают настройку глубины. См. документацию модели и провайдера.</string>
   <string name="reasoning_picker_title">Настроить глубину мышления модели</string>
   <string name="reasoning_xhigh">Очень высокий</string>
@@ -647,7 +614,6 @@
   <string name="setting_asr_configure_dashscope_vad_desc">Порог серверного VAD. Рекомендуется: 0.0; диапазон: от -1 до 1.</string>
   <string name="setting_asr_configure_dashscope_websocket_desc">Конечная точка веб-сокета DashScope в реальном времени</string>
   <string name="setting_asr_configure_language">Язык</string>
-  <string name="setting_asr_configure_language_code_desc">Необязательный код языка, например zh-CN, en-US, ja-JP</string>
   <string name="setting_asr_configure_language_iso_desc">Необязательный код языка ISO, например zh или en</string>
   <string name="setting_asr_configure_model">Модель</string>
   <string name="setting_asr_configure_model_desc">Модель транскрибирования в реальном времени</string>
@@ -738,7 +704,6 @@
   <string name="setting_display_page_show_user_avatar_title">Показывать аватар пользователя</string>
   <string name="setting_display_page_skip_crop_image_desc">Пропустить обрезку после импорта изображений или съёмки</string>
   <string name="setting_display_page_skip_crop_image_title">Пропустить редактирование изображения</string>
-  <string name="setting_display_page_title">Настройки отображения</string>
   <string name="setting_display_page_tts_only_read_quoted_desc">Если включено, TTS читает только текст в кавычках (включая “”, ‘’, 「」, 『』)</string>
   <string name="setting_display_page_tts_only_read_quoted_title">TTS читать только цитированный контент</string>
   <string name="setting_display_page_tts_read_outside_brackets_desc">Если включено, TTS не будет читать содержимое в скобках</string>
@@ -757,7 +722,6 @@
   <string name="setting_files_page_cleaned_toast">Все файлы удалены</string>
   <string name="setting_files_page_delete_action">Удалить</string>
   <string name="setting_files_page_delete_content_description">Удалить</string>
-  <string name="setting_files_page_delete_failed_toast">Не удалось удалить</string>
   <string name="setting_files_page_delete_file_title">Удалить файл</string>
   <string name="setting_files_page_deleted_toast">Удалено</string>
   <string name="setting_files_page_folder_upload">Загрузить</string>
@@ -781,7 +745,6 @@
   <string name="setting_mcp_page_header_value">Значение заголовка</string>
   <string name="setting_mcp_page_header_value_placeholder">например: Bearer token123</string>
   <string name="setting_mcp_page_import_confirm">Импорт</string>
-  <string name="setting_mcp_page_import_scan_qr">Сканировать QR-код</string>
   <string name="setting_mcp_page_import_pick_image">Выбрать QR-код из галереи</string>
   <string name="setting_mcp_page_import_paste_json">Вставить JSON-конфигурацию</string>
   <string name="setting_mcp_page_import_added">Импортировано конфигураций: %d</string>
@@ -852,7 +815,6 @@
   <string name="setting_page_color_mode_dark">Тёмная</string>
   <string name="setting_page_color_mode_light">Светлая</string>
   <string name="setting_page_color_mode_system">Системная</string>
-  <string name="setting_page_config">Настроить</string>
   <string name="setting_page_config_api_desc">Настройте API и модель диалога, чтобы начать общение.</string>
   <string name="setting_page_config_api_title">Настройте API и модель</string>
   <string name="setting_page_data_backup">Резервное копирование данных</string>
@@ -860,8 +822,6 @@
   <string name="setting_page_data_settings">Настройки данных</string>
   <string name="setting_page_default_model">Модель и промпт по умолчанию</string>
   <string name="setting_page_default_model_desc">Установить модели по умолчанию для каждой функции</string>
-  <string name="setting_page_display_setting">Настройки отображения</string>
-  <string name="setting_page_display_setting_desc">Управление настройками отображения</string>
   <string name="setting_page_documentation">Документация</string>
   <string name="setting_page_documentation_desc">Просмотрите инструкции по использованию приложения и справочную документацию</string>
   <string name="setting_page_dynamic_color">Динамический цвет</string>
@@ -877,7 +837,6 @@
   <string name="setting_page_language_japanese">日本語</string>
   <string name="setting_page_language_korean">한국어</string>
   <string name="setting_page_language_russian">Русский</string>
-  <string name="setting_page_interaction_notification_settings">Взаимодействие и уведомления</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">Настроить серверы MCP</string>
   <string name="mcp_status_connecting">Подключение</string>
@@ -912,7 +871,6 @@
   <string name="setting_page_search_add_provider">Добавить поставщика</string>
   <string name="setting_page_search_common_options">Общие параметры</string>
   <string name="setting_page_search_config">Конфигурация</string>
-  <string name="setting_page_search_delete_provider">Удалить поставщика</string>
   <string name="setting_page_search_result_size">Размер результата</string>
   <string name="setting_page_search_service">Служба поиска</string>
   <string name="setting_page_search_service_desc">Настройка личных поисковых сервисов</string>
@@ -977,7 +935,6 @@
   <string name="setting_provider_page_filter_placeholder">Введите название модели для фильтрации</string>
   <string name="setting_provider_page_image">Изображение</string>
   <string name="setting_provider_page_image_model">Изображение</string>
-  <string name="setting_provider_page_image_qr_decode_failed">Не удалось распознать QR-код с изображения: %s</string>
   <string name="setting_provider_page_import_dialog_message">Выберите способ импорта:</string>
   <string name="setting_provider_page_import_dialog_title">Импортировать конфигурацию поставщика</string>
   <string name="setting_provider_page_import_service_account_json">Импорт JSON-файла служебной учётной записи</string>
@@ -1001,7 +958,6 @@
   <string name="setting_provider_page_project_id">Идентификатор проекта</string>
   <string name="setting_provider_page_provider_override">Переопределение поставщика</string>
   <string name="setting_provider_page_provider_override_desc">Настройте пользовательские параметры поставщика для этой конкретной модели. Будет наследовать общие свойства от родительского поставщика.</string>
-  <string name="setting_provider_page_qr_decode_failed">Не удалось распознать QR-код: %s</string>
   <string name="setting_provider_page_reasoning">Размышления</string>
   <string name="setting_provider_page_response_api">API ответов</string>
   <string name="setting_provider_page_response_api_warning">Response API — это новое поколение API от OpenAI. Большинство поставщиков его не поддерживают. Если вы не знаете, что это такое, не включайте его.</string>
@@ -1063,7 +1019,6 @@
   <string name="setting_tts_page_speech_rate">Скорость речи</string>
   <string name="setting_tts_page_speech_rate_description">Управление скоростью речи (0,1–3,0, 1,0 — нормальная скорость)</string>
   <string name="setting_tts_page_test_text">Здравствуйте, это тест преобразования текста в речь.</string>
-  <string name="setting_tts_page_title">Преобразование текста в речь</string>
   <string name="setting_tts_page_voice">Голос</string>
   <string name="setting_tts_page_voice_description">Голос для синтеза речи</string>
   <string name="setting_tts_page_voice_name">Название голоса</string>
@@ -1073,8 +1028,6 @@
   <string name="share">Поделиться</string>
   <string name="share_handler_page_title">Выбрать ассистента</string>
   <string name="shortcut_take_picture">Сделать фото и спросить</string>
-  <string name="silicon_flow_description">**Ведущий мировой поставщик ИИ-возможностей, ускоряющий AGI на благо человечества.**</string>
-  <string name="silicon_flow_website">Веб-сайт: [https://cloud.siliconflow.cn/](https://cloud.siliconflow.cn/i/u1Ia4Ycf)</string>
   <string name="skill_detail_page_content">Контент</string>
   <string name="skill_detail_page_create">Создать</string>
   <string name="skill_detail_page_delete_confirm">Вы уверены, что хотите удалить файл "%s"?</string>
@@ -1085,7 +1038,6 @@
   <string name="skill_detail_page_invalid_path">Недопустимый путь к файлу</string>
   <string name="skill_detail_page_invalid_skill">Некорректный frontmatter в SKILL.md</string>
   <string name="skill_detail_page_name_mismatch">Имя в SKILL.md должно оставаться «%1$s»</string>
-  <string name="skill_detail_page_save_failed">Не удалось сохранить файл навыка</string>
   <string name="skill_detail_page_delete_file">Удалить файл</string>
   <string name="skill_detail_page_file_name">Имя файла</string>
   <string name="skill_detail_page_file_name_invalid">Неверное имя файла</string>
@@ -1113,7 +1065,6 @@
   <string name="skills_page_import_invalid_github_url">Некорректная ссылка на репозиторий GitHub</string>
   <string name="skills_page_import_github_list_failed">Не удалось прочитать каталог GitHub</string>
   <string name="skills_page_import_skill_file_missing">Файл SKILL.md не найден</string>
-  <string name="skills_page_import_download_failed">Не удалось загрузить файл навыка</string>
   <string name="skills_page_import_invalid_skill">Некорректный frontmatter в SKILL.md</string>
   <string name="skills_page_import_unknown_failed">Не удалось импортировать навык</string>
   <string name="skills_page_invalid_frontmatter">Некорректный frontmatter в SKILL.md</string>
@@ -1149,7 +1100,6 @@
   <string name="take_picture">Сделать фото</string>
   <string name="test_tts">Проверка TTS</string>
   <string name="text_area_fullscreen_edit">Полноэкранное редактирование</string>
-  <string name="text_area_import_failed">Не удалось импортировать файл</string>
   <string name="text_area_import_from_file">Импорт из файла</string>
   <string name="text_area_import_success">Файл успешно импортирован</string>
   <string name="text_area_save">Сохранить</string>
@@ -1173,8 +1123,6 @@
   <string name="use_web_search">Веб-поиск</string>
   <string name="user_default_name">Пользователь</string>
   <string name="video">Видео</string>
-  <string name="web_search_disabled">Веб-поиск отключён</string>
-  <string name="web_search_enabled">Веб-поиск включён</string>
   <string name="setting_theme_page_import_theme">Импорт</string>
   <string name="setting_theme_page_export_success">JSON темы скопирован в буфер обмена</string>
   <string name="setting_theme_page_import_success">Тема успешно импортирована</string>
@@ -1245,12 +1193,9 @@
   <string name="workspace_detail_enable_shell_desc">Разрешить этой рабочей области запускать терминальное окружение, используя локальный Rootfs</string>
   <string name="workspace_detail_tool_approval">Подтверждение инструментов</string>
   <string name="workspace_detail_tool_approval_desc">Если включено, перед вызовом этого инструмента ИИ требуется подтверждение пользователя.</string>
-  <string name="workspace_detail_tool_list_files">Список файлов</string>
   <string name="workspace_detail_tool_read_file">Читать файл</string>
   <string name="workspace_detail_tool_write_file">Записать файл</string>
   <string name="workspace_detail_tool_edit_file">Редактировать файл</string>
-  <string name="workspace_detail_tool_delete_file">Удалить файл</string>
-  <string name="workspace_detail_tool_move_file">Переместить файл</string>
   <string name="workspace_detail_tool_shell">Выполнить команду</string>
   <string name="workspace_detail_install_rootfs_desc">Загрузит tar.gz и распакует в каталог Linux %s.</string>
   <string name="workspace_detail_download_url">URL для скачивания tar.gz</string>
@@ -1271,7 +1216,6 @@
   <string name="workspace_terminal_exited">Терминал завершен</string>
   <string name="workspace_terminal_tab_title">Терминал %1$d</string>
   <string name="workspace_terminal_limit_reached">Можно открыть не более %1$d вкладок терминала</string>
-  <string name="workspace_terminal_create_failed">Не удалось создать терминал: %1$s</string>
   <string name="workspace_terminal_close_title">Закрыть терминал?</string>
   <string name="workspace_terminal_close_confirmation">Закрыть \"%1$s\"? Команды, выполняющиеся на этой вкладке, будут завершены.</string>
   <string name="workspace_terminal_close_action">Закрыть</string>
@@ -1301,15 +1245,6 @@
   <string name="tool_ui_read_file_default">Читать файл</string>
   <string name="tool_ui_write_file">Записать: %s</string>
   <string name="tool_ui_write_file_default">Записать файл</string>
-  <string name="tool_ui_list_files">Список: %s</string>
-  <string name="tool_ui_list_files_default">Список файлов</string>
-  <string name="tool_ui_list_files_empty">Пусто</string>
-  <string name="tool_ui_list_files_items">%1$d файлов: %2$s</string>
-  <string name="tool_ui_delete_file">Удалить: %s</string>
-  <string name="tool_ui_delete_file_default">Удалить файл</string>
-  <string name="tool_ui_deleted">Удалено %s</string>
-  <string name="tool_ui_delete_failed">Не удалось удалить %s</string>
-  <string name="tool_ui_move_file">Переместить файл</string>
   <string name="tool_ui_shell">Shell: %s</string>
   <string name="tool_ui_shell_default">Shell</string>
   <string name="tool_ui_shell_timeout">timeout</string>
@@ -1326,8 +1261,6 @@
   <string name="log_page_record_requests">Записывать запросы</string>
   <string name="log_page_record_requests_desc">Записывать заголовки запросов, тела и метаданные ответов</string>
   <string name="workspace_file_editor_saved">Сохранено</string>
-  <string name="workspace_file_editor_save_failed">Ошибка сохранения</string>
-  <string name="workspace_file_editor_read_failed">Ошибка чтения файла</string>
   <string name="workspace_file_editor_too_large">Файл слишком велик для предпросмотра (%d байт)</string>
   <string name="image_crop_failed">Не удалось обрезать изображение</string>
   <string name="chat_message_tool_inspect_attachments_title">Проверка вложений</string>
@@ -1368,7 +1301,6 @@
   <string name="assistant_picker_manage_current">Управлять текущим ассистентом</string>
   <string name="assistant_page_context_message_limit">Автоматическая очистка контекста</string>
   <string name="assistant_page_context_message_limit_desc">Ограничивает историю по числу сообщений, сохраняя полные циклы диалога. Фактическое число сохранённых сообщений может превышать заданное значение.</string>
-  <string name="assistant_page_context_message_limit_count">Очищать после %d сообщений</string>
   <string name="assistant_page_context_message_limit_unlimited">Не очищать контекст автоматически</string>
   <string name="assistant_page_context_message_limit_warning">Число сообщений не является лимитом токенов. Каждая очистка всё равно может сбросить кеш промпта.</string>
   <string name="assistant_page_context_message_limit_range">%1$d – %2$d</string>
@@ -1398,12 +1330,9 @@
   <string name="assistant_page_sub_assistant_access_scope_desc">Выберите, каких суб-ассистентов этот ассистент может обнаруживать, вызывать и управлять</string>
   <string name="assistant_page_sub_assistant_access_scope_empty">Суб-ассистенты не выбраны</string>
   <string name="assistant_page_sub_assistant_access_scope_count">Выбрано суб-ассистентов: %1$d</string>
-  <string name="assistant_page_sub_assistant_globally_available">Глобально доступен</string>
   <string name="sub_assistant_global_tag">Глобально</string>
   <string name="assistant_picker_show_sub_assistants">Суб-ассистенты</string>
-  <string name="assistant_page_no_chat_model_warning">Чат-модель не настроена; вызов не запустится</string>
   <!-- Sub-Assistant: Local Tools -->
-  <string name="assistant_page_local_tools_assistant_collaboration">Сотрудничество ассистентов</string>
   <string name="assistant_page_local_tools_assistant_management_title">Управление ассистентами</string>
   <string name="assistant_page_local_tools_assistant_management_desc">Позволяет этому ассистенту создавать, изменять и удалять других ассистентов, а также просматривать их локальную память. Память может поддерживаться только ассистентом-владельцем через свои инструменты.</string>
   <string name="assistant_page_local_tools_assistant_delegation_title">Вызов суб-ассистентов</string>
@@ -1418,9 +1347,7 @@
   <string name="sub_assistant_card_failed">Ошибка</string>
   <string name="sub_assistant_card_stopped">Остановлено</string>
   <string name="sub_assistant_card_unavailable">Недоступно</string>
-  <string name="sub_assistant_card_latest_output">Последний вывод</string>
   <string name="sub_assistant_card_using_tool">Используется: %1$s</string>
-  <string name="sub_assistant_card_view_detail">Подробности</string>
   <string name="sub_assistant_card_scroll_to_latest">Последнее</string>
   <!-- Sub-Assistant: Call Card reasons -->
   <string name="sub_assistant_reason_assistant_not_found">Ассистент не найден</string>
@@ -1450,7 +1377,6 @@
   <string name="sub_assistant_detail_title">Детали суб-ассистента</string>
   <string name="sub_assistant_detail_assistant_deleted">Ассистент удалён</string>
   <string name="sub_assistant_detail_assistant_settings">Настройки ассистента</string>
-  <string name="sub_assistant_detail_no_messages">Сообщения не найдены</string>
   <string name="sub_assistant_detail_loading">Загрузка диалога суб-ассистента…</string>
   <string name="tts_controller_stop">Стоп</string>
   <string name="tts_controller_expand">Дополнительные элементы управления</string>
@@ -1553,7 +1479,6 @@
   <string name="skills_page_import_resource_limit">Пакет Skill превышает безопасный лимит импорта</string>
   <string name="managed_configuration_source_builtin">Встроенное</string>
   <string name="managed_configuration_source_local">Локальное</string>
-  <string name="managed_configuration_source_managed">Управляемое</string>
   <string name="chat_page_check_provider_settings">Проверить настройки провайдера</string>
   <string name="chat_page_copy_error">Копировать сообщение об ошибке</string>
   <string name="error_title_generate_suggestion">Не удалось создать подсказки</string>
@@ -1596,7 +1521,6 @@
   <string name="enterprise_configuration_policies_title">Политики использования</string>
   <string name="enterprise_configuration_policies_summary">Личные ресурсы разрешены в %1$d из %2$d категорий</string>
   <string name="enterprise_configuration_resources_title">Предоставленные ресурсы</string>
-  <string name="enterprise_configuration_diagnostics_title">Синхронизация и диагностика</string>
   <string name="enterprise_configuration_status">Состояние</string>
   <string name="enterprise_configuration_generation">Применённая версия</string>
   <string name="enterprise_configuration_last_sync">Последняя успешная синхронизация</string>
@@ -1643,7 +1567,6 @@
   <string name="enterprise_configuration_redacted_resource_count">%1$d эл.; содержимое скрыто</string>
   <string name="enterprise_personal">Личное пространство</string>
   <string name="enterprise_space">Корпоративное пространство</string>
-  <string name="enterprise_local_notice">Конфигурация организации предоставляется этим устройством. Модели могут подключаться к настроенным вами сервисам.</string>
   <string name="enterprise_join_paste">Вставить данные подключения</string>
   <string name="enterprise_join_scan">Подключиться по QR-коду</string>
   <string name="enterprise_join_scan_gallery">QR-код из фотографий</string>
@@ -1664,8 +1587,6 @@
   <string name="enterprise_working">Обработка…</string>
   <string name="enterprise_failure">Не удалось завершить операцию. Повторите попытку.</string>
   <string name="enterprise_scan_failure">Не удалось прочитать код подключения. Проверьте разрешение камеры или вставьте данные подключения.</string>
-  <string name="enterprise_generation">Действующая версия конфигурации: %1$d</string>
-  <string name="enterprise_last_sync">Последняя синхронизация настроек: %1$s</string>
   <string name="enterprise_current_space">Текущее пространство: %1$s</string>
   <string name="enterprise_invalid_enrollment">Не удалось распознать данные подключения. Отсканируйте или вставьте полные данные, предоставленные организацией.</string>
   <string name="enterprise_enrollment_already_used">Эти данные подключения уже использованы. Попросите администратора организации создать новые.</string>
@@ -1716,7 +1637,6 @@
   <string name="mcp_enterprise_read_only">Только чтение</string>
   <string name="mcp_gateway_preference_hint">Все инструменты шлюза включаются и отключаются вместе. Изменения действуют для новых взаимодействий.</string>
   <string name="mcp_enterprise_required">Обязательно</string>
-  <string name="speech_operation_unavailable">Речь недоступна. Проверьте выбранный ресурс и пространство.</string>
   <string name="enterprise_selection_changed">Пространство изменилось. Выберите файл конфигурации повторно.</string>
   <string name="backup_personal_scope_notice">Сохраняются пользовательские настройки и данные личного пространства. Конфигурация и данные организации не входят в копию и сохраняются при восстановлении.</string>
   <string name="configuration_change_rejected">Это изменение настройки не разрешено: %1$s</string>
@@ -1766,7 +1686,6 @@
   <string name="assistant_details_title">Сведения об ассистенте</string>
   <string name="assistant_details_enterprise_source">Предоставлено: %1$s</string>
   <string name="model_list_selected">Выбранная модель</string>
-  <string name="enterprise_local_indicator">Пример на устройстве</string>
   <string name="clear_search">Очистить поиск</string>
   <string name="assistant_model_default_settings">По умолчанию в настройках</string>
   <string name="assistant_model_default_assistant">По умолчанию ассистента</string>
@@ -1799,11 +1718,6 @@
   <string name="enterprise_budget_pending">Сверка использования</string>
   <string name="enterprise_budget_available">Доступно</string>
   <string name="enterprise_budget_limit">%1$s · %2$s: использовано %3$s + зарезервировано %4$s из %5$s; осталось %6$s</string>
-  <string name="enterprise_budget_usage_total">Накопленное использование</string>
-  <string name="enterprise_budget_usage_meter">%1$s: %2$s · %3$s</string>
-  <string name="enterprise_budget_completeness_exact">Точно</string>
-  <string name="enterprise_budget_completeness_partial">Частично</string>
-  <string name="enterprise_budget_completeness_unknown">Неизвестно</string>
   <string name="enterprise_budget_reset_at">Сброс %1$s</string>
   <string name="enterprise_budget_in_flight">%1$d запроса(ов) ожидают расчёта</string>
   <string name="enterprise_budget_period_day">За день</string>
@@ -2003,7 +1917,6 @@
   <string name="remote_workspace_verify">Файл проверен; разрешить новую операцию</string>
   <string name="remote_workspace_revoked">Доступ изменился. Вернитесь и откройте пространство заново</string>
   <string name="remote_workspace_name">Имя файла или папки</string>
-  <string name="remote_workspace_truncated">Доступна только часть сведений об ошибках</string>
   <string name="remote_workspace_select_all">Выбрать все показанные файлы</string>
   <string name="remote_workspace_operation_failed">Операция не выполнена</string>
   <string name="remote_workspace_completed">Выполнено</string>
@@ -2138,7 +2051,6 @@
   <string name="conversation_sort_updated">По времени обновления</string>
   <string name="history_page_current_space">История в этом пространстве</string>
   <string name="assistant_page_local_tools_chart_title">Диаграммы</string>
-  <string name="assistant_page_local_tools_chart_desc">Показывать линейные, столбчатые и точечные диаграммы с таблицей данных прямо на устройстве.</string>
   <string name="chart_mode_chart">Диаграмма</string>
   <string name="chart_mode_table">Таблица</string>
   <string name="chart_series_name">Ряд %1$d</string>

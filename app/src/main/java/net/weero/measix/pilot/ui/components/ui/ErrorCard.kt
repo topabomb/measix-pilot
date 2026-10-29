@@ -197,7 +197,7 @@ private fun ErrorSolution(solution: ChatErrorSolution?, onSelected: () -> Unit =
         else -> R.string.enterprise_budget_details
     }
     val navigation = LocalNavController.current
-    TextButton(onClick = { onSelected(); navigation.navigate(destination) { launchSingleTop = true } }) { Text(stringResource(label)) }
+    TextButton(onClick = { onSelected(); navigation.navigate(destination, launchSingleTop = true) }) { Text(stringResource(label)) }
 }
 
 private const val TRANSIENT_ERROR_DURATION_MILLIS = 5_000L

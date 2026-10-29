@@ -49,11 +49,6 @@ class ChatSurfacePolicyTest {
     }
 
     @Test
-    fun `artifacts stay fully opaque`() {
-        assertEquals(1f, ChatSurfacePolicy.artifactAlpha())
-    }
-
-    @Test
     fun `overlay helper keeps full opacity colors unchanged`() {
         val color = Color(0xFF112233)
         assertEquals(color, color.withOverlayAlpha(1f))

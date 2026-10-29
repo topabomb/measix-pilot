@@ -6,6 +6,7 @@ import android.os.Environment
 import android.widget.Toast
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.net.toUri
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -17,7 +18,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import me.rerere.common.http.await
+import me.rerere.common.http.readResponse
 import net.weero.measix.pilot.AppScope
 import net.weero.measix.pilot.BuildConfig
 import net.weero.measix.pilot.R
@@ -57,30 +58,20 @@ class UpdateChecker(
 
     fun checkUpdate(): Flow<UiState<UpdateInfo>> = flow {
         emit(UiState.Loading)
-        emit(
-            UiState.Success(
-                data = try {
-                    val response = client.newCall(
-                        Request.Builder()
-                            .url(API_URL)
-                            .get()
-                            .addHeader(
-                                "User-Agent",
-                                "MeasixPilot ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}"
-                            )
-                            .build()
-                    ).await()
-                    if (response.isSuccessful) {
-                        json.decodeFromString<UpdateInfo>(response.body.string())
-                    } else {
-                        throw Exception("Failed to fetch update info")
-                    }
-                } catch (e: Exception) {
-                    throw Exception("Failed to fetch update info", e)
-                }
-            )
-        )
+        val request = Request.Builder()
+            .url(API_URL)
+            .get()
+            .addHeader("User-Agent", "MeasixPilot ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}")
+            .build()
+        val info = client.newCall(request).readResponse { response ->
+            if (!response.isSuccessful) {
+                throw java.io.IOException("Update check failed: HTTP ${response.code} ${response.message}")
+            }
+            json.decodeFromString<UpdateInfo>(response.body.string())
+        }
+        emit(UiState.Success(info))
     }.catch {
+        if (it is CancellationException) throw it
         emit(UiState.Error(it))
     }.flowOn(Dispatchers.IO)
 

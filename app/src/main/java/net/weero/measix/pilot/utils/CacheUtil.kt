@@ -1,7 +1,6 @@
-﻿package net.weero.measix.pilot.utils
+package net.weero.measix.pilot.utils
 
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 
 /**
  * A simple thread-safe cache implementation with expiration support.
@@ -33,36 +32,5 @@ class SimpleCache<K, V>(
 
     fun put(key: K, value: V) {
         cache[key] = CacheEntry(value)
-    }
-
-    fun invalidate(key: K) {
-        cache.remove(key)
-    }
-
-    fun invalidateAll() {
-        cache.clear()
-    }
-
-    fun cleanUp() {
-        cache.entries.removeIf { it.value.isExpired(expireAfterWriteMillis) }
-    }
-
-    fun size(): Int = cache.size
-
-    companion object {
-        fun <K, V> builder() = Builder<K, V>()
-    }
-
-    class Builder<K, V> {
-        private var expireAfterWriteMillis: Long = Long.MAX_VALUE
-
-        fun expireAfterWrite(duration: Long, unit: TimeUnit): Builder<K, V> {
-            expireAfterWriteMillis = unit.toMillis(duration)
-            return this
-        }
-
-        fun build(): SimpleCache<K, V> {
-            return SimpleCache(expireAfterWriteMillis)
-        }
     }
 }

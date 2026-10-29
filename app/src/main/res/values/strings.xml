@@ -39,12 +39,10 @@
   <string name="assistant_page_background_opacity_desc">Adjust chat background image visibility</string>
   <string name="assistant_page_background_opacity_value">Opacity: %1$d%%</string>
   <string name="assistant_page_background_set">Background image set</string>
-  <string name="assistant_page_balanced">Balanced</string>
   <string name="assistant_page_body_key">Body Key</string>
   <string name="assistant_page_body_value">Body Value (JSON)</string>
   <string name="assistant_page_cancel">Cancel</string>
   <string name="assistant_page_change_background">Change Background Image</string>
-  <string name="assistant_page_chaotic">Chaotic (Dangerous)</string>
   <string name="assistant_page_chat_background">Chat Background</string>
   <string name="assistant_page_chat_background_desc">Set background image for assistant chat page</string>
   <string name="assistant_page_chat_model">Chat Model</string>
@@ -52,8 +50,6 @@
   <string name="assistant_page_follow_default_model">Follow default model</string>
   <string name="assistant_page_clone">Clone</string>
   <string name="assistant_page_confirm">Confirm</string>
-  <string name="assistant_page_creative">Creative</string>
-  <string name="assistant_page_current_assistant">Current Assistant</string>
   <string name="assistant_page_custom_bodies">Custom Body</string>
   <string name="assistant_page_custom_headers">Custom Headers</string>
   <string name="assistant_page_default_assistant">Default Assistant</string>
@@ -119,7 +115,6 @@
   <string name="assistant_page_select_from_gallery">Select from Gallery</string>
   <string name="assistant_page_stream_output">Stream Output</string>
   <string name="assistant_page_stream_output_desc">Whether to enable streaming output for messages</string>
-  <string name="assistant_page_strict">Strict</string>
   <string name="assistant_page_system_prompt">System Prompt</string>
   <string name="assistant_page_tab_basic">Basic Settings</string>
   <string name="assistant_page_tab_extensions">Extensions</string>
@@ -142,7 +137,6 @@
   <string name="assistant_page_time_reminder_desc">Help the model recognize long gaps between messages.</string>
   <string name="assistant_page_title">Assistant Settings</string>
   <string name="assistant_page_top_p">Top P</string>
-  <string name="assistant_page_top_p_value">Top P: %s</string>
   <string name="assistant_page_top_p_warning">Please don\'t modify this value unless you know what you\'re doing</string>
   <string name="assistant_page_use_assistant_avatar">Use Assistant Avatar</string>
   <string name="assistant_page_use_assistant_avatar_desc">Use assistant avatar and name instead of model avatar and name in chats</string>
@@ -161,7 +155,6 @@
   <string name="backup_page_backup_items">Backup Items</string>
   <string name="backup_page_backup_now">Backup Now</string>
   <string name="backup_page_backup_success">Backup successful</string>
-  <string name="backup_page_chat_records">Chat Records</string>
   <string name="backup_page_connection_failed">Connection failed: %s</string>
   <string name="backup_page_connection_success">Connection successful</string>
   <string name="backup_page_delete">Delete</string>
@@ -215,9 +208,7 @@
   <string name="backup_page_username">Username</string>
   <string name="backup_page_webdav_backup">WebDAV Backup</string>
   <string name="backup_page_webdav_backup_files">WebDAV Backup Files</string>
-  <string name="built_in_search_description">Enable model\'s built-in search functionality</string>
   <string name="built_in_search_title">Built-in Search</string>
-  <string name="calculating">Calculating...</string>
   <string name="cancel">Cancel</string>
   <string name="cancel_edit">Cancel Edit</string>
   <string name="chain_of_thought_collapse">Collapse</string>
@@ -396,7 +387,6 @@
   <string name="error_title_operation">Operation failed</string>
   <string name="error_title_regenerate_message">Message regeneration failed</string>
   <string name="error_title_send_message">Message send failed</string>
-  <string name="error_title_tool_approval">Tool call processing failed</string>
   <string name="error_title_tool_unavailable">Tool unavailable</string>
   <string name="error_mcp_invalid_server_name">Invalid MCP server name (only alphanumeric characters allowed): %1$s</string>
   <string name="export_cancel">Cancel</string>
@@ -491,7 +481,6 @@
   <string name="imggen_page_title">Image Generation</string>
   <string name="imggen_page_error_no_model">No image model selected</string>
   <string name="imggen_page_error_generic">Image generation failed</string>
-  <string name="imggen_page_error_delete">Failed to delete image</string>
   <string name="mcp_picker_syncing">Syncing MCP servers...</string>
   <string name="mcp_picker_title">MCP</string>
   <string name="menu">Menu</string>
@@ -549,34 +538,21 @@
   <string name="placeholder_system_version">System Version</string>
   <string name="placeholder_timezone">Timezone</string>
   <string name="placeholder_user">User</string>
-  <string name="prompt_page_add">Add</string>
-  <string name="prompt_page_add_entry">Add Entry</string>
   <string name="prompt_page_add_mode_injection">Add Prompt Injection</string>
   <string name="prompt_page_cancel">Cancel</string>
-  <string name="prompt_page_case_sensitive">Case Sensitive</string>
   <string name="prompt_page_confirm">Confirm</string>
-  <string name="prompt_page_constant_active">Always Active</string>
-  <string name="prompt_page_constant_active_desc">Trigger without keyword matching</string>
   <string name="prompt_page_delete">Delete</string>
-  <string name="prompt_page_description">Description</string>
   <string name="prompt_page_disabled">Disabled</string>
-  <string name="prompt_page_edit">Edit</string>
-  <string name="prompt_page_edit_entry">Edit Entry</string>
   <string name="prompt_page_edit_mode_injection">Edit Prompt Injection</string>
   <string name="prompt_page_empty_hint">Click the button below to add</string>
   <string name="prompt_page_enabled">Enabled</string>
   <string name="prompt_page_entries_count_format">%d entries</string>
-  <string name="prompt_page_entries_format">Entries (%d)</string>
   <string name="prompt_page_inject_depth">Distance from last message (starts at 1)</string>
   <string name="prompt_page_injection_content">Injection Content</string>
   <string name="prompt_page_injection_position">Injection Position</string>
   <string name="prompt_page_injection_role">Injection Role</string>
-  <string name="prompt_page_keywords_format">Keywords: %s</string>
-  <string name="prompt_page_keywords_label">Keywords</string>
   <string name="prompt_page_mode_injection_empty">No prompt injections</string>
-  <string name="prompt_page_mode_injection_tab">Prompt Injections</string>
   <string name="prompt_page_name">Name</string>
-  <string name="prompt_page_new_keyword">New Keyword</string>
   <string name="prompt_page_position_after_system">After System Prompt</string>
   <string name="prompt_page_position_at_depth">At Depth</string>
   <string name="prompt_page_position_before_system">Before System Prompt</string>
@@ -586,11 +562,8 @@
   <string name="prompt_page_priority_label">Priority</string>
   <string name="prompt_page_role_assistant">Assistant (prefill)</string>
   <string name="prompt_page_role_user">User</string>
-  <string name="prompt_page_scan_depth">Scan Depth (Messages)</string>
   <string name="prompt_page_title">Prompt Injection</string>
   <string name="prompt_page_unnamed">Unnamed</string>
-  <string name="prompt_page_unnamed_entry">Unnamed Entry</string>
-  <string name="prompt_page_use_regex">Use Regular Expression</string>
   <string name="quick_messages_page_add_title">Add Quick Message</string>
   <string name="quick_messages_page_delete_message">Are you sure you want to delete "%s"? This action cannot be undone.</string>
   <string name="quick_messages_page_delete_title">Delete Quick Message</string>
@@ -600,16 +573,10 @@
   <string name="quick_messages_page_empty_title">No Quick Messages</string>
   <string name="quick_messages_page_untitled">Untitled</string>
   <string name="reasoning_auto">Auto</string>
-  <string name="reasoning_auto_desc">Let the model automatically determine reasoning level.</string>
-  <string name="reasoning_custom">Custom reasoning budget</string>
   <string name="reasoning_heavy">High</string>
-  <string name="reasoning_heavy_desc">The model will use a large amount of reasoning to answer questions.</string>
   <string name="reasoning_light">Low</string>
-  <string name="reasoning_light_desc">The model will use a small amount of reasoning to answer questions.</string>
   <string name="reasoning_medium">Medium</string>
-  <string name="reasoning_medium_desc">The model will use more reasoning to answer questions.</string>
   <string name="reasoning_off">Off</string>
-  <string name="reasoning_off_desc">Turn off reasoning functionality, the model will directly answer questions.</string>
   <string name="reasoning_picker_hint">Not all models support depth adjustment. Refer to the model and provider documentation.</string>
   <string name="reasoning_picker_title">Adjust Model Thinking Depth</string>
   <string name="reasoning_xhigh">XHigh</string>
@@ -666,7 +633,6 @@
   <string name="setting_asr_configure_dashscope_vad_desc">Server VAD detection threshold. Recommended: 0.0; range: -1 to 1.</string>
   <string name="setting_asr_configure_dashscope_websocket_desc">DashScope realtime websocket endpoint</string>
   <string name="setting_asr_configure_language">Language</string>
-  <string name="setting_asr_configure_language_code_desc">Optional language code, e.g. zh-CN, en-US, ja-JP</string>
   <string name="setting_asr_configure_language_iso_desc">Optional ISO language code, such as zh or en</string>
   <string name="setting_asr_configure_model">Model</string>
   <string name="setting_asr_configure_model_desc">Realtime transcription model</string>
@@ -765,7 +731,6 @@
   <string name="setting_display_page_show_user_avatar_title">Show User Avatar</string>
   <string name="setting_display_page_skip_crop_image_desc">Skip crop interface after importing images or taking photos</string>
   <string name="setting_display_page_skip_crop_image_title">Skip Image Editing</string>
-  <string name="setting_display_page_title">Display Settings</string>
   <string name="setting_display_page_tts_only_read_quoted_desc">When enabled, TTS will only read content within quotation marks (including\" \", \' \', \u201C\u201D, \u2018\u2019, 「」, 『』)</string>
   <string name="setting_display_page_tts_only_read_quoted_title">TTS Read Quoted Content Only</string>
   <string name="setting_display_page_tts_read_outside_brackets_desc">When enabled, TTS will not read content inside brackets</string>
@@ -784,7 +749,6 @@
   <string name="setting_files_page_cleaned_toast">All files deleted</string>
   <string name="setting_files_page_delete_action">Delete</string>
   <string name="setting_files_page_delete_content_description">Delete</string>
-  <string name="setting_files_page_delete_failed_toast">Delete Failed</string>
   <string name="setting_files_page_delete_file_title">Delete File</string>
   <string name="setting_files_page_deleted_toast">Deleted</string>
   <string name="setting_files_page_folder_upload">Upload</string>
@@ -808,7 +772,6 @@
   <string name="setting_mcp_page_header_value">Header Value</string>
   <string name="setting_mcp_page_header_value_placeholder">e.g.: Bearer token123</string>
   <string name="setting_mcp_page_import_confirm">Import</string>
-  <string name="setting_mcp_page_import_scan_qr">Scan QR Code</string>
   <string name="setting_mcp_page_import_pick_image">Scan QR from Gallery</string>
   <string name="setting_mcp_page_import_paste_json">Paste JSON Config</string>
   <string name="setting_mcp_page_import_added">Imported %d config(s)</string>
@@ -882,7 +845,6 @@
   <string name="setting_page_color_mode_dark">Dark</string>
   <string name="setting_page_color_mode_light">Light</string>
   <string name="setting_page_color_mode_system">System</string>
-  <string name="setting_page_config">Configure</string>
   <string name="setting_page_config_api_desc">Configure an API and conversation model to start chatting.</string>
   <string name="setting_page_config_api_title">Please configure API and model</string>
   <string name="setting_page_data_backup">Data Backup</string>
@@ -890,8 +852,6 @@
   <string name="setting_page_data_settings">Data Settings</string>
   <string name="setting_page_default_model">Default Model and Prompt</string>
   <string name="setting_page_default_model_desc">Set default models for each feature</string>
-  <string name="setting_page_display_setting">Display Settings</string>
-  <string name="setting_page_display_setting_desc">Manage display settings</string>
   <string name="setting_page_preferences">Preferences</string>
   <string name="setting_page_preferences_desc">Theme, notifications, UI and general settings</string>
   <string name="setting_page_preferences_theme">Theme</string>
@@ -917,7 +877,6 @@
   <string name="setting_page_language_japanese">日本語</string>
   <string name="setting_page_language_korean">한국어</string>
   <string name="setting_page_language_russian">Русский</string>
-  <string name="setting_page_interaction_notification_settings">Interaction &amp;amp; Notifications</string>
   <string name="setting_page_mcp">MCP</string>
   <string name="setting_page_mcp_desc">Configure MCP Servers</string>
   <string name="mcp_status_connecting">Connecting</string>
@@ -946,7 +905,6 @@
   <string name="setting_page_search_add_provider">Add Provider</string>
   <string name="setting_page_search_common_options">Common Options</string>
   <string name="setting_page_search_config">Configuration</string>
-  <string name="setting_page_search_delete_provider">Delete Provider</string>
   <string name="setting_page_search_result_size">Result Size</string>
   <string name="setting_page_search_service">Search Service</string>
   <string name="setting_page_search_service_desc">Configure personal search services</string>
@@ -1014,7 +972,6 @@
   <string name="setting_provider_page_filter_placeholder">Enter model name to filter</string>
   <string name="setting_provider_page_image">Image</string>
   <string name="setting_provider_page_image_model">Image</string>
-  <string name="setting_provider_page_image_qr_decode_failed">Failed to parse QR code from image: %s</string>
   <string name="setting_provider_page_import_dialog_message">Please select import method:</string>
   <string name="setting_provider_page_import_dialog_title">Import Provider Configuration</string>
   <string name="setting_provider_page_import_service_account_json">Import Service Account JSON</string>
@@ -1038,7 +995,6 @@
   <string name="setting_provider_page_project_id">Project Id</string>
   <string name="setting_provider_page_provider_override">Provider Override</string>
   <string name="setting_provider_page_provider_override_desc">Configure custom provider settings for this specific model. Will inherit common properties from parent provider.</string>
-  <string name="setting_provider_page_qr_decode_failed">Failed to parse QR code: %s</string>
   <string name="setting_provider_page_reasoning">Reasoning</string>
   <string name="setting_provider_page_response_api">Response API</string>
   <string name="setting_provider_page_response_api_warning">Response API is OpenAI\'s next-generation API. Most providers do not support it. If you don\'t know what this is, don\'t enable it.</string>
@@ -1100,7 +1056,6 @@
   <string name="setting_tts_page_speech_rate">Speech Rate</string>
   <string name="setting_tts_page_speech_rate_description">Control the speed of speech (0.1 - 3.0, 1.0 is normal)</string>
   <string name="setting_tts_page_test_text">Hello, this is a text-to-speech test.</string>
-  <string name="setting_tts_page_title">Text-to-Speech</string>
   <string name="setting_tts_page_voice">Voice</string>
   <string name="setting_tts_page_voice_description">Voice to use for speech synthesis</string>
   <string name="setting_tts_page_voice_name">Voice Name</string>
@@ -1110,8 +1065,6 @@
   <string name="share">Share</string>
   <string name="share_handler_page_title">Select an Assistant</string>
   <string name="shortcut_take_picture">Take Picture &amp; Ask</string>
-  <string name="silicon_flow_description">**Leading global AI capability provider, accelerating AGI to benefit humanity.**</string>
-  <string name="silicon_flow_website">Website: [https://cloud.siliconflow.cn/](https://cloud.siliconflow.cn/i/u1Ia4Ycf)</string>
   <string name="skill_detail_page_content">Content</string>
   <string name="skill_detail_page_create">Create</string>
   <string name="skill_detail_page_delete_confirm">Are you sure you want to delete file "%s"?</string>
@@ -1122,7 +1075,6 @@
   <string name="skill_detail_page_invalid_path">The file path is invalid</string>
   <string name="skill_detail_page_invalid_skill">SKILL.md frontmatter is invalid</string>
   <string name="skill_detail_page_name_mismatch">The name in SKILL.md must remain “%1$s”</string>
-  <string name="skill_detail_page_save_failed">Failed to save the skill file</string>
   <string name="skill_detail_page_delete_file">Delete File</string>
   <string name="skill_detail_page_file_name">File Name</string>
   <string name="skill_detail_page_file_name_invalid">Invalid file name</string>
@@ -1150,7 +1102,6 @@
   <string name="skills_page_import_invalid_github_url">Invalid GitHub repository URL</string>
   <string name="skills_page_import_github_list_failed">Unable to read the GitHub directory</string>
   <string name="skills_page_import_skill_file_missing">No SKILL.md was found</string>
-  <string name="skills_page_import_download_failed">A skill file could not be downloaded</string>
   <string name="skills_page_import_invalid_skill">SKILL.md frontmatter is invalid</string>
   <string name="skills_page_import_unknown_failed">The skill could not be imported</string>
   <string name="skills_page_invalid_frontmatter">Invalid SKILL.md frontmatter</string>
@@ -1186,7 +1137,6 @@
   <string name="take_picture">Take Picture</string>
   <string name="test_tts">Test TTS</string>
   <string name="text_area_fullscreen_edit">Fullscreen edit</string>
-  <string name="text_area_import_failed">Failed to import file</string>
   <string name="text_area_import_from_file">Import from file</string>
   <string name="text_area_import_success">File imported successfully</string>
   <string name="text_area_save">Save</string>
@@ -1210,8 +1160,6 @@
   <string name="use_web_search">Web Search</string>
   <string name="user_default_name">User</string>
   <string name="video">Video</string>
-  <string name="web_search_disabled">Web search disabled</string>
-  <string name="web_search_enabled">Web search enabled</string>
   <string name="setting_theme_page_delete_theme_title">Delete Theme</string>
   <string name="setting_theme_page_delete_theme_message">Are you sure you want to delete this theme?</string>
   <string name="skills_page_import_from_file">Import from File</string>
@@ -1258,12 +1206,9 @@
   <string name="workspace_detail_enable_shell_desc">Allow this workspace to run a terminal environment using local Rootfs</string>
   <string name="workspace_detail_tool_approval">Tool Approval</string>
   <string name="workspace_detail_tool_approval_desc">When enabled, user confirmation is required before AI calls this tool</string>
-  <string name="workspace_detail_tool_list_files">List Files</string>
   <string name="workspace_detail_tool_read_file">Read File</string>
   <string name="workspace_detail_tool_write_file">Write File</string>
   <string name="workspace_detail_tool_edit_file">Edit File</string>
-  <string name="workspace_detail_tool_delete_file">Delete File</string>
-  <string name="workspace_detail_tool_move_file">Move File</string>
   <string name="workspace_detail_tool_shell">Execute Command</string>
   <string name="workspace_detail_install_rootfs_desc">Will download tar.gz and extract to the linux directory of %s.</string>
   <string name="workspace_detail_download_url">tar.gz download URL</string>
@@ -1284,7 +1229,6 @@
   <string name="workspace_terminal_exited">Terminal exited</string>
   <string name="workspace_terminal_tab_title">Terminal %1$d</string>
   <string name="workspace_terminal_limit_reached">At most %1$d terminal tabs are allowed</string>
-  <string name="workspace_terminal_create_failed">Failed to create terminal: %1$s</string>
   <string name="workspace_terminal_close_title">Close terminal?</string>
   <string name="workspace_terminal_close_confirmation">Close \"%1$s\"? Commands running in this tab will be terminated.</string>
   <string name="workspace_terminal_close_action">Close</string>
@@ -1314,15 +1258,6 @@
   <string name="tool_ui_read_file_default">Read file</string>
   <string name="tool_ui_write_file">Write: %s</string>
   <string name="tool_ui_write_file_default">Write file</string>
-  <string name="tool_ui_list_files">List: %s</string>
-  <string name="tool_ui_list_files_default">List files</string>
-  <string name="tool_ui_list_files_empty">Empty</string>
-  <string name="tool_ui_list_files_items">%1$d items: %2$s</string>
-  <string name="tool_ui_delete_file">Delete: %s</string>
-  <string name="tool_ui_delete_file_default">Delete file</string>
-  <string name="tool_ui_deleted">Deleted %s</string>
-  <string name="tool_ui_delete_failed">Failed to delete %s</string>
-  <string name="tool_ui_move_file">Move file</string>
   <string name="tool_ui_shell">Shell: %s</string>
   <string name="tool_ui_shell_default">Shell</string>
   <string name="tool_ui_shell_timeout">timeout</string>
@@ -1336,8 +1271,6 @@
   <string name="log_page_record_requests">Record requests</string>
   <string name="log_page_record_requests_desc">Capture request headers, bodies, and response metadata</string>
   <string name="workspace_file_editor_saved">Saved</string>
-  <string name="workspace_file_editor_save_failed">Save failed</string>
-  <string name="workspace_file_editor_read_failed">Failed to read file</string>
   <string name="workspace_file_editor_too_large">File too large to preview (%d bytes)</string>
   <string name="image_crop_failed">Failed to crop image</string>
   <string name="chat_message_tool_inspect_attachments_title">Inspect Attachments</string>
@@ -1378,7 +1311,6 @@
   <string name="assistant_picker_manage_current">Manage current assistant</string>
   <string name="assistant_page_context_message_limit">Automatic context trimming</string>
   <string name="assistant_page_context_message_limit_desc">Limits history by message count while keeping complete turns. The actual number retained can exceed this value.</string>
-  <string name="assistant_page_context_message_limit_count">Trim after %d messages</string>
   <string name="assistant_page_context_message_limit_unlimited">No automatic context trimming</string>
   <string name="assistant_page_context_message_limit_warning">Message count is not a token limit. Each trim can still invalidate the prompt cache.</string>
   <string name="assistant_page_context_message_limit_range">%1$d – %2$d</string>
@@ -1408,12 +1340,9 @@
   <string name="assistant_page_sub_assistant_access_scope_desc">Select which sub-assistants this assistant can discover, call, and manage</string>
   <string name="assistant_page_sub_assistant_access_scope_empty">No sub-assistants selected</string>
   <string name="assistant_page_sub_assistant_access_scope_count">%1$d sub-assistant(s) selected</string>
-  <string name="assistant_page_sub_assistant_globally_available">Globally available</string>
   <string name="sub_assistant_global_tag">Global</string>
   <string name="assistant_picker_show_sub_assistants">Sub-assistants</string>
-  <string name="assistant_page_no_chat_model_warning">No chat model configured; calls will not start</string>
   <!-- Sub-Assistant: Local Tools -->
-  <string name="assistant_page_local_tools_assistant_collaboration">Assistant Collaboration</string>
   <string name="assistant_page_local_tools_assistant_management_title">Manage Assistants</string>
   <string name="assistant_page_local_tools_assistant_management_desc">Allow this assistant to create, modify, and delete other assistants, and view their local memories. Memories can only be maintained by the owning assistant through its own tools.</string>
   <string name="assistant_page_local_tools_assistant_delegation_title">Call Sub-Assistants</string>
@@ -1425,9 +1354,7 @@
   <string name="sub_assistant_card_failed">Failed</string>
   <string name="sub_assistant_card_stopped">Stopped</string>
   <string name="sub_assistant_card_unavailable">Unavailable</string>
-  <string name="sub_assistant_card_latest_output">Latest Output</string>
   <string name="sub_assistant_card_using_tool">Using: %1$s</string>
-  <string name="sub_assistant_card_view_detail">View Details</string>
   <string name="sub_assistant_card_scroll_to_latest">Latest</string>
   <!-- Sub-Assistant: Call Card reasons -->
   <string name="sub_assistant_reason_assistant_not_found">Assistant not found</string>
@@ -1457,7 +1384,6 @@
   <string name="sub_assistant_detail_title">Sub-Assistant Details</string>
   <string name="sub_assistant_detail_assistant_deleted">Assistant deleted</string>
   <string name="sub_assistant_detail_assistant_settings">Assistant Settings</string>
-  <string name="sub_assistant_detail_no_messages">No messages found</string>
   <string name="sub_assistant_detail_loading">Loading sub-assistant conversation…</string>
   <string name="tts_controller_stop">Stop</string>
   <string name="tts_controller_expand">More controls</string>
@@ -1548,7 +1474,6 @@
   <string name="skills_page_import_resource_limit">The Skill package exceeds the safe import limit</string>
   <string name="managed_configuration_source_builtin">Built-in</string>
   <string name="managed_configuration_source_local">Local</string>
-  <string name="managed_configuration_source_managed">Managed</string>
   <string name="chat_page_check_provider_settings">Check provider settings</string>
   <string name="chat_page_copy_error">Copy error message</string>
   <string name="error_title_generate_suggestion">Suggestion generation failed</string>
@@ -1597,7 +1522,6 @@
   <string name="enterprise_configuration_policies_title">Usage policies</string>
   <string name="enterprise_configuration_policies_summary">Personal resources allowed in %1$d of %2$d categories</string>
   <string name="enterprise_configuration_resources_title">Delivered resources</string>
-  <string name="enterprise_configuration_diagnostics_title">Synchronization and diagnostics</string>
   <string name="enterprise_configuration_status">Status</string>
   <string name="enterprise_configuration_generation">Currently applied version</string>
   <string name="enterprise_configuration_last_sync">Last successful sync</string>
@@ -1636,7 +1560,6 @@
   <string name="enterprise_configuration_fact_description">Description</string>
   <string name="enterprise_personal">Personal space</string>
   <string name="enterprise_space">Enterprise space</string>
-  <string name="enterprise_local_notice">Enterprise configuration is provided locally. Models can use the services you configure.</string>
   <string name="enterprise_join_paste">Paste access details</string>
   <string name="enterprise_join_scan">Scan to join</string>
   <string name="enterprise_join_submit">Join enterprise</string>
@@ -1656,8 +1579,6 @@
   <string name="enterprise_working">Working…</string>
   <string name="enterprise_failure">The operation could not be completed. Please retry.</string>
   <string name="enterprise_scan_failure">The enrollment code could not be read. Check camera permission or paste the enrollment information.</string>
-  <string name="enterprise_generation">Active configuration version: %1$d</string>
-  <string name="enterprise_last_sync">Last configuration sync: %1$s</string>
   <string name="enterprise_current_space">Current space: %1$s</string>
   <string name="enterprise_invalid_enrollment">This enrollment information is invalid. Scan or paste the complete enrollment information provided by your enterprise.</string>
   <string name="enterprise_external_open">Open external website</string>
@@ -1706,7 +1627,6 @@
   <string name="mcp_enterprise_read_only">Read only</string>
   <string name="mcp_gateway_preference_hint">All gateway tools switch together. Changes apply to new interactions.</string>
   <string name="mcp_enterprise_required">Required</string>
-  <string name="speech_operation_unavailable">Speech is unavailable. Check the selected resource and space.</string>
   <string name="enterprise_selection_changed">The space changed. Select the configuration file again.</string>
   <string name="backup_personal_scope_notice">Back up your configuration and personal-space data. Enterprise configuration and data are excluded and preserved during restore.</string>
   <string name="configuration_change_rejected">This configuration change is not allowed: %1$s</string>
@@ -1755,7 +1675,6 @@
   <string name="assistant_details_title">Assistant details</string>
   <string name="assistant_details_enterprise_source">Provided by %1$s</string>
   <string name="model_list_selected">Selected model</string>
-  <string name="enterprise_local_indicator">On-device example</string>
   <string name="clear_search">Clear search</string>
   <string name="assistant_model_default_settings">Settings default</string>
   <string name="assistant_model_default_assistant">Assistant default</string>
@@ -1791,11 +1710,6 @@
   <string name="enterprise_budget_pending">Reconciling usage</string>
   <string name="enterprise_budget_available">Available</string>
   <string name="enterprise_budget_limit">%1$s · %2$s: used %3$s + reserved %4$s of %5$s; %6$s remaining</string>
-  <string name="enterprise_budget_usage_total">Retained total usage</string>
-  <string name="enterprise_budget_usage_meter">%1$s: %2$s · %3$s</string>
-  <string name="enterprise_budget_completeness_exact">Exact</string>
-  <string name="enterprise_budget_completeness_partial">Partial</string>
-  <string name="enterprise_budget_completeness_unknown">Unknown</string>
   <string name="enterprise_budget_reset_at">Resets %1$s</string>
   <string name="enterprise_budget_in_flight">%1$d request(s) settling</string>
   <string name="enterprise_budget_period_day">Daily</string>
@@ -2011,7 +1925,6 @@
   <string name="remote_workspace_verify">I checked the target; allow a new operation</string>
   <string name="remote_workspace_revoked">Access changed. Return and reopen the workspace.</string>
   <string name="remote_workspace_name">File or folder name</string>
-  <string name="remote_workspace_truncated">Only some failure details are available</string>
   <string name="remote_workspace_select_all">Select all visible files</string>
   <string name="remote_workspace_operation_failed">Operation failed</string>
   <string name="remote_workspace_completed">Completed</string>
@@ -2146,7 +2059,6 @@
   <string name="conversation_sort_updated">Recently updated</string>
   <string name="history_page_current_space">History in this space</string>
   <string name="assistant_page_local_tools_chart_title">Charts</string>
-  <string name="assistant_page_local_tools_chart_desc">Display line, bar and scatter charts with a data table, entirely on device.</string>
   <string name="chart_mode_chart">Chart</string>
   <string name="chart_mode_table">Table</string>
   <string name="chart_series_name">Series %1$d</string>

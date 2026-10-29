@@ -9,6 +9,30 @@ import java.nio.file.Files
 
 class WorkspaceManagerTest {
     @Test
+    fun journalPublicationFailureRetainsItsCauseAndStagedFiles() {
+        val base = Files.createTempDirectory("workspace-journal-failure").toFile()
+        try {
+            val manager = WorkspaceManager(base)
+            manager.ensureWorkspace("one")
+            File(manager.filesDir("one"), "keep.txt").writeText("original")
+            assertTrue(manager.stageWorkspaceDeletion("one"))
+            val blockedJournal = File(base, ".workspace-delete-one.journal").apply { mkdir() }
+            File(blockedJournal, "block").writeText("existing")
+
+            val error = org.junit.Assert.assertThrows(java.io.IOException::class.java) {
+                manager.writeWorkspaceDeletionJournal("one", "{}".encodeToByteArray())
+            }
+
+            assertTrue(error.toString(), error.message.orEmpty().contains("journal"))
+            assertEquals(setOf(".workspace-delete-one", ".workspace-delete-one.journal"), base.list()!!.toSet())
+            assertTrue(manager.restoreStagedWorkspaceDeletion("one"))
+            assertEquals("original", File(manager.filesDir("one"), "keep.txt").readText())
+        } finally {
+            base.deleteRecursively()
+        }
+    }
+
+    @Test
     fun browserPathsUseGuestRootsWithoutLeakingHostDirectories() {
         val base = Files.createTempDirectory("workspace-paths").toFile()
         val manager = WorkspaceManager(base)

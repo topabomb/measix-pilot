@@ -9,7 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import net.weero.measix.pilot.data.model.PromptInjection
-import net.weero.measix.pilot.utils.toLocalString
+import net.weero.measix.pilot.utils.runCatchingPreservingCancellation
 import me.rerere.common.configuration.ConfigurationReference
 
 @Serializable
@@ -74,24 +74,16 @@ object ModeInjectionSerializer : ExportSerializer<PromptInjection.ModeInjection>
     }
 
     override fun import(context: Context, uri: Uri): Result<PromptInjection.ModeInjection> {
-        return runCatching {
+        return runCatchingPreservingCancellation {
             val json = readUri(context, uri)
-            // 首先尝试解析为自己的格式
-            tryImportNative(json)
-                ?: throw IllegalArgumentException("Unsupported format")
-        }
-    }
-
-    private fun tryImportNative(json: String): PromptInjection.ModeInjection? {
-        return runCatching {
             val exportData = ExportSerializer.DefaultJson.decodeFromString(
                 ExportData.serializer(),
                 json
             )
-            if (exportData.type != type) return null
+            require(exportData.type == type) { "Unsupported format: ${exportData.type}" }
             ExportSerializer.DefaultJson
                 .decodeFromJsonElement<PromptInjection.ModeInjection>(exportData.data)
                 .copy(id = ConfigurationReference.random())
-        }.getOrNull()
+        }
     }
 }

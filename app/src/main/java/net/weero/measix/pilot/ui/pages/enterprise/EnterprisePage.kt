@@ -136,7 +136,7 @@ internal fun EnterpriseConfigurationStatus(selection: RealmSelection?) {
     val overview by remember(service) { service.observe() }.collectAsStateWithLifecycle(initialValue = null)
     val failure = overview?.takeIf { it.selection == selection }?.synchronization?.failure ?: return
     val nav = LocalNavController.current
-    TextButton(onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } },
+    TextButton(onClick = { nav.navigate(Screen.Enterprise, launchSingleTop = true) },
         modifier = Modifier.fillMaxWidth().testTag("enterprise-chat-configuration-status")) {
         Text(stringResource(if (failure.issue == EnterpriseSynchronizationIssue.UPDATE_APP)
             R.string.enterprise_snapshot_update_required else R.string.enterprise_configuration_attention),
@@ -174,7 +174,7 @@ internal fun EnterpriseSpaceButton(
     val label = if (access is RealmAccess.Enterprise) {
         state?.enterpriseName ?: stringResource(R.string.enterprise_space)
     } else stringResource(R.string.enterprise_switch_space)
-    val open = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } }
+    val open = { nav.navigate(Screen.Enterprise, launchSingleTop = true) }
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
         Surface(
             onClick = open,
@@ -221,7 +221,7 @@ internal fun EnterpriseSpaceSettingsCard(modifier: Modifier = Modifier, vm: Ente
     } else stringResource(R.string.enterprise_personal)
     CardGroup(modifier = modifier, title = { Text(stringResource(R.string.enterprise_spaces)) }) {
         item(
-            onClick = { nav.navigate(Screen.Enterprise) { launchSingleTop = true } },
+            onClick = { nav.navigate(Screen.Enterprise, launchSingleTop = true) },
             leadingContent = {
                 OrchelmLogo(Modifier.size(24.dp))
             },

@@ -47,7 +47,7 @@ class AssistantDetailVM(
 
     private val _lockedSettingsChanges = MutableSharedFlow<SettingsLockedException>(extraBufferCapacity = 1)
     val lockedSettingsChanges = _lockedSettingsChanges.asSharedFlow()
-    private val _memoryFailures = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val _memoryFailures = MutableSharedFlow<Throwable>(extraBufferCapacity = 1)
     val memoryFailures = _memoryFailures.asSharedFlow()
 
     private val _skills = MutableStateFlow<List<SkillMetadata>>(emptyList())
@@ -130,18 +130,10 @@ class AssistantDetailVM(
                     )
                 }
                 Log.d(TAG, "updateTags: ${tagIds.joinToString(",")}")
-                cleanupUnusedTagsAndAwait()
+                settingsStore.cleanupAssistantTags()
             }
         }
     }
-
-    fun cleanupUnusedTags() {
-        viewModelScope.launch {
-            runSettingsChange { cleanupUnusedTagsAndAwait() }
-        }
-    }
-
-    private suspend fun cleanupUnusedTagsAndAwait() = settingsStore.cleanupAssistantTags()
 
     fun toggleLocalTool(option: net.weero.measix.pilot.data.ai.tools.local.LocalToolOption, enabled: Boolean) {
         viewModelScope.launch {
@@ -221,7 +213,10 @@ class AssistantDetailVM(
         viewModelScope.launch {
             try { operation() }
             catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
-            catch (_: Exception) { _memoryFailures.emit(Unit) }
+            catch (error: Exception) {
+                net.weero.measix.pilot.utils.logDiagnosticFailure(TAG, "Memory command failed", error)
+                _memoryFailures.emit(error)
+            }
         }
     }
 

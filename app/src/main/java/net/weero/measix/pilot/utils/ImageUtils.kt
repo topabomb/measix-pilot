@@ -1,4 +1,4 @@
-﻿@file:Suppress("unused")
+@file:Suppress("unused")
 
 package net.weero.measix.pilot.utils
 
@@ -257,40 +257,5 @@ object ImageUtils {
         "heic", "heix", "heim", "heis",
         "hevc", "hevx", "hevm", "hevs",
         "mif1", "msf1", "heif",
-    )
-
-    /**
-     * 获取图片的基本信息（不加载到内存）
-     *
-     * @param context Android上下文
-     * @param uri 图片URI
-     * @return ImageInfo包含宽度、高度、MIME类型等信息
-     */
-    fun getImageInfo(context: Context, uri: Uri): ImageInfo? {
-        return runCatching {
-            val options = BitmapFactory.Options().apply {
-                inJustDecodeBounds = true
-            }
-
-            context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                BitmapFactory.decodeStream(inputStream, null, options)
-            }
-
-            if (options.outWidth > 0 && options.outHeight > 0) {
-                ImageInfo(
-                    width = options.outWidth,
-                    height = options.outHeight,
-                    mimeType = options.outMimeType
-                )
-            } else null
-        }.onFailure {
-            it.printStackTrace()
-        }.getOrNull()
-    }
-
-    data class ImageInfo(
-        val width: Int,
-        val height: Int,
-        val mimeType: String?
     )
 }

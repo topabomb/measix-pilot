@@ -51,6 +51,7 @@ import androidx.compose.ui.res.stringResource
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.db.fts.MessageSearchResult
 import net.weero.measix.pilot.data.db.fts.MessageSearchSort
+import net.weero.measix.pilot.ui.components.ui.ErrorCard
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.theme.CustomColors
@@ -166,21 +167,8 @@ fun SearchPage(vm: SearchVM = koinViewModel()) {
                         }
                     }
                     vm.failure != null -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = stringResource(
-                                    if (vm.failure == SearchFailure.REBUILD) {
-                                        R.string.search_page_rebuild_failed
-                                    } else {
-                                        R.string.search_page_query_failed
-                                    }
-                                ),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
-                            )
+                        vm.failure?.let { error ->
+                            ErrorCard(error, modifier = Modifier.padding(16.dp))
                         }
                     }
                     vm.searchQuery.isBlank() -> {

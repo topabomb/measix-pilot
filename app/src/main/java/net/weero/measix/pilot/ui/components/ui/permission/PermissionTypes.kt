@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui.permission
+package net.weero.measix.pilot.ui.components.ui.permission
 
 import android.Manifest
 import android.os.Build
@@ -34,24 +34,6 @@ enum class PermissionStatus {
     /** 被拒绝且用户选择"不再询问" */
     DeniedPermanently
 }
-
-/**
- * 权限请求结果
- */
-data class PermissionResult(
-    val permission: String,
-    val status: PermissionStatus,
-    val isGranted: Boolean = status == PermissionStatus.Granted
-)
-
-/**
- * 多个权限的请求结果
- */
-data class MultiplePermissionResult(
-    val results: Map<String, PermissionResult>,
-    val allGranted: Boolean = results.values.all { it.isGranted },
-    val allRequiredGranted: Boolean
-)
 
 val PermissionCamera = PermissionInfo(
     permission = Manifest.permission.CAMERA,

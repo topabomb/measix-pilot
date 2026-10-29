@@ -2,9 +2,7 @@ package net.weero.measix.pilot.data.db
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
-import androidx.room.TypeConverter
 import androidx.room.TypeConverters
-import me.rerere.ai.core.TokenUsage
 import net.weero.measix.pilot.data.db.dao.ArtifactDAO
 import net.weero.measix.pilot.data.db.dao.ArtifactReferenceDAO
 import net.weero.measix.pilot.data.db.dao.ConversationDAO
@@ -34,18 +32,8 @@ import net.weero.measix.pilot.data.db.entity.SystemMetaEntity
 import net.weero.measix.pilot.data.db.entity.ToolExecutionEntity
 import net.weero.measix.pilot.data.db.entity.TurnExecutionEntity
 import net.weero.measix.pilot.data.db.entity.WorkspaceEntity
-import net.weero.measix.pilot.utils.JsonInstant
 
-/**
- * Room schema 版本。新增表/列只允许 additive migration，且必须同步
- * `app/schemas/.../<version>.json`、`AppDatabaseFactory.createAppDatabase` 的迁移注册与对应 `Migration_N_MTest`。
- *
- * v12：Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏记录持有不可变的域主体。
- * `Migration_11_12` 将既有记录归入个人域，保留原 ID、payload 和引用关系。
- * 消息、turn、tool 和 context 从所属会话取得域，不重复存储第二份主体。
- * v13：企业主体仅由 deploymentId 与 userId 构成，删除 URL 派生的来源字段。
- * v15：数据迁移补齐历史消息与会话注入引用中的企业身份，表结构与 v14 相同。
- */
+/** Room schema changes require explicit, data-preserving migrations and matching exported schemas. */
 const val APP_DATABASE_VERSION = 17
 
 @Database(
@@ -71,7 +59,7 @@ const val APP_DATABASE_VERSION = 17
     version = APP_DATABASE_VERSION,
     autoMigrations = [],
 )
-@TypeConverters(TokenUsageConverter::class, ConfigurationScopeConverter::class)
+@TypeConverters(ConfigurationScopeConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDAO
 
@@ -98,16 +86,4 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun turnExecutionDao(): TurnExecutionDAO
 
     abstract fun toolExecutionDao(): ToolExecutionDAO
-}
-
-object TokenUsageConverter {
-    @TypeConverter
-    fun fromTokenUsage(usage: TokenUsage?): String {
-        return JsonInstant.encodeToString(usage)
-    }
-
-    @TypeConverter
-    fun toTokenUsage(usage: String): TokenUsage? {
-        return JsonInstant.decodeFromString(usage)
-    }
 }

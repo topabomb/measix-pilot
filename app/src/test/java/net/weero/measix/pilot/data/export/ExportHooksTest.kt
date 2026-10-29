@@ -17,9 +17,12 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.SerializationException
 import net.weero.measix.pilot.data.model.PromptInjection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.Before
 import org.junit.After
@@ -75,6 +78,22 @@ class ExportHooksTest {
             assertEquals(ModeInjectionSerializer.exportToJson(first), context.readShared(firstUri))
             assertEquals(ModeInjectionSerializer.exportToJson(second), context.readShared(secondUri))
         } finally { scope.cancel() }
+    }
+
+    @Test
+    fun `malformed import envelopes and payloads preserve the serialization diagnostic`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val file = File.createTempFile("malformed-prompt-", ".json", context.cacheDir)
+        try {
+            listOf("{", """{"type":"mode_injection","data":[]}""").forEach { content ->
+                file.writeText(content)
+                val error = requireNotNull(ModeInjectionSerializer.import(context, Uri.fromFile(file)).exceptionOrNull())
+                assertTrue("Expected the original serialization failure: $error", error is SerializationException)
+                assertFalse("The parser diagnostic must be retained", error.message.isNullOrBlank())
+            }
+        } finally {
+            file.delete()
+        }
     }
 
     private class SharingContext : ContextWrapper(ApplicationProvider.getApplicationContext<Application>()) {

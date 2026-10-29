@@ -15,17 +15,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import net.weero.measix.pilot.data.db.fts.MessageSearchResult
 import net.weero.measix.pilot.data.db.fts.MessageSearchSort
+import net.weero.measix.pilot.R
+import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.SearchIndexMaintenanceService
 import net.weero.measix.pilot.ui.hooks.readStringPreference
 import net.weero.measix.pilot.ui.hooks.writeStringPreference
 
 private const val SORT_ORDER_PREF_KEY = "search_page_sort_order"
-
-enum class SearchFailure {
-    QUERY,
-    REBUILD,
-}
 
 private data class SearchRequest(
     val query: String,
@@ -61,7 +60,7 @@ class SearchVM(
         private set
     var rebuildProgress by mutableStateOf(0 to 0)
         private set
-    var failure by mutableStateOf<SearchFailure?>(null)
+    var failure by mutableStateOf<ChatError?>(null)
         private set
 
     init {
@@ -109,8 +108,10 @@ class SearchVM(
                 requestSearch(debounce = false)
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
-                failure = SearchFailure.REBUILD
+            } catch (error: Exception) {
+                logDiagnosticFailure("SearchVM", "Search index rebuild failed", error)
+                failure = ChatError(title = context.getString(R.string.search_page_rebuild_failed),
+                    detail = error.userVisibleDiagnostic())
             } finally {
                 isRebuilding = false
             }
@@ -138,8 +139,10 @@ class SearchVM(
             results = conversationQueryService.searchMessages(access, query, sort)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
-            failure = SearchFailure.QUERY
+        } catch (error: Exception) {
+            logDiagnosticFailure("SearchVM", "Message search failed", error)
+            failure = ChatError(title = context.getString(R.string.search_page_query_failed),
+                detail = error.userVisibleDiagnostic())
         } finally {
             isLoading = false
         }

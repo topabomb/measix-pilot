@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.utils
+package net.weero.measix.pilot.utils
 
 import android.content.Context
 import kotlinx.serialization.json.jsonArray
@@ -46,16 +46,6 @@ object EmojiUtils {
 
                 EmojiData(version, categories)
             }
-    }
-
-    /**
-     * 将Unicode code points转换为emoji字符
-     */
-    fun codeToEmoji(codes: List<String>): String {
-        return codes.joinToString("") { code ->
-            val codePoint = code.toInt(16)
-            String(Character.toChars(codePoint))
-        }
     }
 
     /**
@@ -110,19 +100,7 @@ object EmojiUtils {
 data class EmojiData(
     val version: String,
     val categories: List<EmojiCategory>,
-) {
-    /**
-     * 获取所有emoji的变体分组
-     */
-    fun getAllEmojiVariants(): Map<Emoji, List<Emoji>> {
-        val allEmojis = categories.flatMap { category ->
-            category.subCategories.flatMap { subCategory ->
-                subCategory.emojis
-            }
-        }
-        return EmojiUtils.groupEmojisByVariants(allEmojis)
-    }
-}
+)
 
 data class EmojiCategory(
     val name: String,

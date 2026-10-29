@@ -259,6 +259,8 @@ Workspace shell 状态使用 `DISABLED`、`INSTALLING`、`READY` 和 `BROKEN`。
 
 删除 Workspace 时先把 Room 状态持久化为 `BROKEN`，再将磁盘目录移到 Manager-owned 暂存位置并写入删除 journal；Settings 成功清理所有 Assistant 的 `workspaceId` 引用后才标记并删除暂存树，最后由 `WorkspaceDAO.deleteById` 确认删除 Room 实体。Settings 拒绝或删除尚未开始时中断，完整性检查按 journal 恢复目录、原引用和原 shell 状态。标记物理删除后，递归删除失败或中断都不能假定目录完整：journal 与 `BROKEN` 状态保留，后续删除继续清理，只有树已不存在且 DAO 确认删到一行才清 journal。失败时保留 durable identity 供幂等重试。删除或状态变化后，下一次工具装配不会继续暴露旧 Workspace。
 
+删除 journal 发布失败时保留原 IO 异常和路径诊断，不降为布尔失败；物理删除尚未开始，Repository 按当前阶段恢复目录、已解除的 Assistant 引用和 shell 状态。补偿失败附加到原异常并保留 journal 供恢复，取消在必要补偿后继续传播。
+
 ## 10. 企业远程文件
 
 远程文件不属于本地 Workspace、Assistant.workspaceId 或 PRoot。`RemoteWorkspaceService` 拥有客户端请求、

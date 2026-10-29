@@ -358,6 +358,64 @@ class WorkspaceRepositoryDeleteTest {
         } finally { rootDir.deleteRecursively() }
     }
 
+    @Test
+    fun `journal write failure restores prior owners and preserves diagnostics or cancellation`() = runTest {
+        for (failAt in 1..2) {
+            for (cancel in listOf(false, true)) {
+                val workspaceId = Uuid.random()
+                val fixture = fixture(filesDeleted = true, id = workspaceId.toString(),
+                    settings = net.weero.measix.pilot.data.datastore.Settings(
+                        assistants = listOf(Assistant(workspaceId = workspaceId)),
+                    ))
+                val failure = if (cancel) kotlinx.coroutines.CancellationException("journal cancelled")
+                    else java.io.IOException("journal disk full")
+                var writes = 0
+                every { fixture.manager.writeWorkspaceDeletionJournal(any(), any()) } answers {
+                    if (++writes == failAt) throw failure
+                    true
+                }
+
+                val actual = runCatching { fixture.repository.delete(workspaceId.toString()) }.exceptionOrNull()
+
+                assertEquals(failure.javaClass, actual?.javaClass)
+                assertEquals(failure.message, actual?.message)
+                assertEquals(workspaceId, fixture.settings().assistants.single().workspaceId)
+                coVerify(exactly = 1) { fixture.manager.restoreStagedWorkspaceDeletion("root") }
+                coVerify(exactly = 1) {
+                    fixture.dao.updateShellStatus(workspaceId.toString(), WorkspaceShellStatus.READY.name, any())
+                }
+                coVerify(exactly = 0) { fixture.manager.deleteStagedWorkspace(any()) }
+                coVerify(exactly = 0) { fixture.dao.deleteById(any()) }
+            }
+        }
+    }
+
+    @Test
+    fun `journal failure keeps compensation failure as suppressed and retains recovery journal`() = runTest {
+        val fixture = fixture(filesDeleted = true)
+        val failure = java.io.IOException("journal disk full")
+        val cleanup = IllegalStateException("restore unavailable")
+        var writes = 0
+        every { fixture.manager.writeWorkspaceDeletionJournal(any(), any()) } answers {
+            if (++writes == 2) throw failure
+            true
+        }
+        every { fixture.manager.restoreStagedWorkspaceDeletion("root") } throws cleanup
+
+        val actual = runCatching { fixture.repository.delete("id") }.exceptionOrNull()
+
+        assertEquals(failure.javaClass, actual?.javaClass)
+        assertEquals(failure.message, actual?.message)
+        // Coroutine stacktrace recovery may copy the exception and retain the original as its cause.
+        val failures = generateSequence(actual) { it.cause }.toList()
+        val cleanupFailures = failures.flatMap { it.suppressed.toList() }
+        assertTrue("Missing compensation diagnostic: $cleanupFailures", cleanupFailures.any {
+            it.javaClass == cleanup.javaClass && it.message == cleanup.message
+        })
+        coVerify(exactly = 0) { fixture.manager.clearWorkspaceDeletionJournal(any()) }
+        coVerify(exactly = 0) { fixture.dao.deleteById(any()) }
+    }
+
     private fun fixture(
         staged: Boolean = true,
         filesDeleted: Boolean,

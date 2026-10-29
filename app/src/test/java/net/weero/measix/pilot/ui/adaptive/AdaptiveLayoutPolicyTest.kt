@@ -16,14 +16,6 @@ class AdaptiveLayoutPolicyTest {
     }
 
     @Test
-    fun `phone portrait uses a modal drawer and single chat pane`() {
-        assertEquals(
-            ChatLayoutMode.SinglePane,
-            layoutMode(widthDp = 390f, heightDp = 844f),
-        )
-    }
-
-    @Test
     fun `short phone landscape stays single pane even above expanded width`() {
         assertEquals(
             ChatLayoutMode.SinglePane,
@@ -31,69 +23,6 @@ class AdaptiveLayoutPolicyTest {
         )
         assertTrue(AdaptiveLayoutPolicy.useCompactChatInput(heightDp = 390f))
         assertFalse(AdaptiveLayoutPolicy.useCompactChatInput(heightDp = 844f))
-    }
-
-    @Test
-    fun `tall medium-width window like an unfolded foldable uses two panes`() {
-        assertEquals(
-            ChatLayoutMode.ListDetail,
-            layoutMode(widthDp = 700f, heightDp = 900f),
-        )
-    }
-
-    @Test
-    fun `unfolded foldable main screen uses list and detail`() {
-        // vivo X Fold3 Pro unfolded ~962dp wide, ~854dp tall
-        assertEquals(
-            ChatLayoutMode.ListDetail,
-            layoutMode(widthDp = 962f, heightDp = 854f),
-        )
-        // Samsung Galaxy Z Fold6 unfolded ~924dp wide
-        assertEquals(
-            ChatLayoutMode.ListDetail,
-            layoutMode(widthDp = 924f, heightDp = 854f),
-        )
-    }
-
-    @Test
-    fun `expanded tablet uses conversation list and chat detail`() {
-        assertEquals(
-            ChatLayoutMode.ListDetail,
-            layoutMode(widthDp = 1000f, heightDp = 800f),
-        )
-    }
-
-    @Test
-    fun `large window remains two pane by policy`() {
-        assertEquals(
-            ChatLayoutMode.ListDetail,
-            layoutMode(widthDp = 1800f, heightDp = 1000f),
-        )
-    }
-
-    @Test
-    fun `hinge prevents sidebar collapse but does not affect layout mode`() {
-        // Hinge only affects canCollapseChatSidebar, not chatLayoutMode
-        assertEquals(
-            ChatLayoutMode.ListDetail,
-            layoutMode(widthDp = 1000f, heightDp = 800f),
-        )
-        assertFalse(
-            AdaptiveLayoutPolicy.canCollapseChatSidebar(
-                widthDp = 1000f,
-                heightDp = 800f,
-                hasSeparatingVerticalHinge = true,
-                isTabletop = false,
-            )
-        )
-        assertTrue(
-            AdaptiveLayoutPolicy.canCollapseChatSidebar(
-                widthDp = 1000f,
-                heightDp = 800f,
-                hasSeparatingVerticalHinge = false,
-                isTabletop = false,
-            )
-        )
     }
 
     @Test

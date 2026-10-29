@@ -122,7 +122,7 @@ private suspend fun renderedContentWebViewState(
         else prepareRenderedHtml(document.html, origin.toString(), fileSource != null)
     }
     return WebViewState(
-        initialContent = WebContent.Data(html, baseUrl, "UTF-8", "text/html"),
+        initialContent = WebContent(html, baseUrl, "UTF-8", "text/html"),
         interfaces = if (fileSource != null && !document.offlineDiagram && scrollPosition != null)
             mapOf("MeasixPreviewLayout" to scrollPosition) else emptyMap(),
         settings = {

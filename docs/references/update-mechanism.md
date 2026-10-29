@@ -35,7 +35,8 @@ ChatDrawer 组合
 
 请求使用全局 `OkHttpClient`，在 `Dispatchers.IO` 上执行；`UpdateChecker` 定义远程版本、发布时间、说明与下载项。
 
-未知 JSON 字段会被忽略；HTTP 非成功状态、网络异常或反序列化失败都转换为 `UiState.Error`，不影响聊天功能。
+未知 JSON 字段会被忽略；HTTP 非成功状态保留状态码与消息，网络或反序列化失败保留原始异常，转换为 `UiState.Error`。
+请求通过 `Call.readResponse` 持有网络调用直到正文读取结束；取消同时关闭调用并等待读取退出，不发布为检查失败。
 
 ### 进程内共享与关闭语义
 

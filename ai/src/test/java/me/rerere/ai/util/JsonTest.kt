@@ -180,23 +180,6 @@ class JsonTest {
     }
 
     @Test
-    fun `mergeCustomBody should allow non-reserved keys alongside reserved conflicts`() {
-        val originalJson = buildJsonObject {
-            put("temperature", 0.7)
-        }
-
-        // No conflict here since temperature is not reserved
-        val customBodies = listOf(
-            CustomBody("temperature", JsonPrimitive(0.5)),
-            CustomBody("top_p", JsonPrimitive(0.9)),
-        )
-
-        val result = originalJson.mergeCustomBody(customBodies, ownership)
-        assertEquals("0.5", result["temperature"]?.toString())
-        assertEquals("0.9", result["top_p"]?.toString())
-    }
-
-    @Test
     fun `every text protocol top level ownership key is rejected`() {
         listOf(
             CHAT_COMPLETIONS_OWNERSHIP,

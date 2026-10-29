@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 
 /**
  * 架构契约测试共享的源码扫描器：把 `app` 生产源码树按 token 检索，供依赖方向、
- * 唯一写入职责与 Turn/Step 依赖契约测试复用，避免每个测试类各自复制遍历逻辑。
+ * 唯一写入职责检查复用，避免每项检查各自复制遍历逻辑。
  */
 internal val architectureSourceRoot = File("src/main/java/net/weero/measix/pilot")
 

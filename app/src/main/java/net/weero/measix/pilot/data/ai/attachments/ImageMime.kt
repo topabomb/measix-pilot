@@ -1,7 +1,6 @@
 package net.weero.measix.pilot.data.ai.attachments
 
 import net.weero.measix.pilot.data.imggen.GeneratedMediaStore
-import java.io.File
 
 /**
  * First-stage image MIME gate. JPEG/PNG/GIF/WEBP come from
@@ -13,15 +12,6 @@ object ImageMime {
         GeneratedMediaStore.detectImageMimeBySignature(bytes)?.let { return it }
         return sniffHeic(bytes)
     }
-
-    fun sniffFile(file: File): String? = runCatching {
-        file.inputStream().use { input ->
-            val header = ByteArray(16)
-            val read = input.read(header)
-            if (read <= 0) return@use null
-            sniff(header.copyOf(read))
-        }
-    }.getOrNull()
 
     fun isAcceptedImage(bytes: ByteArray): Boolean =
         GeneratedMediaStore.detectImageMime(bytes) != null || sniffHeic(bytes) != null

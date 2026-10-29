@@ -3,10 +3,25 @@ package me.rerere.common.http
 import java.util.Locale
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class JsonExpressionTest {
+    @Test
+    fun `string literals require an unescaped closing quote`() {
+        for (input in listOf("\"", "\"balance\\\"")) {
+            assertFalse(input, isJsonExprValid(input))
+            org.junit.Assert.assertThrows(RuntimeException::class.java) {
+                evaluateJsonExpr(input, buildJsonObject {})
+            }
+        }
+        val escaped = "\"balance\\\"\""
+        assertTrue(isJsonExprValid(escaped))
+        assertEquals("balance\"", evaluateJsonExpr(escaped, buildJsonObject {}))
+    }
+
     @Test
     fun `JSON numeric arithmetic does not round intermediate balances`() {
         val balance = buildJsonObject { put("credits", 0.004) }

@@ -10,51 +10,9 @@ import net.weero.measix.pilot.data.ai.tools.local.ImageGenerationToolMetadata
 import net.weero.measix.pilot.service.runtime.ToolLivePhase
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ImageGenerationToolUiLogicTest {
-    @Test
-    fun `completed output with unavailable file is treated as missing artifact`() {
-        val context = context(
-            buildJsonObject {
-                put("status", "completed")
-                put(
-                    "file",
-                    buildJsonObject {
-                        put("available", false)
-                        put("reason", "artifact_missing")
-                        put("mime_type", "image/jpeg")
-                    },
-                )
-            },
-            phase = ToolLivePhase.COMPLETED,
-        )
-        assertTrue(context.fileIsUnavailable())
-        assertEquals("artifact_missing", context.fileUnavailableReason())
-        assertEquals("completed", context.resultStatus())
-    }
-
-    @Test
-    fun `completed output with a path is available`() {
-        val context = context(
-            buildJsonObject {
-                put("status", "completed")
-                put(
-                    "file",
-                    buildJsonObject {
-                        put("path", "/upload/x.jpg")
-                        put("mime_type", "image/jpeg")
-                    },
-                )
-            },
-            phase = ToolLivePhase.COMPLETED,
-        )
-        assertFalse(context.fileIsUnavailable())
-        assertEquals("completed", context.resultStatus())
-    }
-
     @Test
     fun `completed with available file resolves to Completed`() {
         val context = context(

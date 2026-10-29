@@ -5,6 +5,8 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
@@ -18,13 +20,51 @@ import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.files.SkillManager
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.ArtifactUseCase
+import net.weero.measix.pilot.service.MemoryRecord
 import net.weero.measix.pilot.service.MemoryService
 import net.weero.measix.pilot.service.MemoryView
 import net.weero.measix.pilot.service.workspace.WorkspaceQueryService
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AssistantDetailVMTest {
+    @Test
+    fun `memory commands preserve the original exception and do not report cancellation`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val owner = ViewModelStore()
+        try {
+            val assistant = Assistant()
+            val settings = mockk<SettingsStore>()
+            every { settings.userSettings } returns MutableStateFlow(Settings(assistants = listOf(assistant)))
+            val memories = mockk<MemoryService>()
+            every { memories.observeCurrent(any()) } returns flowOf(MemoryView.Loading)
+            val skills = mockk<SkillManager>()
+            coEvery { skills.listSkills() } returns emptyList()
+            val workspaces = mockk<WorkspaceQueryService>()
+            every { workspaces.observeWorkspaces() } returns flowOf(emptyList())
+            val vm = AssistantDetailVM(assistant.id.toString(), settings, memories, mockk(), skills, workspaces)
+            owner.put("assistant", vm)
+            val failures = mutableListOf<Throwable>()
+            backgroundScope.launch { vm.memoryFailures.collect { failures += it } }
+            runCurrent()
+            val record = MemoryRecord(mockk(), 1, "saved memory")
+            val failure = java.io.IOException("memory write failed", IllegalStateException("store unavailable"))
+            coEvery { memories.delete(record) } throws failure
+            vm.deleteMemory(record)
+            runCurrent()
+            assertSame(failure, failures.single())
+
+            coEvery { memories.delete(record) } throws CancellationException("cancel memory command")
+            vm.deleteMemory(record)
+            runCurrent()
+            assertEquals(1, failures.size)
+        } finally {
+            owner.clear()
+            Dispatchers.resetMain()
+        }
+    }
+
     @Test
     fun `old prompt callback preserves a newly committed background and unrelated definition changes`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))

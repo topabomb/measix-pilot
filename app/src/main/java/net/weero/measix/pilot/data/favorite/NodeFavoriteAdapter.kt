@@ -8,19 +8,19 @@ import net.weero.measix.pilot.data.model.NodeFavoriteTarget
 import net.weero.measix.pilot.data.model.buildFavoritePreview
 import net.weero.measix.pilot.utils.JsonInstant
 
-object NodeFavoriteAdapter : FavoriteAdapter<NodeFavoriteTarget> {
-    override val type: FavoriteType = FavoriteType.NODE
+object NodeFavoriteAdapter {
+    val type: FavoriteType = FavoriteType.NODE
 
-    override fun buildRefKey(target: NodeFavoriteTarget): String {
+    fun buildRefKey(target: NodeFavoriteTarget): String {
         return buildRefKey(target.conversationId.toString(), target.nodeId.toString())
     }
 
     fun buildRefKey(conversationId: String, nodeId: String): String = "node:$conversationId:$nodeId"
 
-    override fun buildFavoriteEntity(
+    fun buildFavoriteEntity(
         target: NodeFavoriteTarget,
-        existing: FavoriteEntity?,
-        now: Long
+        existing: FavoriteEntity? = null,
+        now: Long = System.currentTimeMillis()
     ): FavoriteEntity {
         val ref = NodeFavoriteRef(
             conversationId = target.conversationId,

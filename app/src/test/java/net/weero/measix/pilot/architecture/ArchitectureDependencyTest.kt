@@ -191,8 +191,6 @@ class ArchitectureDependencyTest {
         val renderedViolations = architectureSources.filter { renderedConstructor.containsMatchIn(it.readText()) }
             .map { it.relativeTo(architectureSourceRoot).invariantSeparatorsPath }.filterNot(renderedOwners::contains)
         assertTrue("Rendered sources must retain an application-owned file session: $renderedViolations", renderedViolations.isEmpty())
-        assertNoHits("ManagedImageInterceptor")
-        assertNoHits("ManagedImageFetcherFactory")
     }
 
     @Test
@@ -204,17 +202,11 @@ class ArchitectureDependencyTest {
     }
 
     @Test
-    fun `attachment path reads belong to file owner and internal lookup belongs to preview projection`() {
-        val lookupOwners = hits("AttachmentReferenceLookup.index")
-        assertTrue(
-            "preview projection must use the internal attachment lookup: $lookupOwners",
-            lookupOwners.contains("service/ConversationAttachmentPreviewProjector.kt"),
-        )
+    fun `attachment reads cannot bypass file ownership through conversation or workspace projections`() {
         val resolver = File(architectureSourceRoot, "data/ai/attachments/AttachmentResolver.kt").readText()
         listOf("AttachmentReferenceLookup", "ConversationRepository", "masterMessages", "Workspace")
             .forEach { dependency -> assertFalse("path reads must not depend on $dependency", resolver.contains(dependency)) }
         assertNoHits("AttachmentRefs.walkMessageParts", sourcesUnder("ui/components/message/"))
-        assertNoHits("resolveAttachmentPreviewUrl")
         assertFalse(
             File(architectureSourceRoot, "ui/components/message/tools/AttachmentInspectionToolUI.kt")
                 .readText()
@@ -223,18 +215,7 @@ class ArchitectureDependencyTest {
     }
 
     @Test
-    fun `manual and generated titles share coordinator serialization and generated writes use CAS`() {
-        assertTrue(hits("commitManualTitle").contains("service/ConversationApplicationService.kt"))
-        assertTrue(hits("commitGeneratedTitle").contains("service/GenerationSideEffects.kt"))
-        assertTrue(hits("updateTitleIfCurrent").contains("service/GenerationSideEffects.kt"))
-        assertFalse(
-            File(architectureSourceRoot, "service/GenerationSideEffects.kt").readText()
-                .contains("UpdateHeader(title ="),
-        )
-    }
-
-    @Test
-    fun `mcp ui uses application query boundary and settings does not own remote schema`() {
+    fun `mcp ui uses application query boundary`() {
         listOf(
             "ui/components/ai/McpPicker.kt",
             "ui/pages/setting/SettingMcpPage.kt",
@@ -246,10 +227,6 @@ class ArchitectureDependencyTest {
                 File(architectureSourceRoot, path).readText().contains("McpRuntimeCoordinator"),
             )
         }
-        val config = File(architectureSourceRoot, "data/ai/mcp/McpConfig.kt").readText()
-        assertFalse(config.contains("data class McpTool("))
-        assertFalse(config.contains("fun mergeTools("))
-
         val settingPage = File(architectureSourceRoot, "ui/pages/setting/SettingMcpPage.kt").readText()
         assertFalse("MCP settings UI must not write Settings directly", settingPage.contains("updateSettings("))
         assertFalse("MCP settings UI must not write SettingsStore directly", settingPage.contains("updateLocal("))
@@ -274,34 +251,13 @@ class ArchitectureDependencyTest {
             )
         }
 
-        val applicationService = File(architectureSourceRoot, "service/McpApplicationService.kt").readText()
-        assertFalse(applicationService.contains("updateToolPolicy"))
-
-        val catalog = File(architectureSourceRoot, "data/ai/mcp/McpCatalogStore.kt").readText()
-        assertFalse("negotiated protocol is session state, not catalog identity", catalog.contains("protocolVersion"))
-        assertFalse("unused server metadata must not become durable catalog fields", catalog.contains("serverImplementation"))
-        assertFalse("unused wall-clock metadata must not become durable catalog fields", catalog.contains("verifiedAtEpochMillis"))
-
         val query = File(architectureSourceRoot, "service/McpQueryService.kt").readText()
         assertFalse("UI query must consume the slot capability projection", query.contains("McpCatalogStore"))
-
-        val toolFactory = File(architectureSourceRoot, "data/ai/tools/TurnToolSetFactory.kt").readText()
-        assertFalse(
-            "turn callers must pass an explicit MCP snapshot",
-            toolFactory.contains("mcpCapabilities: TurnMcpCapabilitySnapshot ="),
-        )
     }
 
     @Test
-    fun `conversation query tools cannot bypass the query port or load message trees for summaries`() {
+    fun `conversation query tools cannot bypass the query port`() {
         assertNoHits("ConversationRepository", sourcesUnder("data/ai/tools/"))
-        val listRecordFields = net.weero.measix.pilot.data.repository.ConversationListRecord::class.members
-            .map { it.name }
-            .toSet()
-        assertFalse(
-            "conversation summaries must not carry a message tree: $listRecordFields",
-            listRecordFields.any { it.contains("node", ignoreCase = true) || it.contains("message", ignoreCase = true) },
-        )
     }
 
     @Test

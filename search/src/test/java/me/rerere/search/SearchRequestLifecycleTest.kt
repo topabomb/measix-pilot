@@ -18,6 +18,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okio.Buffer
 import okio.BufferedSource
 import okio.ForwardingSource
@@ -116,6 +117,28 @@ class SearchRequestLifecycleTest {
                 client.dispatcher.executorService.shutdownNow()
                 client.connectionPool.evictAll()
             }
+        }
+    }
+
+    @Test
+    fun `malformed SearXNG response retains the original parser diagnostic`() = runBlocking {
+        val previous = SearchService.httpClient
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK").body("{invalid-json".toResponseBody()).build()
+        }.build()
+        SearchService.httpClient = client
+        try {
+            val failure = SearXNGService.search(
+                buildJsonObject { put("query", "test") }, SearchCommonOptions(),
+                SearchServiceOptions.SearXNGOptions(url = "https://search.test"),
+            ).exceptionOrNull()
+            assertTrue("Expected original parser failure: $failure", failure is kotlinx.serialization.SerializationException)
+            assertTrue(failure?.message.orEmpty().isNotBlank())
+        } finally {
+            SearchService.httpClient = previous
+            client.dispatcher.executorService.shutdownNow()
+            client.connectionPool.evictAll()
         }
     }
 

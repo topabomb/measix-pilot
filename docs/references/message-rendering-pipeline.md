@@ -180,6 +180,7 @@ HTML/SVG 不获得 Portal Bridge，也不注入业务 JavaScript 接口。
 它不访问聊天 Artifact；页面中的 base 标签不能更换借用目录。`FileDocumentPreview` 同时观察文件来源变化，
 因此没有新网络请求的已加载 Markdown、HTML/SVG 或 Mermaid 也会在撤权时撤下；细节见 [工作区架构](workspace-architecture.md)。
 
+`WebViewState` 只承载已构造的 `WebContent` HTML 文档，刷新由原授权读取尝试重建文档状态。
 `WebView.kt` 负责原生实例的创建与释放：普通重组比较数据避免重复加载；`onReset` 停止加载并移除接口；
 `onRelease` 仅清空匹配实例的状态引用，停止加载、移除接口和客户端、清空内容并销毁实例。
 来源、代码或主题替换时需连同文档状态和回调归属一起替换。

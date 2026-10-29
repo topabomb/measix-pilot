@@ -68,9 +68,8 @@ Core Snapshot、manifest 和共享 cases 的来源见 [配置架构](android-con
 
 ### 静态架构边界
 
-`ArchitectureDependencyTest` 锁定 UI/application/query 依赖方向、唯一写入职责和禁止服务定位器的边界；
-`TurnStepProtocolContractTest` 限制 Turn 对 Workspace 输出路径和恢复对 render overlay 的依赖。
-两者复用 `ArchitectureSources.kt`，只约束 owner 和依赖方向；不维护历史符号黑名单，也不复制源码片段或代码行顺序来证明 CAS、取消或 UI 行为。
+`ArchitectureDependencyTest` 使用 `ArchitectureSources.kt` 检查 UI/application/query 依赖方向、唯一写入职责和禁止服务定位器的边界。
+静态检查只约束 owner 和依赖方向；不维护历史符号黑名单，也不复制源码片段或代码行顺序来证明 CAS、取消或 UI 行为。
 失败信息应定位被破坏的约定，避免同一禁令散落到多份扫描测试。
 
 ## 3. 确定性与测试取舍
@@ -297,7 +296,7 @@ Release 测试包可用 `-PandroidConsumerVariant=release` 构建并使用目标
 正式 Release 的 UI 消费验证使用现有 `baselineprofile` 模块中的 `ReleaseConsumers`，测试进程 instrument 自身，
 只通过 UI 操作已安装的 `net.weero.measix.pilot`，并检查目标非 debuggable；不依赖应用内部类或夹具 Activity。
 先固定正式 APK/mapping 并安装正式 APK，再单独构建、安装该测试 APK，通过直接 instrumentation 传入 `targetAppId`。
-`WebDavFileVMTest` 在 Debug JVM 变体中验证实际类初始化；`ReleaseConsumers.webDavDrawerOpensAfterBackAndProcessRestart`
+`ReleaseConsumers.webDavDrawerOpensAfterBackAndProcessRestart`
 通过真实设置页创建唯一的设备 loopback DAV 配置，验证抽屉进入、返回重进及进程重启后的目录显示，最后删除自己的配置并等待本机只读服务退出。
 该消费者要求专用设备处于英文个人空间且 DAV 列表为空，不替换已有服务器或企业授权；它验证正式优化包入口与读取链，不证明生产网络性能。
 `ReleaseRenderingConsumers` 经正式 Provider 粘贴导入与选模，使用设备 loopback 模型返回指定内容，检查流式结束、默认预览、源码切换及原文回退；以实际截图复核公式字形和图形，不能用 WebView 容器存在代替内容已绘制。每个用例按唯一标记清理自己的聊天和 Provider。`ReleaseConsumers` 的语言场景在原应用 locales 为空时通过 Android locale 命令验证五语和区域回退，结束后恢复空列表并核对实际英文界面；不修改应用语言偏好。

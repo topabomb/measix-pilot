@@ -112,9 +112,13 @@ class WorkspaceManager(
             temporary.writeBytes(payload)
             Files.move(temporary.toPath(), journal.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
             true
-        } catch (_: Exception) {
-            if (temporary.exists()) temporary.delete()
-            false
+        } catch (error: Exception) {
+            try {
+                Files.deleteIfExists(temporary.toPath())
+            } catch (cleanup: Exception) {
+                error.addSuppressed(cleanup)
+            }
+            throw error
         }
     }
 

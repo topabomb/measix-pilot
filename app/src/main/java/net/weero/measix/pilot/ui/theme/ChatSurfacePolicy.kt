@@ -42,8 +42,6 @@ object ChatSurfacePolicy {
     fun pageChromeAlpha(hasVisibleBackground: Boolean): Float {
         return if (hasVisibleBackground) BACKGROUND_CHROME_MAX_ALPHA else 1f
     }
-
-    fun artifactAlpha(): Float = 1f
 }
 
 fun Color.withOverlayAlpha(alpha: Float): Color {

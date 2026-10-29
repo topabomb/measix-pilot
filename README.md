@@ -26,7 +26,7 @@ Pilot 在 Android 本地承接 Agent 的运行与交互：从模型请求、多�
   <a href="docs/assets/readme/chat-phone.png"><img src="docs/assets/readme/chat-phone.png" width="175" alt="同一任务的手机界面：巡检表格、关注原因与人工复核动作"></a>
 </p>
 
-**同一项工作，在手机上跟进，在宽屏上展开。** 上图为当前源码 Debug 版的 Android 模拟器实拍：通过 Orchelm 调用真实模型，使用 Runcove 工具生成文件，再整理为现场摘要。巡检数值均为演示数据；点击图片查看原图。
+**同一项工作，在手机上跟进，在宽屏上展开。** 上图为 0.0.20 Debug 版的 Android 模拟器实拍：通过 Orchelm 调用真实模型，使用 Runcove 工具生成文件，再整理为现场摘要。巡检数值均为演示数据；点击图片查看原图。
 
 ### 带着现场资料开始
 
@@ -52,13 +52,13 @@ Kotlin / Jetpack Compose 原生界面以移动操作为起点：动作按需展�
 
 | 工作对象 | 可以怎样处理 |
 | --- | --- |
-| 文本与源码 | 阅读、语法高亮、编辑与保存；远程写入检查版本冲突 |
+| 文本与源码 | 阅读、语法高亮、编辑与保存；Markdown、HTML 与 SVG 可切换预览和源码，远程写入检查版本冲突 |
 | 图片与 PDF | 图片查看、PDF 逐页预览与缩放 |
 | 音视频 | 在支持的文件服务上按需读取与播放，避免为预览复制整个大文件 |
 | 本地程序与资料 | 初始化 PRoot Linux 环境，在工作目录中使用文件工具、Shell 与终端 |
 | 企业远程文件 | 在原空间授权下浏览、传输、编辑、预览与导出 |
 
-不同文件入口的格式与大小限制见 [Workspace 与文件服务](docs/references/workspace-architecture.md)。HTML 当前以源码查看；远程文件管理不等于远程终端，远端程序执行由已接入的工具提供。
+不同文件入口的格式与大小限制见 [Workspace 与文件服务](docs/references/workspace-architecture.md)。HTML 预览保留样式与图片，不执行文件自带脚本；远端程序执行由已接入的工具提供。
 
 ![Pilot 原生 Markdown 文件预览：直接检查 Runcove 中生成的巡检报告、数据表格和复核建议](docs/assets/readme/report-wide.png)
 
@@ -109,7 +109,7 @@ Provider 覆盖 OpenAI、Gemini、Claude、DeepSeek 及相应兼容接口，包�
 
 ## 开始使用
 
-本文随 **0.0.20** 更新，截图使用该版本源码构建的 Debug 版。安装时请核对对应版本说明；也可以按下方命令自行构建。
+本文随 **0.0.20** 更新，截图采集于 2026-10-16，构建基线见[素材来源](docs/assets/readme/README.md)。安装时请核对对应版本说明；也可以按下方命令自行构建。
 
 1. 从本仓库的 [Releases](https://github.com/topabomb/measix-pilot/releases) 查看可用发行与版本说明，或按下方命令自行构建。支持 **Android 8.0+**，APK 面向 **arm64-v8a / x86_64**。
 2. 个人使用时，启用并配置 Provider、填写自己的 API Key，选择模型与助手。首次启动的预设 Provider 默认禁用。

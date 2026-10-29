@@ -6,29 +6,16 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 
-// Public API
-
-data class ParseResult(
-    val success: Boolean,
-    val expr: Expr? = null,
-    val errorMessage: String? = null
-)
-
-fun parseExpression(input: String): ParseResult {
-    return try {
-        val lexer = Lexer(input)
-        val parser = Parser(lexer)
-        val expr = parser.parse()
-        ParseResult(true, expr, null)
-    } catch (e: ParseException) {
-        ParseResult(false, null, e.message)
-    } catch (e: Exception) {
-        ParseResult(false, null, e.message ?: "Unknown error")
-    }
+fun isJsonExprValid(input: String): Boolean = try {
+    Parser(Lexer(input)).parse()
+    true
+} catch (_: ParseException) {
+    false
+} catch (_: NumberFormatException) {
+    false
 }
-
-fun isJsonExprValid(input: String): Boolean = parseExpression(input).success
 
 /**
  * 针对给定的根JSON对象评估JSON表达式，并将结果作为字符串返回。
@@ -130,13 +117,11 @@ private class Lexer(private val src: String) {
                 escaped = false
             } else {
                 if (ch == '\\') escaped = true
-                else if (ch == '"') break
+                else if (ch == '"') return Token(TokenType.STRING, sb.toString(), start)
                 else sb.append(ch)
             }
         }
-        if (i > src.length || (i <= src.length && src[i - 1] != '"'))
-            throw ParseException("Unterminated string starting at $start")
-        return Token(TokenType.STRING, sb.toString(), start)
+        throw ParseException("Unterminated string starting at $start")
     }
 
     private fun numberToken(): Token {
@@ -168,7 +153,7 @@ private class Lexer(private val src: String) {
 
 private class ParseException(message: String) : RuntimeException(message)
 
-sealed interface Expr
+private sealed interface Expr
 private data class Binary(val left: Expr, val op: Token, val right: Expr) : Expr
 private data class Unary(val op: Token, val expr: Expr) : Expr
 private data class NumberLiteral(val value: Double) : Expr
@@ -354,7 +339,7 @@ private class Evaluator(private val root: JsonObject) {
         return when (elem) {
             is JsonPrimitive -> {
                 if (elem.isString) Value.Str(elem.content)
-                else elem.doubleOrNull()?.let { Value.Num(it) } ?: Value.Str(elem.content)
+                else elem.doubleOrNull?.let { Value.Num(it) } ?: Value.Str(elem.content)
             }
             is JsonObject, is JsonArray -> Value.Str(elem.toString())
             else -> Value.Str(elem.toString())
@@ -371,10 +356,6 @@ private class Evaluator(private val root: JsonObject) {
         is Value.Num -> formatNumber(v.value)
     }
 }
-
-private fun JsonPrimitive.doubleOrNull(): Double? = try {
-    this.content.toDouble()
-} catch (_: Exception) { null }
 
 private fun formatNumber(d: Double): String {
     if (d.isNaN() || d.isInfinite()) return d.toString()

@@ -155,9 +155,7 @@ data class AssistantRegex(
 
 // 流式输出时每个chunk都会调用replaceRegexes，正则必须缓存编译结果，
 // 否则长回复期间会重复编译上万次；编译失败也缓存，避免反复构造异常
-private val regexCache = SimpleCache.builder<String, Result<Regex>>()
-    .expireAfterWrite(10, TimeUnit.MINUTES)
-    .build()
+private val regexCache = SimpleCache<String, Result<Regex>>(TimeUnit.MINUTES.toMillis(10))
 
 private fun compileRegexCached(pattern: String): Regex? {
     regexCache.getIfPresent(pattern)?.let { return it.getOrNull() }

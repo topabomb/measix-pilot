@@ -79,13 +79,9 @@ class HistoryVM internal constructor(
     internal val commandFailure = combine(_commandFailure, conversationQueryService.observeCurrentSelection()) { failure, selection ->
         failure?.takeIf { it.selection == selection }?.detail
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    private val _continuationUnavailable = MutableStateFlow<RealmSelection?>(null)
-    internal val continuationUnavailable = combine(_continuationUnavailable, conversationQueryService.observeCurrentSelection()) { original, selection ->
-        original != null && original == selection
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
     internal data class DeletedNavigation(
         val receipt: net.weero.measix.pilot.service.ConversationDeletionReceipt,
-        val continuation: net.weero.measix.pilot.service.ConversationContinuation,
+        val continuation: net.weero.measix.pilot.service.ConversationOpenRequest.NewDraft,
     )
     private val _deletedNavigation = MutableStateFlow<List<DeletedNavigation>>(emptyList())
     internal val deletedNavigation = _deletedNavigation.asStateFlow()
@@ -117,7 +113,6 @@ class HistoryVM internal constructor(
             try {
                 commandMutex.withLock {
                     _commandFailure.value = null
-                    _continuationUnavailable.value = null
                     operation()
                 }
             }
@@ -140,9 +135,8 @@ class HistoryVM internal constructor(
         catch (error: Exception) {
             net.weero.measix.pilot.utils.logDiagnosticFailure(TAG, "Deleted conversation continuation failed", error)
             _commandFailure.value = CommandFailure(receipt.selection, error.userVisibleDiagnostic())
-            net.weero.measix.pilot.service.ConversationContinuation(null, "conversation_assistant_unavailable")
+            return
         }
-        if (continuation.unavailableReason != null) _continuationUnavailable.value = receipt.selection
         _deletedNavigation.value += DeletedNavigation(receipt, continuation)
     }
 

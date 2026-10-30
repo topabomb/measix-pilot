@@ -155,21 +155,22 @@ class ConversationCommandAccessTest {
         }
     }
 
-    @Test fun `initial enterprise route consumes configured assistant and uses space entry when absent without persisting a draft`() = runTest {
+    @Test fun `initial enterprise route consumes configured assistant and automatically resolves an assistant when absent without persisting a draft`() = runTest {
         fixture { f ->
             coEvery { f.settings.lastConversation(f.scope) } returns null
             val packet = exampleEnterprisePackage()
-            val initial = f.application.initialRequest(true) as InitialConversationRequest.Open
+            val initial = f.application.initialRequest(true)
             assertEquals(packet.identity.reference(requireNotNull(packet.configuration.defaults.assistantId)),
-                (initial.request as ConversationOpenRequest.NewDraft).assistantId)
+                (initial as ConversationOpenRequest.NewDraft).assistantId)
             val access = f.sessions.captureSelectedRealmAccess() as RealmAccess.Enterprise
             f.sessions.synchronize(access, packet.copy(configuration = packet.configuration.copy(
                 generation = packet.configuration.generation + 1,
                 defaults = packet.configuration.defaults.copy(assistantId = null),
             )).toCandidate())
-            assertEquals(InitialConversationRequest.SelectEnterpriseAssistant, f.application.initialRequest(true))
+            assertEquals((initial as ConversationOpenRequest.NewDraft).assistantId,
+                (f.application.initialRequest(true) as ConversationOpenRequest.NewDraft).assistantId)
             coEvery { f.settings.lastConversation(f.scope) } returns f.rootId
-            val resumed = (f.application.initialRequest(false) as InitialConversationRequest.Open).request as ConversationOpenRequest.OpenExisting
+            val resumed = f.application.initialRequest(false) as ConversationOpenRequest.OpenExisting
             assertEquals(f.rootId, resumed.id)
             assertEquals(access, resumed.access)
             assertEquals(f.rows.getValue(f.rootId).header.assistantId, resumed.startupResume?.assistantId)
@@ -186,7 +187,7 @@ class ConversationCommandAccessTest {
             assertFalse(f.rows.containsKey(f.rootId))
             assertSame(cleanup, receipt.maintenanceFailure)
             assertEquals(originalAssistant, receipt.assistantId)
-            val next = requireNotNull(f.application.deletionContinuation(receipt).request)
+            val next = f.application.deletionContinuation(receipt)
             assertEquals(originalAssistant, next.assistantId)
             assertEquals(f.page.access, next.access)
             assertNotEquals(f.rootId, next.id)
@@ -196,10 +197,57 @@ class ConversationCommandAccessTest {
         }
     }
 
+    @Test fun `deletion and startup continuation keep a missing original assistant until page initialization`() = runTest {
+        fixture { f ->
+            val missing = ConfigurationReference.Enterprise(f.scope.authority, "asd_deleted")
+            f.registry.evictRuntime(f.rootId)
+            f.rows[f.rootId] = f.rows.getValue(f.rootId).let { it.copy(header = it.header.copy(assistantId = missing)) }
+            f.runtime = f.registry.registerSnapshot(f.rows.getValue(f.rootId))
+            coEvery { f.settings.lastConversation(f.scope) } returns f.rootId
+            val startup = f.application.initialRequest(false) as ConversationOpenRequest.OpenExisting
+            val receipt = f.application.delete(f.page.commandTarget)
+            val requests = listOf(f.application.deletionContinuation(receipt), f.application.startupContinuation(startup))
+            requests.forEach { next ->
+                assertEquals(missing, next.assistantId)
+                assertEquals(receipt.selection.access, next.access)
+                assertNotEquals(receipt.conversationId, next.id)
+                try {
+                    f.application.initialize(next).close()
+                    fail("A deleted original assistant must not become the default assistant")
+                } catch (error: ConversationAssistantUnavailableException) {
+                    assertEquals("conversation_assistant_missing", error.message)
+                    assertEquals(receipt.selection, error.selection)
+                }
+                assertFalse(f.rows.containsKey(next.id))
+                assertNull(f.registry.findRuntime(next.id))
+            }
+            coVerify(exactly = 0) { f.artifactStore.materializeConfigurationMessages(any(), any(), any()) }
+            coVerify(exactly = 0) { f.repository.insertConversationSnapshot(any()) }
+            f.sessions.selectPersonalFixture()
+            f.sessions.selectEnterpriseFixture()
+            rejects<EnterpriseConfigurationException> { f.application.deletionContinuation(receipt) }
+        }
+    }
+
+    @Test fun `continuation does not read configuration and its page preserves configuration failure`() = runTest {
+        fixture { f ->
+            val receipt = f.application.delete(f.page.commandTarget)
+            val failure = java.io.IOException("continuation configuration unavailable")
+            coEvery { f.settings.withResolvedConfiguration<Any?>(any(), any(), any()) } throws failure
+            val next = f.application.deletionContinuation(receipt)
+            assertEquals(receipt.assistantId, next.assistantId)
+            try {
+                f.application.initialize(next).close()
+                fail("The original configuration failure must remain actionable")
+            } catch (error: java.io.IOException) { assertSame(failure, error) }
+            assertFalse(f.rows.containsKey(next.id))
+        }
+    }
+
     @Test fun `missing recent pointer falls back but a foreign or child pointer is rejected`() = runTest {
         fixture { f ->
             coEvery { f.settings.lastConversation(f.scope) } returns Uuid.random()
-            assertTrue((f.application.initialRequest(false) as InitialConversationRequest.Open).request is ConversationOpenRequest.NewDraft)
+            assertTrue(f.application.initialRequest(false) is ConversationOpenRequest.NewDraft)
             val foreign = f.put(ConfigurationScope.Personal)
             coEvery { f.settings.lastConversation(f.scope) } returns foreign
             rejects<IllegalStateException> { f.application.initialRequest(false) }
@@ -214,10 +262,10 @@ class ConversationCommandAccessTest {
     @Test fun `startup deletion race may resume only its verified original context`() = runTest {
         fixture { f ->
             coEvery { f.settings.lastConversation(f.scope) } returns f.rootId
-            val request = (f.application.initialRequest(false) as InitialConversationRequest.Open).request as ConversationOpenRequest.OpenExisting
+            val request = f.application.initialRequest(false) as ConversationOpenRequest.OpenExisting
             f.application.delete(f.page.commandTarget)
             rejects<ConversationNotFoundException> { f.application.initialize(request) }
-            val next = requireNotNull(f.application.startupContinuation(request).request)
+            val next = f.application.startupContinuation(request)
             assertEquals(request.startupResume!!.assistantId, next.assistantId)
             assertEquals(request.access, next.access)
             rejects<IllegalArgumentException> { f.application.startupContinuation(request.copy(startupResume = null)) }
@@ -255,7 +303,7 @@ class ConversationCommandAccessTest {
                 assertEquals(current, fresh.access)
             } finally { fresh.close() }
             coEvery { f.settings.lastConversation(f.scope) } returns null
-            val next = (f.application.initialRequest(true) as InitialConversationRequest.Open).request
+            val next = f.application.initialRequest(true)
             assertEquals(current, next.access)
             assertNotEquals(original.id, next.id)
             assertEquals(1, f.rows.size)
@@ -282,7 +330,7 @@ class ConversationCommandAccessTest {
         }
     }
 
-    @Test fun `saved assistant wins over enterprise default and invalid saved choice opens selection without rewriting it`() = runTest {
+    @Test fun `saved assistant wins over enterprise default and invalid saved choice fails without rewriting it`() = runTest {
         fixture { f ->
             coEvery { f.settings.lastConversation(f.scope) } returns null
             val packet = exampleEnterprisePackage()
@@ -294,10 +342,16 @@ class ConversationCommandAccessTest {
                 thirdArg<suspend (ResolvedConfiguration) -> Any?>()(ConfigurationResolver.resolve(
                     document.copy(preferences = preferences), f.scope, f.sessions.state.value))
             }
-            val initial = f.application.initialRequest(true) as InitialConversationRequest.Open
-            assertEquals(selected, (initial.request as ConversationOpenRequest.NewDraft).assistantId)
+            val initial = f.application.initialRequest(true)
+            assertEquals(selected, (initial as ConversationOpenRequest.NewDraft).assistantId)
             selected = packet.identity.reference("asd_missing")
-            assertEquals(InitialConversationRequest.SelectEnterpriseAssistant, f.application.initialRequest(true))
+            try {
+                f.application.initialRequest(true)
+                fail("An explicit missing assistant must not be replaced")
+            } catch (error: ConversationAssistantUnavailableException) {
+                assertEquals("conversation_assistant_unavailable", error.message)
+                assertEquals(RealmSelection(f.sessions.captureSelectedRealmAccess(), f.sessions.selectionRevision.value), error.selection)
+            }
             coVerify(exactly = 0) { f.repository.commit(any()) }
         }
     }

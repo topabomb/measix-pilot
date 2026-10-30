@@ -1,7 +1,6 @@
 package net.weero.measix.pilot.ui.components.ai
 
 import android.content.Context
-import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -23,30 +22,6 @@ class StarterOpeningDetailsAndroidTest {
     private val detail = StarterOpeningDetailUiModel("Task", "Editable starting prompt", "{{user}} original system",
         listOf(StarterContextUiModel("<data>{{literal}}</data>")), false, true)
 
-    @Test fun contextLoadsOnDemandAndRetryClearsFailureWithoutReloadingSavedContent() {
-        val reads = AtomicInteger()
-        compose.setContent {
-            MaterialTheme { Column { StarterOpeningContext("first") {
-                if (reads.incrementAndGet() == 1) throw IllegalStateException("opening_read_failed")
-                detail
-            } } }
-        }
-        compose.onNodeWithText(detail.systemPrompt!!).assertDoesNotExist()
-        compose.runOnIdle { assertEquals(0, reads.get()) }
-        compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
-        compose.onNodeWithText("IllegalStateException: opening_read_failed", substring = true).assertIsDisplayed()
-        compose.onNodeWithText(detail.systemPrompt).assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.application_recovery_retry)).performClick()
-        compose.onNodeWithText("opening_read_failed", substring = true).assertDoesNotExist()
-        compose.onNodeWithText(detail.systemPrompt).assertIsDisplayed()
-        compose.onNodeWithText(detail.contexts.single().content).assertIsDisplayed()
-        compose.onNodeWithText(context.getString(R.string.context_numbered_item, 1)).assertIsDisplayed()
-        compose.runOnIdle { assertEquals(2, reads.get()) }
-        compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
-        compose.onNodeWithText(detail.systemPrompt).assertDoesNotExist()
-        compose.onNodeWithText(context.getString(R.string.opening_context)).performClick()
-        compose.runOnIdle { assertEquals(2, reads.get()) }
-    }
     @Test fun initialModalFailureCanRetryReadWithoutRefreshingOpening() {
         val reads = AtomicInteger()
         val writes = AtomicInteger()

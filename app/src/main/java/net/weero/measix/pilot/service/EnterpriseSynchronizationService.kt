@@ -21,7 +21,7 @@ import net.weero.measix.pilot.data.enterprise.PlatformHttpException
 import net.weero.measix.pilot.data.enterprise.EnterpriseSnapshotContentException
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 
-internal enum class EnterpriseSynchronizationIssue { UPDATE_APP, UPDATE_PLATFORM, UNSUPPORTED_VERSION, INVALID_CONFIGURATION, NETWORK, FAILED }
+internal enum class EnterpriseSynchronizationIssue { UPDATE_APP, UPDATE_PLATFORM, UNSUPPORTED_VERSION, ASSISTANT_REQUIRED, INVALID_CONFIGURATION, NETWORK, FAILED }
 
 internal data class EnterpriseSynchronizationFailure(
     val issue: EnterpriseSynchronizationIssue,
@@ -29,7 +29,10 @@ internal data class EnterpriseSynchronizationFailure(
 ) {
     companion object {
         fun from(error: Exception): EnterpriseSynchronizationFailure {
-            val issue = when (error) {
+            val assistantRequired = generateSequence<Throwable>(error) { it.cause }.any {
+                it is EnterpriseConfigurationException && it.reason == "enterprise_assistant_required"
+            }
+            val issue = if (assistantRequired) EnterpriseSynchronizationIssue.ASSISTANT_REQUIRED else when (error) {
                 is EnterpriseSnapshotCompatibilityException -> when {
                     error.receivedSchemas.isEmpty() -> EnterpriseSynchronizationIssue.UNSUPPORTED_VERSION
                     error.receivedSchemas.all { it > error.supportedSchemas.max() } -> EnterpriseSynchronizationIssue.UPDATE_APP

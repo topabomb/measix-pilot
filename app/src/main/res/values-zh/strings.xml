@@ -1671,11 +1671,7 @@
   <string name="assistant_memory_owner_private">仅此助手使用</string>
   <string name="assistant_runtime_memory_empty">暂无记忆。</string>
   <string name="configuration_speech_scope_notice">默认语音服务只为当前空间选择。编辑我的服务会影响使用它们的所有空间；企业提供的服务只读。</string>
-  <string name="enterprise_start_conversation">开始对话</string>
-  <string name="enterprise_starters_description">选择一个话题，打开草稿后可修改，再由你发送。</string>
-  <string name="enterprise_starters_empty">暂无可用的对话入口。</string>
   <string name="enterprise_starter_preview">消息预览</string>
-  <string name="enterprise_starter_open">打开草稿</string>
   <string name="assistant_runtime_memory_disabled">已停用；记录保留，不用于对话。</string>
   <string name="enterprise_portal_unavailable">当前系统 WebView 缺少安全打开企业工作台所需的能力。\nWebView：%1$s\n缺少能力：%2$s</string>
   <string name="enterprise_portal_open_failed">无法打开企业工作台，请重试。\n原因：%1$s</string>
@@ -1969,10 +1965,8 @@
   <string name="enterprise_prepare_session">企业服务拒绝了访问检查，本次操作尚未开始。请打开企业空间，检查登录状态和访问权限。</string>
   <string name="enterprise_prepare_rejected">企业服务未能完成检查，本次操作尚未开始。请打开企业空间，并查看技术信息。</string>
   <string name="enterprise_prepare_unavailable">企业空间当前无法开始此操作。请打开企业空间，并查看技术信息；本次操作尚未开始。</string>
-  <string name="chat_deleted_assistant_unavailable">会话已删除，原助手已不可用。请到空间选择助手。</string>
-  <string name="chat_deleted_continuation_failed">会话已删除，但未能打开新聊天。请到空间继续。</string>
+  <string name="chat_deleted_continuation_failed">会话已删除，但未能打开新聊天。请查看诊断或打开聊天历史。</string>
   <string name="enterprise_refresh_status">刷新状态</string>
-  <string name="enterprise_all_chat_history">全部聊天历史</string>
   <string name="remote_workspace_query_failed">未能确认远程工作区状态</string>
   <string name="enterprise_publication_release">发布 ID</string>
   <string name="enterprise_publication_hash">配置 SHA-256</string>
@@ -2168,4 +2162,5 @@
   <string name="webdav_invalid_username">用户名不能包含冒号或换行。</string>
   <string name="webdav_name_help">留空时使用服务器域名。</string>
   <string name="webdav_credentials_help">匿名访问可留空；需要认证时，填写服务商提供的 WebDAV 用户名和密码。</string>
+  <string name="enterprise_assistant_required">企业需发布至少一个已启用的助手及其可用聊天模型。请联系管理员发布配置后，重新同步。</string>
 </resources>

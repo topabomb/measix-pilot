@@ -161,8 +161,9 @@ UI 仅消费公开回执与 `ConversationInputQueueUiModel`，不持有附件 su
 
 `newDraftRequest` 只接受调用方捕获的 `RealmSelection`，在读取配置前复验原选择 revision 和 Session。
 未显式指定助手时使用原域的助手选择；缺失或失效通过 `ConversationAssistantUnavailableException` 报告，
-不改写偏好或选择目录首项。冷启动的新建分支复用同一解析；企业隐式默认不可用时进入空间选择，
-显式助手不可用仍保留失败原因。配置读取及授权失败不解释为缺少助手。
+不在创建命令中改写偏好或另选助手。有效企业配置至少包含一个启用助手；缺省默认由配置解析统一派生。
+冷启动直接复用同一创建命令，显式助手失效在原错误页提供原助手选择器，不另建空助手入口。
+配置读取及授权失败不解释为缺少助手。
 
 新聊天先是非持久化 Draft，首条 `AppendUserMessage` 单事务创建会话并原位晋升 Ready。共享预设附件在安装 Draft 前由 ArtifactStore 复制到目标域，创建令牌随原 Runtime 保留；重复打开不重复复制。提交失败保持 Draft 与附件，提交后沿原会话协议发布，闲置丢弃时同步交还 GC。细节见多模态持久化参考。
 

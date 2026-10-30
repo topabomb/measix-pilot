@@ -46,9 +46,9 @@ class ConfigurationQueryServiceTest {
         val fixture = fixture(original.copy(configuration = original.configuration.copy(starters = listOf(starter))))
         val detail = fixture.queries.readEnterpriseStarterDetails(fixture.target(starter.id))
         assertEquals(starter.details(isDraft = false), detail)
-        val error = runCatching { fixture.queries.readEnterpriseStarterDetails(EnterpriseStarterTarget(
-            fixture.selection, fixture.packet.configuration.generation, fixture.packet.identity.reference(starter.id))) }.exceptionOrNull()
-        assertEquals(StarterOpeningIssue.UNAVAILABLE, (error as StarterOpeningException).issue)
+        val resolved = ConfigurationResolver.resolve(UserSettingsDocument.empty(), fixture.packet.identity.scope,
+            fixture.sessions.state.value)
+        assertTrue(resolved.availableStarters(fixture.packet.identity.reference(starter.assistantId)).isEmpty())
     }
 
     @Test fun `personal configuration details read disabled Starter and assistant without enabling task selection`() = runTest {
@@ -62,7 +62,7 @@ class ConfigurationQueryServiceTest {
         assertEquals(starter.details(isDraft = false),
             fixture.queries.readEnterpriseStarterDetails(fixture.target(starter.id).copy(selection = selection)))
         val resolved = ConfigurationResolver.resolve(UserSettingsDocument.empty(), packet.identity.scope, fixture.sessions.state.value)
-        assertTrue(resolved.availableStarters().isEmpty())
+        assertTrue(resolved.availableStarters(packet.identity.reference(starter.assistantId)).isEmpty())
     }
 
     private suspend fun fixture(packet: EnterprisePackage, now: () -> Long = { 1000L }): Fixture {

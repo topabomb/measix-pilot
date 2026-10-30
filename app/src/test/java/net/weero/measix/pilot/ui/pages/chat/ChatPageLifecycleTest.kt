@@ -232,7 +232,7 @@ class ChatPageLifecycleTest {
             receipt
         }
         val next = fixture.request.copy(id = Uuid.random())
-        coEvery { fixture.application.deletionContinuation(receipt) } returns net.weero.measix.pilot.service.ConversationContinuation(next)
+        coEvery { fixture.application.deletionContinuation(receipt) } returns next
         every { fixture.query.observeCurrentSelection() } returns flowOf(fixture.lease.commandTarget.selection)
         try {
             val vm = fixture.create(); runCurrent()
@@ -246,12 +246,38 @@ class ChatPageLifecycleTest {
             commit.complete(Unit); runCurrent()
             val handoff = requireNotNull(vm.handoff.value)
             var navigations = 0
-            vm.consumeHandoff(handoff) { assertEquals(next, it.continuation?.request); navigations++ }
+            vm.consumeHandoff(handoff) { assertEquals(next, it.continuation); navigations++ }
             vm.consumeHandoff(handoff) { navigations++ }
             runCurrent()
             assertEquals(1, navigations)
             assertNull(vm.handoff.value)
             coVerify(exactly = 1) { fixture.application.delete(any(), any()) }
+        } finally { fixture.store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `deleted chat handoff retains maintenance diagnosis and rejects a later selection revision`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fixture = Fixture(draft = false)
+        val original = fixture.lease.commandTarget.selection
+        val selected = MutableStateFlow<net.weero.measix.pilot.data.enterprise.RealmSelection?>(original)
+        val maintenance = java.io.IOException("recent conversation cleanup failed")
+        val receipt = ConversationDeletionReceipt(fixture.request.id, fixture.request.assistantId, original, maintenance)
+        val next = fixture.request.copy(id = Uuid.random())
+        coEvery { fixture.application.delete(any(), any()) } returns receipt
+        coEvery { fixture.application.deletionContinuation(receipt) } returns next
+        every { fixture.query.observeCurrentSelection() } returns selected
+        try {
+            val vm = fixture.create(); runCurrent()
+            val row = ConversationSummary(fixture.request.id, fixture.request.assistantId, "Current", null, false,
+                java.time.Instant.EPOCH, java.time.Instant.EPOCH, original)
+            vm.deleteConversation(row); runCurrent()
+            val handoff = requireNotNull(vm.handoff.value)
+            assertEquals(next, handoff.continuation)
+            assertTrue(requireNotNull(handoff.diagnostic).contains("recent conversation cleanup failed"))
+            selected.value = original.copy(revision = original.revision + 2)
+            vm.consumeHandoff(handoff) { fail("A former selection must not replace the current route") }
+            runCurrent()
+            assertNull(vm.handoff.value)
         } finally { fixture.store.clear(); Dispatchers.resetMain() }
     }
 

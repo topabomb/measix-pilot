@@ -1671,11 +1671,7 @@
   <string name="assistant_memory_owner_private">Только для этого ассистента</string>
   <string name="assistant_runtime_memory_empty">Записей памяти пока нет.</string>
   <string name="configuration_speech_scope_notice">Сервис речи по умолчанию выбирается для этого пространства. Изменение ваших сервисов влияет на все использующие их пространства; сервисы организации доступны только для чтения.</string>
-  <string name="enterprise_start_conversation">Начать диалог</string>
-  <string name="enterprise_starters_description">Выберите тему. Перед отправкой сообщение можно изменить.</string>
-  <string name="enterprise_starters_empty">Нет доступных тем для начала диалога.</string>
   <string name="enterprise_starter_preview">Предпросмотр сообщения</string>
-  <string name="enterprise_starter_open">Открыть черновик</string>
   <string name="assistant_runtime_memory_disabled">Память отключена. Записи можно изменять, но они не используются в диалогах.</string>
   <string name="enterprise_portal_unavailable">В системном WebView отсутствуют функции, необходимые для безопасного открытия корпоративной панели.\nWebView: %1$s\nНедостающие функции: %2$s</string>
   <string name="enterprise_portal_open_failed">Не удалось открыть корпоративную панель. Повторите попытку.\nПричина: %1$s</string>
@@ -1969,10 +1965,8 @@
   <string name="enterprise_prepare_session">Сервис организации отклонил проверку доступа. Операция ещё не началась. Проверьте вход и права доступа в пространстве организации.</string>
   <string name="enterprise_prepare_rejected">Сервис организации не смог завершить проверку. Операция ещё не началась. Откройте пространство организации и просмотрите техническую информацию.</string>
   <string name="enterprise_prepare_unavailable">Пространство организации не готово к этой операции. Операция ещё не началась. Откройте пространство организации и просмотрите техническую информацию.</string>
-  <string name="chat_deleted_assistant_unavailable">Чат удалён. Его ассистент недоступен. Выберите ассистента в пространствах.</string>
-  <string name="chat_deleted_continuation_failed">Чат удалён, но новый чат открыть не удалось. Перейдите в пространства.</string>
+  <string name="chat_deleted_continuation_failed">Чат удалён, но новый чат открыть не удалось. Просмотрите диагностику или откройте историю чатов.</string>
   <string name="enterprise_refresh_status">Обновить состояние</string>
-  <string name="enterprise_all_chat_history">Вся история чатов</string>
   <string name="remote_workspace_query_failed">Не удалось определить состояние удалённого рабочего пространства</string>
   <string name="enterprise_publication_release">ID публикации</string>
   <string name="enterprise_publication_hash">SHA-256 конфигурации</string>
@@ -2168,4 +2162,5 @@
   <string name="webdav_invalid_username">Имя пользователя не должно содержать двоеточие или перенос строки.</string>
   <string name="webdav_name_help">Оставьте пустым, чтобы использовать имя хоста сервера.</string>
   <string name="webdav_credentials_help">Для анонимного доступа оставьте поля пустыми. Иначе укажите учётные данные WebDAV, предоставленные сервисом.</string>
+  <string name="enterprise_assistant_required">Организация должна опубликовать хотя бы одного включённого ассистента с доступной моделью чата. Попросите администратора опубликовать настройки и повторите синхронизацию.</string>
 </resources>

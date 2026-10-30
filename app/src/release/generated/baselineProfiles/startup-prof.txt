@@ -35148,14 +35148,11 @@ SPLnet/weero/measix/pilot/service/ConversationInputQueueUiModel;->getQueueCount(
 Lnet/weero/measix/pilot/service/ConversationOpenRequest;
 Lnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;
 SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;-><clinit>()V
-SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;-><init>(Lkotlin/uuid/Uuid;Lnet/weero/measix/pilot/data/enterprise/RealmAccess;Lme/rerere/common/configuration/ConfigurationReference;Lnet/weero/measix/pilot/service/StarterOpeningReference;Lkotlin/uuid/Uuid;)V
-SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;-><init>(Lkotlin/uuid/Uuid;Lnet/weero/measix/pilot/data/enterprise/RealmAccess;Lme/rerere/common/configuration/ConfigurationReference;Lnet/weero/measix/pilot/service/StarterOpeningReference;Lkotlin/uuid/Uuid;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;->equals(Ljava/lang/Object;)Z
 SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;->getAccess()Lnet/weero/measix/pilot/data/enterprise/RealmAccess;
 SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;->getAssistantId()Lme/rerere/common/configuration/ConfigurationReference;
 SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;->getFolderId()Lkotlin/uuid/Uuid;
 SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;->getId()Lkotlin/uuid/Uuid;
-SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;->getStarter()Lnet/weero/measix/pilot/service/StarterOpeningReference;
 SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;->hashCode()I
 SPLnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft;->toString()Ljava/lang/String;
 Lnet/weero/measix/pilot/service/ConversationOpenRequest$NewDraft$$ExternalSyntheticLambda0;
@@ -35772,11 +35769,6 @@ SPLnet/weero/measix/pilot/service/ImageSourceInterceptor$intercept$1;->invokeSus
 Lnet/weero/measix/pilot/service/ImageSourceKeyer;
 SPLnet/weero/measix/pilot/service/ImageSourceKeyer;-><clinit>()V
 SPLnet/weero/measix/pilot/service/ImageSourceKeyer;-><init>()V
-Lnet/weero/measix/pilot/service/InitialConversationRequest;
-Lnet/weero/measix/pilot/service/InitialConversationRequest$Open;
-SPLnet/weero/measix/pilot/service/InitialConversationRequest$Open;-><clinit>()V
-SPLnet/weero/measix/pilot/service/InitialConversationRequest$Open;-><init>(Lnet/weero/measix/pilot/service/ConversationOpenRequest;)V
-SPLnet/weero/measix/pilot/service/InitialConversationRequest$Open;->getRequest()Lnet/weero/measix/pilot/service/ConversationOpenRequest;
 Lnet/weero/measix/pilot/service/McpApplicationService;
 Lnet/weero/measix/pilot/service/McpCatalogReadState;
 Lnet/weero/measix/pilot/service/McpCatalogReadState$Available;

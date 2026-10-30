@@ -31,7 +31,6 @@ import org.junit.Test
 import kotlinx.coroutines.CompletableDeferred
 import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationDeletionReceipt
-import net.weero.measix.pilot.service.ConversationContinuation
 import net.weero.measix.pilot.service.ConversationOpenRequest
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -198,8 +197,7 @@ class HistoryVMTest {
             val row = historyRow(selection, assistant)
             val receipt = ConversationDeletionReceipt(row.id, assistant, selection)
             val application = mockk<ConversationApplicationService>()
-            coEvery { application.deletionContinuation(receipt) } returns ConversationContinuation(
-                ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant))
+            coEvery { application.deletionContinuation(receipt) } returns ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant)
             coEvery { application.deleteConversations(any(), any(), any()) } coAnswers {
                 thirdArg<suspend (ConversationDeletionReceipt) -> Unit>()(receipt)
                 throw java.io.IOException("second deletion failed")
@@ -242,9 +240,31 @@ class HistoryVMTest {
             selected.value = RealmSelection(RealmAccess.Personal, 2)
             runCurrent(); pending.complete(Unit); runCurrent()
             org.junit.Assert.assertNull(vm.commandFailure.value)
-            org.junit.Assert.assertFalse(vm.continuationUnavailable.value)
             org.junit.Assert.assertTrue(vm.deletedNavigation.value.isEmpty())
             coVerify(exactly = 0) { application.deletionContinuation(any()) }
+        } finally { store.clear(); Dispatchers.resetMain() }
+    }
+
+    @Test fun `continuation failure preserves diagnosis without publishing a substitute navigation`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = ViewModelStore()
+        try {
+            val selection = RealmSelection(RealmAccess.Personal, 1)
+            val selected = MutableStateFlow<RealmSelection?>(selection)
+            val assistant = ConfigurationReference.random()
+            val row = historyRow(selection, assistant)
+            val receipt = ConversationDeletionReceipt(row.id, assistant, selection)
+            val application = mockk<ConversationApplicationService>()
+            coEvery { application.deleteConversations(any(), any(), any()) } coAnswers {
+                thirdArg<suspend (ConversationDeletionReceipt) -> Unit>()(receipt)
+            }
+            coEvery { application.deletionContinuation(receipt) } throws IllegalStateException("enterprise_selection_revoked")
+            val vm = commandVm(selected, application)
+            store.put("history", vm)
+            vm.deleteConversations(listOf(row)); runCurrent()
+            org.junit.Assert.assertTrue(requireNotNull(vm.commandFailure.value).contains("enterprise_selection_revoked"))
+            org.junit.Assert.assertTrue(vm.deletedNavigation.value.isEmpty())
+            coVerify(exactly = 1) { application.deleteConversations(any(), any(), any()) }
         } finally { store.clear(); Dispatchers.resetMain() }
     }
 
@@ -262,13 +282,12 @@ class HistoryVMTest {
             every { token.deletion } returns receipt
             val application = mockk<ConversationApplicationService>()
             coEvery { application.deleteForUndo(any(), any()) } returns token
-            coEvery { application.deletionContinuation(receipt) } returns ConversationContinuation(null, "assistant unavailable")
+            coEvery { application.deletionContinuation(receipt) } returns ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant)
             coEvery { application.restore(token) } returns Unit
             val vm = commandVm(selected, application)
             store.put("history", vm)
             vm.deleteForUndo(row); runCurrent()
             assertEquals(token, vm.undo.value)
-            org.junit.Assert.assertTrue(vm.continuationUnavailable.value)
             vm.restoreConversation(token); runCurrent()
             vm.restoreConversation(token); runCurrent()
             coVerify(exactly = 1) { application.restore(token) }
@@ -296,7 +315,7 @@ class HistoryVMTest {
             val application = mockk<ConversationApplicationService>()
             coEvery { application.deleteForUndo(match { it.conversationId == rows[0].id }, any()) } returns tokens[0]
             coEvery { application.deleteForUndo(match { it.conversationId == rows[1].id }, any()) } coAnswers { pending.await(); tokens[1] }
-            coEvery { application.deletionContinuation(any()) } returns ConversationContinuation(null, "assistant unavailable")
+            coEvery { application.deletionContinuation(any()) } returns ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant)
             coEvery { application.restore(tokens[0]) } returns Unit
             val vm = commandVm(selected, application)
             store.put("history", vm)
@@ -333,7 +352,7 @@ class HistoryVMTest {
                     val pending = CompletableDeferred<Unit>()
                     val application = mockk<ConversationApplicationService>()
                     coEvery { application.deleteForUndo(any(), any()) } returns token
-                    coEvery { application.deletionContinuation(any()) } returns ConversationContinuation(null, "assistant unavailable")
+                    coEvery { application.deletionContinuation(any()) } returns ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant)
                     coEvery { application.togglePin(any()) } coAnswers { pending.await() }
                     val vm = commandVm(selected, application)
                     store.put("history", vm)

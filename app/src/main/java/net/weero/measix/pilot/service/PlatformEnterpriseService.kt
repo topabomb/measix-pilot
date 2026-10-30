@@ -147,7 +147,10 @@ internal class PlatformEnterpriseService(
         require(state.targetManagedGeneration == null || state.targetManagedGeneration == generation) {
             "platform_snapshot_target_mismatch"
         }
-        if (generation == 0L) return sessions.recordPlatformPending(access)
+        if (generation == 0L) {
+            sessions.recordPlatformPending(access)
+            throw EnterpriseConfigurationException("enterprise_assistant_required")
+        }
         PlatformSnapshotCompatibility.requireAdvertisedSupport(bootstrap.supportedSnapshotSchemaVersions)
         val matching = cached?.takeIf { it.configuration.generation == generation }
         val cachedExecution = matching?.execution as? EnterpriseExecution.Platform

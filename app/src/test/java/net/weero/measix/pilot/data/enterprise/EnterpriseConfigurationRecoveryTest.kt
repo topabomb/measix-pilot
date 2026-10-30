@@ -1,6 +1,9 @@
 package net.weero.measix.pilot.data.enterprise
 
 import java.io.File
+import java.security.MessageDigest
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.*
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Rule
@@ -124,6 +127,50 @@ class EnterpriseConfigurationRecoveryTest {
         controller.finishExit(controller.beginExit(requireNotNull(controller.captureExitRequest())))
         assertEquals(RealmAccess.Personal, controller.captureSelectedRealmAccess())
         assertNull((controller.state.value as EnterpriseState.Available).manifest.session)
+    }
+
+    @Test
+    fun `legacy empty Applied retains identity and bytes on recovery and accepts a repaired publication`() = runTest {
+        val root = temporary.newFolder()
+        val packet = exampleEnterprisePackage()
+        val original = EnterpriseSessionController(enterpriseTestStore(root), EnterpriseDataResetStore(temporary.newFolder()))
+            .enrollFixture(packet)
+        val applied = requireNotNull(original.manifest.applied)
+        val configurationFile = File(root, "revisions/${applied.revision}/configuration.json")
+        val json = EnterpriseConfigurationCodec.json
+        val document = json.parseToJsonElement(configurationFile.readText()).jsonObject
+        val configuration = document.getValue("configuration").jsonObject
+        val empty = JsonObject(configuration + mapOf(
+            "assistants" to JsonArray(emptyList()), "starters" to JsonArray(emptyList()),
+            "defaults" to JsonObject(configuration.getValue("defaults").jsonObject + ("assistantId" to JsonNull)),
+        ))
+        val legacyBytes = JsonObject(document + ("configuration" to empty)).toString().toByteArray()
+        configurationFile.writeBytes(legacyBytes)
+        val hash = MessageDigest.getInstance("SHA-256").digest(legacyBytes).joinToString("") { "%02x".format(it) }
+        val legacy = original.manifest.copy(applied = applied.copy(configurationHash = hash))
+        val manifestFile = File(root, "manifest.json")
+        manifestFile.writeText(json.encodeToString(legacy))
+        val manifestBytes = manifestFile.readBytes()
+
+        val controller = EnterpriseSessionController(enterpriseTestStore(root), EnterpriseDataResetStore(temporary.newFolder()))
+        val recovered = controller.recover() as EnterpriseState.Available
+        assertEquals(legacy, recovered.manifest)
+        assertNull(recovered.configuration)
+        assertEquals("enterprise_assistant_required", (recovered.configurationError as EnterpriseConfigurationException).reason)
+        assertArrayEquals(legacyBytes, configurationFile.readBytes())
+        assertArrayEquals(manifestBytes, manifestFile.readBytes())
+        val access = controller.captureSelectedRealmAccess() as RealmAccess.Enterprise
+        assertEquals("history", controller.withRealmAccess(access) { "history" })
+        assertNull(controller.platformConfiguration(access).candidate)
+
+        val candidate = packet.toCandidate().let {
+            it.copy(configuration = it.configuration.copy(generation = applied.generation + 1))
+        }
+        val repaired = controller.synchronize(access, candidate)
+        assertEquals(candidate.configuration, repaired.configuration)
+        assertNull(repaired.configurationError)
+        assertEquals(legacy.session, repaired.manifest.session)
+        assertEquals(applied.generation + 1, repaired.manifest.applied?.generation)
     }
 
     @Test

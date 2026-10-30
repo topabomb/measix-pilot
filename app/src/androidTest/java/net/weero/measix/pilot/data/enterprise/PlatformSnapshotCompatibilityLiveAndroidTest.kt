@@ -185,18 +185,39 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
                 val isV5 = input.getLong("expectedSchema") == 5L
                 assertTrue(candidate.configuration.starters.all { (it.openingSnapshot != null) == isV5 })
                 val selection = requireNotNull(sessions.readPresentation().selection)
-                val catalog = koin.get<ConfigurationQueryService>().observeEnterpriseStarters(selection).first() as EnterpriseStarterReadState.Available
-                if (input.has("expectedStarterCount")) assertEquals(input.getInt("expectedStarterCount"), catalog.value.starters.size)
-                catalog.value.starters.forEach { starter ->
-                    val draft = koin.get<ConversationApplicationService>().newStarterDraftRequest(starter.target)
-                    assertEquals(starter.prompt, draft.text)
-                    assertEquals(target, draft.request.access)
-                    assertEquals(isV5, draft.request.starter != null)
-                    draft.request.starter?.let {
-                        assertEquals(execution.releaseId, it.releaseId)
-                        assertEquals(execution.snapshotHash, it.snapshotHash)
-                        assertEquals(candidate.configuration.generation, it.generation)
-                    }
+                val configuration = koin.get<ConfigurationQueryService>().read(target)
+                val starters = configuration.assistants.keys.flatMap(configuration::availableStarters)
+                if (input.has("expectedStarterCount")) assertEquals(input.getInt("expectedStarterCount"), starters.size)
+                val conversations = koin.get<ConversationApplicationService>()
+                starters.forEach { starter ->
+                    val assistant = ConfigurationReference.Enterprise(target.scope.authority, starter.assistantId)
+                    val draft = conversations.newDraftRequest(selection, assistant)
+                    assertEquals(target, draft.access)
+                    val view = conversations.initialize(draft)
+                    try {
+                        val before = requireNotNull(query.conversationUiModel(view).first { it?.configuration != null })
+                        assertNull(requireNotNull(before.configuration).opening)
+                        var prompt: String? = null
+                        val starterReference = ConfigurationReference.Enterprise(target.scope.authority, starter.id)
+                        conversations.selectDraftStarter(requireNotNull(before.configuration).target,
+                            starterReference, null, Uuid.random()) { prompt = it }
+                        assertEquals(starter.prompt, prompt)
+                        val after = requireNotNull(query.conversationUiModel(view).first {
+                            it?.configuration != null && (!isV5 || it.configuration.opening != null)
+                        })
+                        assertTrue(after.snapshot.header.newConversation)
+                        assertEquals(isV5, requireNotNull(after.configuration).opening != null)
+                        val aggregate = sessions.withSelectedRealmSelection(selection) {
+                            requireNotNull(query.aggregateSnapshot(draft.id))
+                        }
+                        assertEquals(isV5, aggregate.opening != null)
+                        aggregate.opening?.let {
+                            assertEquals(execution.releaseId, it.releaseId)
+                            assertEquals(execution.snapshotHash, it.snapshotHash)
+                            assertEquals(candidate.configuration.generation, it.generation)
+                            assertEquals(starter, it.definition)
+                        }
+                    } finally { view.close() }
                 }
                 assertEquals(state.manifest.applied, synchronization.prepareExecution(target))
                 val status = synchronization.status.value
@@ -228,7 +249,7 @@ class PlatformSnapshotCompatibilityLiveAndroidTest {
                     evidence.put("sameSessionRecovered", true).put("enrollmentRepeated", false)
                 }
                 baselineFile.writeText(snapshot.toString())
-                evidence.put("executionAdmission", "accepted").put("starterCount", catalog.value.starters.size)
+                evidence.put("executionAdmission", "accepted").put("starterCount", starters.size)
                     .put("starterPrefillVerified", true).put("starterOpeningVerified", true)
             }
             val final = summary()

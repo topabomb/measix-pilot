@@ -55,14 +55,11 @@ import net.weero.measix.pilot.service.runtime.InputQueuePauseReason
 import kotlinx.serialization.json.Json
 import kotlin.uuid.Uuid
 
-internal sealed interface InitialConversationRequest {
-    data class Open(val request: ConversationOpenRequest) : InitialConversationRequest
-    data object SelectEnterpriseAssistant : InitialConversationRequest
-}
+internal class ConversationAssistantUnavailableException(
+    reason: String,
+    val selection: RealmSelection,
+) : IllegalStateException(reason)
 
-internal class ConversationAssistantUnavailableException(reason: String) : IllegalStateException(reason)
-
-/** 用户会话命令、创建、删除与 fork 的唯一 Application owner。 */
 class ConversationApplicationService internal constructor(
     private val settingsStore: SettingsStore,
     private val conversationRepo: ConversationRepository,
@@ -151,24 +148,6 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    internal suspend fun newStarterDraftRequest(target: EnterpriseStarterTarget): StarterDraftRequest {
-        recoveryGate.awaitReady()
-        return sessions.withSelectedPlatformCandidate(target.selection) { candidate ->
-            settingsStore.withResolvedConfiguration(target.selection.access.scope, sessions.state.value) { configuration ->
-                sessions.requirePublishedSelection(target.selection)
-                val identity = requireNotNull(configuration.enterpriseIdentity) { "enterprise_configuration_not_ready" }
-                check(configuration.enterpriseConfiguration?.generation == target.generation &&
-                    identity.authority == target.reference.authority) { "enterprise_configuration_changed" }
-                val starter = configuration.availableStarters().singleOrNull { it.id == target.reference.id }
-                    ?: error("enterprise_starter_unavailable")
-                val assistant = ConfigurationReference.Enterprise(identity.authority, starter.assistantId)
-                val opening = starter.openingSnapshot?.let { candidate.opening(starter) }
-                StarterDraftRequest(ConversationOpenRequest.NewDraft(Uuid.random(), target.selection.access, assistant,
-                    opening?.navigationReference()), starter.prompt)
-            }
-        }
-    }
-
     /** The callback only accepts the text in the original UI owner; failed acceptance restores this operation's binding. */
     internal suspend fun selectDraftStarter(
         target: ConversationAssistantTarget,
@@ -197,7 +176,7 @@ class ConversationApplicationService internal constructor(
                     val runtime = commandCoordinator.load(target.conversation.conversationId)
                     val before = runtime.durable
                     check(before.header.newConversation && before.header.assistantId == target.assistantId) { "conversation_draft_target_changed" }
-                    val selected = reference ?: before.opening?.navigationReference()?.reference
+                    val selected = reference ?: before.opening?.let { it.assistant.copy(id = it.definition.id) }
                         ?: error("enterprise_starter_not_selected")
                     val starter = configuration.availableStarters(target.assistantId).singleOrNull {
                         it.id == selected.id && selected.authority == candidate.identity.authority
@@ -265,26 +244,24 @@ class ConversationApplicationService internal constructor(
         settingsStore.withResolvedConfiguration(selection.access.scope, sessions.state.value) { configuration ->
             sessions.requirePublishedSelection(selection)
             val selected = assistantId ?: configuration.selections.assistantId
-                ?: throw ConversationAssistantUnavailableException("conversation_assistant_missing")
+                ?: throw ConversationAssistantUnavailableException("conversation_assistant_missing", selection)
             if (!configuration.selection(ConfigurationCategory.ASSISTANT, selected).isAvailable) {
-                throw ConversationAssistantUnavailableException("conversation_assistant_unavailable")
+                throw ConversationAssistantUnavailableException("conversation_assistant_unavailable", selection)
             }
             ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, selected)
         }
 
     suspend fun initialize(request: ConversationOpenRequest): ConversationViewLease {
         recoveryGate.awaitReady()
-        suspend fun open(candidate: net.weero.measix.pilot.data.enterprise.EnterpriseCandidate?): ConversationViewLease {
-            var initialOpening: net.weero.measix.pilot.data.model.ConversationOpening? = null
+        return sessions.withSelectedRealmAccess(request.access) {
             val lease = if (request is ConversationOpenRequest.NewDraft) {
                 settingsStore.withResolvedConfiguration(request.access.scope, sessions.state.value) { configuration ->
                     commandCoordinator.openForView(request) {
-                        val assistant = requireNotNull(configuration.assistants[request.assistantId]) { "conversation_assistant_missing" }
-                        check(configuration.selection(ConfigurationCategory.ASSISTANT, assistant.id).isAvailable) { "conversation_assistant_unavailable" }
-                        request.starter?.let { reference ->
-                            val starter = configuration.availableStarters(request.assistantId).singleOrNull { it.id == reference.reference.id }
-                                ?: throw StarterOpeningException(StarterOpeningIssue.UNAVAILABLE)
-                            initialOpening = reference.restore(requireNotNull(candidate), starter)
+                        val selection = RealmSelection(request.access, sessions.selectionRevision.value)
+                        val assistant = configuration.assistants[request.assistantId]
+                            ?: throw ConversationAssistantUnavailableException("conversation_assistant_missing", selection)
+                        if (!configuration.selection(ConfigurationCategory.ASSISTANT, assistant.id).isAvailable) {
+                            throw ConversationAssistantUnavailableException("conversation_assistant_unavailable", selection)
                         }
                         val owned = mutableListOf<net.weero.measix.pilot.data.files.OwnedArtifact>()
                         try {
@@ -311,14 +288,8 @@ class ConversationApplicationService internal constructor(
                     }
                 }
             } else commandCoordinator.openForView(request)
-            try {
-                initialOpening?.let { commandCoordinator.executeOrThrow(request.id, BindDraftOpening(it, null)) }
-                return ConversationViewLease(request.id, request.access, sessions.selectionRevision.value, lease::draftArtifacts, lease::close)
-            } catch (error: Throwable) { lease.close(); throw error }
+            ConversationViewLease(request.id, request.access, sessions.selectionRevision.value, lease::draftArtifacts, lease::close)
         }
-        return if (request is ConversationOpenRequest.NewDraft && request.starter != null) {
-            sessions.withSelectedPlatformCandidate(RealmSelection(request.access, sessions.selectionRevision.value)) { open(it) }
-        } else sessions.withSelectedRealmAccess(request.access) { open(null) }
     }
 
     suspend fun selectAssistantRequest(
@@ -347,7 +318,7 @@ class ConversationApplicationService internal constructor(
         }
     }
 
-    internal suspend fun initialRequest(createNew: Boolean): InitialConversationRequest {
+    internal suspend fun initialRequest(createNew: Boolean): ConversationOpenRequest {
         recoveryGate.awaitReady()
         val access = sessions.captureSelectedRealmAccess()
         return sessions.withSelectedRealmAccess(access) {
@@ -355,13 +326,9 @@ class ConversationApplicationService internal constructor(
             val header = if (!createNew && existing != null) conversationRepo.getConversationHeader(existing) else null
             if (header != null) {
                 check(header.scope == access.scope && header.parentConversationId == null) { "conversation_scope_mismatch" }
-                InitialConversationRequest.Open(ConversationOpenRequest.OpenExisting(requireNotNull(existing), access,
-                    StartupConversationResume(header.assistantId, sessions.selectionRevision.value)))
-            } else try {
-                InitialConversationRequest.Open(createDraftRequest(RealmSelection(access, sessions.selectionRevision.value), null))
-            } catch (error: ConversationAssistantUnavailableException) {
-                if (access is RealmAccess.Enterprise) InitialConversationRequest.SelectEnterpriseAssistant else throw error
-            }
+                ConversationOpenRequest.OpenExisting(requireNotNull(existing), access,
+                    StartupConversationResume(header.assistantId, sessions.selectionRevision.value))
+            } else createDraftRequest(RealmSelection(access, sessions.selectionRevision.value), null)
         }
     }
 
@@ -609,22 +576,18 @@ class ConversationApplicationService internal constructor(
             ConversationDeletionReceipt(target.conversationId, assistantId, target.selection, failure)
         }
 
-    suspend fun deletionContinuation(receipt: ConversationDeletionReceipt): ConversationContinuation =
+    suspend fun deletionContinuation(receipt: ConversationDeletionReceipt): ConversationOpenRequest.NewDraft =
         continuation(receipt.selection, receipt.assistantId)
 
-    suspend fun startupContinuation(request: ConversationOpenRequest.OpenExisting): ConversationContinuation {
+    suspend fun startupContinuation(request: ConversationOpenRequest.OpenExisting): ConversationOpenRequest.NewDraft {
         val resume = requireNotNull(request.startupResume) { "conversation_explicit_open_missing" }
         return continuation(RealmSelection(request.access, resume.selectionRevision), resume.assistantId)
     }
 
-    private suspend fun continuation(selection: RealmSelection, assistantId: ConfigurationReference): ConversationContinuation =
+    private suspend fun continuation(selection: RealmSelection, assistantId: ConfigurationReference): ConversationOpenRequest.NewDraft =
         sessions.withSelectedRealmSelection(selection) {
-            settingsStore.withResolvedConfiguration(selection.access.scope, sessions.state.value) { configuration ->
-                sessions.requirePublishedSelection(selection)
-                val result = configuration.selection(ConfigurationCategory.ASSISTANT, assistantId)
-                if (!result.isAvailable) ConversationContinuation(null, "conversation_assistant_unavailable")
-                else ConversationContinuation(ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistantId))
-            }
+            // Keep the original assistant; opening the next page performs the same availability check as every Draft.
+            ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistantId)
         }
 
     suspend fun deleteForUndo(

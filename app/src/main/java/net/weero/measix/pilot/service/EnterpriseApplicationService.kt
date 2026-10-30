@@ -651,8 +651,10 @@ internal class EnterpriseApplicationService(
             val configurationError = available?.configurationError
             val displayedSync = if (access != null && configurationError != null && currentSync?.failure == null) {
                 (currentSync ?: EnterpriseSynchronizationStatus(access, syncing = false)).copy(
-                    failure = EnterpriseSynchronizationFailure(EnterpriseSynchronizationIssue.INVALID_CONFIGURATION,
-                        configurationError.userVisibleDiagnostic()),
+                    failure = EnterpriseSynchronizationFailure.from(configurationError).let {
+                        if (it.issue == EnterpriseSynchronizationIssue.ASSISTANT_REQUIRED) it
+                        else it.copy(issue = EnterpriseSynchronizationIssue.INVALID_CONFIGURATION)
+                    },
                 )
             } else currentSync
             EnterpriseOverview(

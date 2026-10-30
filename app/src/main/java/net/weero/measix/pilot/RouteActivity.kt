@@ -616,13 +616,9 @@ class RouteActivity : ComponentActivity() {
             try {
                 val notification = notificationId?.let(Uuid::parseOrNull)
                 val request = if (notification != null) {
-                    net.weero.measix.pilot.service.InitialConversationRequest.Open(
-                        ConversationOpenRequest.OpenExisting(notification, conversationQueries.captureCurrentAccess()))
+                    ConversationOpenRequest.OpenExisting(notification, conversationQueries.captureCurrentAccess())
                 } else conversations.initialRequest(readBooleanPreference("create_new_conversation_on_start", true))
-                onReady(when (request) {
-                    is net.weero.measix.pilot.service.InitialConversationRequest.Open -> Screen.Chat(request.request)
-                    net.weero.measix.pilot.service.InitialConversationRequest.SelectEnterpriseAssistant -> Screen.Enterprise
-                })
+                onReady(Screen.Chat(request))
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -638,6 +634,7 @@ class RouteActivity : ComponentActivity() {
                 title = stringResource(R.string.chat_conversation_load_failed_title),
                 message = stringResource(conversationLoadFailureMessage(error)),
                 diagnostic = error.userVisibleDiagnostic(),
+                assistantSelection = (error as? net.weero.measix.pilot.service.ConversationAssistantUnavailableException)?.selection,
                 onRetry = { retry++ },
             )
         }

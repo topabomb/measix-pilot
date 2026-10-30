@@ -106,11 +106,11 @@ internal data class ResolvedConfiguration(
     fun permitsAdditionalManagedMcp(assistantId: ConfigurationReference): Boolean =
         assistantId is ConfigurationReference.User || enterpriseSnapshotSchemaVersion == 5L
 
-    fun availableStarters(assistantId: ConfigurationReference? = null): List<net.weero.measix.pilot.data.enterprise.EnterpriseStarter> {
+    fun availableStarters(assistantId: ConfigurationReference): List<net.weero.measix.pilot.data.enterprise.EnterpriseStarter> {
         val identity = enterpriseIdentity ?: return emptyList()
         return enterpriseConfiguration?.starters.orEmpty().filter { starter ->
             val target = identity.reference(starter.assistantId)
-            starter.enabled && (assistantId == null || assistantId == target) &&
+            starter.enabled && assistantId == target &&
                 selection(ConfigurationCategory.ASSISTANT, target).isAvailable
         }.sortedWith(compareBy({ it.sortOrder }, { it.id }))
     }
@@ -326,6 +326,10 @@ internal object ConfigurationResolver {
         ) else {
             val defaults = enterprise?.defaults
             fun enterpriseReference(id: String?) = id?.let { requireNotNull(identity).reference(it) }
+            fun firstSelectableEnterpriseAssistant(): ConfigurationReference? = assistants.keys.firstOrNull {
+                it is ConfigurationReference.Enterprise &&
+                    catalog[ConfigurationKey(ConfigurationCategory.ASSISTANT, it)]?.access?.canSelect == true
+            }
             selected.copy(
                 chatModelId = selected.chatModelId ?: enterpriseReference(defaults?.chatModelId),
                 fastModelId = selected.fastModelId ?: enterpriseReference(defaults?.fastModelId),
@@ -334,7 +338,8 @@ internal object ConfigurationResolver {
                 attachmentInspectionModelId = selected.attachmentInspectionModelId ?: enterpriseReference(defaults?.attachmentInspectionModelId),
                 suggestionModelId = selected.suggestionModelId ?: enterpriseReference(defaults?.suggestionModelId),
                 compressModelId = selected.compressModelId ?: enterpriseReference(defaults?.compressModelId),
-                assistantId = selected.assistantId ?: enterpriseReference(defaults?.assistantId),
+                // Only an unset choice derives a fallback; explicit unavailable references retain their diagnostic.
+                assistantId = selected.assistantId ?: enterpriseReference(defaults?.assistantId) ?: firstSelectableEnterpriseAssistant(),
                 selectedTTSProviderId = selected.selectedTTSProviderId ?: enterpriseReference(defaults?.ttsId),
                 selectedASRProviderId = selected.selectedASRProviderId ?: enterpriseReference(defaults?.asrId),
             )

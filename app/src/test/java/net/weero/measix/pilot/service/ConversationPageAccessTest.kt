@@ -3,6 +3,9 @@ package net.weero.measix.pilot.service
 import net.weero.measix.pilot.data.enterprise.selectPersonalFixture
 import net.weero.measix.pilot.data.enterprise.selectEnterpriseFixture
 
+import android.os.Bundle
+import androidx.savedstate.serialization.decodeFromSavedState
+import androidx.savedstate.serialization.encodeToSavedState
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -49,39 +52,49 @@ import kotlin.uuid.Uuid
 class ConversationPageAccessTest {
     @get:Rule val temporary = TemporaryFolder()
 
-    @Test fun `starter opens a distinct unpersisted draft and rejects stale generation and selection`() = runTest {
+    @Test fun `saved draft ignores retired starter navigation metadata and preserves identity`() {
         val packet = exampleEnterprisePackage()
-        val sessions = sessions()
-        sessions.enrollFixture(packet)
+        val access = RealmAccess.Enterprise(packet.identity.scope, "saved-session")
+        val request = ConversationOpenRequest.NewDraft(Uuid.random(), access,
+            ConfigurationReference.Enterprise(packet.identity.authority, packet.configuration.assistants.first().id),
+            folderId = Uuid.random())
+        val saved = encodeToSavedState(ConversationOpenRequest.NewDraft.serializer(), request)
+        saved.putBundle("starter", Bundle().apply {
+            putString("definitionHash", "a".repeat(64))
+            putString("releaseId", "rel_00000000-0000-4000-8000-000000000001")
+            putLong("generation", 1)
+            putString("snapshotHash", "sha256:" + "b".repeat(64))
+        })
+        assertEquals(request, decodeFromSavedState(ConversationOpenRequest.NewDraft.serializer(), saved))
+    }
+
+    @Test fun `explicit assistant drafts remain unpersisted and reject stale selection`() = runTest {
+        val packet = exampleEnterprisePackage()
+        val sessions = sessions().apply { enrollFixture(packet) }
         val selection = requireNotNull(sessions.observeSelectedRealmSelection().first())
         val base = net.weero.measix.pilot.data.configuration.ConfigurationResolver.resolve(
             net.weero.measix.pilot.data.datastore.UserSettingsDocument.empty(), packet.identity.scope,
             net.weero.measix.pilot.data.configuration.appliedConfiguration(packet))
         val settings = mockk<SettingsStore>()
-        coEvery { settings.withResolvedConfiguration<StarterDraftRequest>(any(), any(), any()) } coAnswers {
-            thirdArg<suspend (net.weero.measix.pilot.data.configuration.ResolvedConfiguration) -> StarterDraftRequest>().invoke(base)
+        coEvery { settings.withResolvedConfiguration<ConversationOpenRequest.NewDraft>(any(), any(), any()) } coAnswers {
+            thirdArg<suspend (net.weero.measix.pilot.data.configuration.ResolvedConfiguration) -> ConversationOpenRequest.NewDraft>().invoke(base)
         }
         val repository = mockk<ConversationRepository>()
         val coordinator = mockk<ConversationCommandCoordinator>()
         val application = application(repository, coordinator, sessions, settings)
-        val definition = packet.configuration.starters.first { it.enabled }
-        val starter = base.enterpriseStarterCatalog(selection)!!.starters.first {
-            it.target.reference.id == definition.id
+        val assistant = ConfigurationReference.Enterprise(packet.identity.authority,
+            packet.configuration.starters.first { it.enabled }.assistantId)
+        val first = application.newDraftRequest(selection, assistant)
+        val second = application.newDraftRequest(selection, assistant)
+        assertEquals(assistant, first.assistantId)
+        assertEquals(selection.access, first.access)
+        assertNotEquals(first.id, second.id)
+        assertFails<ConversationAssistantUnavailableException> {
+            application.newDraftRequest(selection, assistant.copy(id = "asd_missing"))
         }
-        val first = application.newStarterDraftRequest(starter.target)
-        val second = application.newStarterDraftRequest(starter.target)
-        assertEquals(starter.prompt, first.text)
-        assertEquals(ConfigurationReference.Enterprise(packet.identity.authority, definition.assistantId),
-            first.request.assistantId)
-        assertEquals(selection.access, first.request.access)
-        assertNotEquals(first.request.id, second.request.id)
-        assertEquals(definition.definitionHash(), first.request.starter!!.definitionHash)
-        assertEquals(definition.id, first.request.starter.reference.id)
-        assertFails<IllegalStateException> { application.newStarterDraftRequest(starter.target.copy(generation = starter.target.generation + 1)) }
-        assertFails<IllegalStateException> { application.newStarterDraftRequest(starter.target.copy(reference = starter.target.reference.copy(id = "str_missing"))) }
         sessions.selectPersonalFixture()
         sessions.selectEnterpriseFixture()
-        assertFails<EnterpriseConfigurationException> { application.newStarterDraftRequest(starter.target) }
+        assertFails<EnterpriseConfigurationException> { application.newDraftRequest(selection, assistant) }
         io.mockk.confirmVerified(repository, coordinator)
     }
 
@@ -158,6 +171,16 @@ class ConversationPageAccessTest {
             service.clearDraftOpening(target, acceptedToken)
             assertNull(runtime.durable.opening)
             assertEquals("user draft" + definition.prompt, text)
+            assertFails<StarterOpeningException> {
+                service.selectDraftStarter(target, reference.copy(id = "str_missing"), null, Uuid.random()) {
+                    fail("unavailable starter accepted")
+                }
+            }
+            sessions.selectPersonalFixture()
+            sessions.selectEnterpriseFixture()
+            assertFails<EnterpriseConfigurationException> {
+                service.selectDraftStarter(target, reference, null, Uuid.random()) { fail("old selection accepted") }
+            }
             coVerify(exactly = 0) { repository.commit(any()) }
         } finally { runtimeLease.close(); appScope.cancel() }
     }
@@ -386,6 +409,7 @@ class ConversationPageAccessTest {
                 fail("An unavailable default must request an explicit choice")
             } catch (error: ConversationAssistantUnavailableException) {
                 assertEquals(reason, error.message)
+                assertEquals(selection, error.selection)
             }
             val explicit = service.newDraftRequest(selection, assistant)
             assertEquals(assistant, explicit.assistantId)
@@ -397,6 +421,7 @@ class ConversationPageAccessTest {
             fail("An explicit unavailable assistant must not fall back to the default")
         } catch (error: ConversationAssistantUnavailableException) {
             assertEquals("conversation_assistant_unavailable", error.message)
+            assertEquals(selection, error.selection)
         }
         io.mockk.confirmVerified(repository, coordinator)
     }

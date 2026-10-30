@@ -12,7 +12,6 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import net.weero.measix.pilot.ui.components.toast.rememberToasterState
 import io.mockk.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.configuration.ConfigurationReference
@@ -39,15 +38,15 @@ import org.junit.runner.RunWith
 import java.io.File
 import kotlin.uuid.Uuid
 
-/** Same real application/runtime owners and Applied fixture drive all three production entry surfaces. */
+/** Both chat entry surfaces share the real application/runtime owners and Applied fixture. */
 @RunWith(AndroidJUnit4::class)
 class StarterEntryFlowAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
-    private enum class Entry { SPACE, QUICK, CARD }
+    private enum class Entry { QUICK, CARD }
 
     @Test fun v4AndV5UseAllDraftEntriesAndReadyOnlyAppendsPrompt() {
         var fixture by mutableStateOf<Fixture?>(null)
-        var entry by mutableStateOf(Entry.SPACE)
+        var entry by mutableStateOf(Entry.QUICK)
         compose.setContent { MaterialTheme {
             CompositionLocalProvider(LocalSettings provides Settings(), LocalToaster provides rememberToasterState(),
                 LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
@@ -56,9 +55,6 @@ class StarterEntryFlowAndroidTest {
                     val select: (ConversationStarterUiModel) -> Unit = { scope.launch { current.select() } }
                     Column {
                         when (entry) {
-                            Entry.SPACE -> EnterpriseStarterPicker(current.selection,
-                                onOpenDraft = { request -> scope.launch { current.open(request) } }, onDismiss = {},
-                                queries = current.queries, conversations = current.application)
                             Entry.QUICK -> PromptPresetButton(emptyList(), listOf(current.chatStarter()), current.input,
                                 requireInputOwner = {}, opening = null, isDraft = current.isDraft,
                                 onStarterClick = select, onOpeningDetails = {})
@@ -69,25 +65,19 @@ class StarterEntryFlowAndroidTest {
             }
         } }
         for (historical in listOf(true, false)) for (surface in Entry.entries) {
-            val current = runBlocking { Fixture.create(historical, surface != Entry.SPACE) }
+            val current = runBlocking { Fixture.create(historical) }
             try {
                 compose.runOnIdle { entry = surface; fixture = current }
                 if (surface == Entry.QUICK) compose.onNodeWithContentDescription(compose.activity.getString(R.string.chat_input_presets)).performClick()
                 compose.onNodeWithText(current.definition.title).performClick()
-                if (surface == Entry.SPACE) {
-                    compose.onNodeWithText(compose.activity.getString(R.string.opening_context)).performClick()
-                    if (historical) compose.onNodeWithText(compose.activity.getString(R.string.opening_missing)).assertIsDisplayed()
-                    else compose.onNodeWithText(compose.activity.getString(R.string.opening_system)).assertIsDisplayed()
-                    compose.onNodeWithText(compose.activity.getString(R.string.enterprise_starter_open)).performClick()
-                }
                 compose.waitUntil(10_000) { current.accepted == 1 || current.failure != null }
                 current.failure?.let { throw AssertionError("$historical/$surface", it) }
                 val snapshot = current.snapshot()
-                assertEquals(if (surface == Entry.SPACE) current.definition.prompt else "Existing draft\n\n${current.definition.prompt}", current.input.textContent.text.toString())
+                assertEquals("Existing draft\n\n${current.definition.prompt}", current.input.textContent.text.toString())
                 assertTrue(snapshot.header.newConversation)
                 assertEquals(if (historical) null else current.definition, snapshot.opening?.definition)
                 assertEquals(if (historical) null else "sha256:" + "a".repeat(64), snapshot.opening?.snapshotHash)
-                assertEquals(if (surface == Entry.SPACE) emptyList<UIMessagePart>() else listOf(current.attachment), current.input.messageContent)
+                assertEquals(listOf(current.attachment), current.input.messageContent)
                 if (surface == Entry.CARD) {
                     if (historical) compose.onNodeWithText(current.definition.title).assertIsNotSelected()
                     else compose.onNodeWithText(current.definition.title).assertIsSelected()
@@ -126,7 +116,6 @@ class StarterEntryFlowAndroidTest {
         private val commands = ConversationCommandCoordinator(registry, repository, gate, locks)
         val application = ConversationApplicationService(settings, repository, mockk(), registry, commands, gate,
             mockk(), mockk(), artifacts, mockk(), mockk(), JsonInstant, mockk(), mockk(), sessions, mockk())
-        val queries = mockk<ConfigurationQueryService>()
         val input = ChatInputState()
         val attachment = UIMessagePart.Image("file:///existing-input.png")
         private var view: ConversationViewLease? = null
@@ -148,18 +137,8 @@ class StarterEntryFlowAndroidTest {
             coEvery { repository.commit(any()) } returns true
             coEvery { artifacts.publishAllUnpublished(emptyList()) } returns Unit
             coEvery { artifacts.materializeConfigurationMessages(candidate.identity.scope, emptyList(), any()) } returns emptyList()
-            val catalog = resolved.enterpriseStarterCatalog(selection)!!
-            every { queries.observeEnterpriseStarters(selection) } returns MutableStateFlow(EnterpriseStarterReadState.Available(catalog))
-            every { queries.observeAssistantCatalog() } returns MutableStateFlow(AssistantCatalogReadState.Available(
-                AssistantCatalogUiModel(selection, ConfigurationSelection(assistant, null), resolved.assistants, emptyList())))
-            coEvery { queries.requireSelection(selection) } returns Unit
-            coEvery { queries.readEnterpriseStarterDetails(any<EnterpriseStarterTarget>()) } returns definition.details(true)
         }
         fun snapshot() = registry.requireRuntime(requireNotNull(view).conversationId).durable
-        suspend fun open(request: StarterDraftRequest) = attempt {
-            view = application.initialize(request.request)
-            input.appendText(request.text)
-        }
         suspend fun select() = attempt {
             val lease = requireNotNull(view)
             val target = ConversationAssistantTarget(lease.commandTarget, assistant)
@@ -179,7 +158,7 @@ class StarterEntryFlowAndroidTest {
         }
         override fun close() { view?.close(); scope.cancel(); check(root.deleteRecursively()) }
         companion object {
-            suspend fun create(historical: Boolean, draft: Boolean): Fixture {
+            suspend fun create(historical: Boolean): Fixture {
                 val context = ApplicationProvider.getApplicationContext<Context>()
                 val root = File(context.noBackupFilesDir, "starter-ui-fixture-${Uuid.random()}").apply { check(mkdirs()) }
                 val candidate = starterDeviceCandidate(historical)
@@ -194,11 +173,9 @@ class StarterEntryFlowAndroidTest {
                 store.commit(EnterpriseManifest(ENTERPRISE_MANIFEST_SCHEMA_VERSION, EnterpriseSessionPhase.READY, session, applied, candidate.identity.scope, candidate.identity))
                 val sessions = EnterpriseSessionController(store, net.weero.measix.pilot.data.enterprise.EnterpriseDataResetStore(java.io.File(System.getProperty("java.io.tmpdir"), "enterprise-reset-${java.util.UUID.randomUUID()}"))).apply { recover() }
                 val fixture = Fixture(root, sessions, candidate, requireNotNull(sessions.readPresentation().selection))
-                if (draft) {
-                    fixture.view = fixture.application.initialize(fixture.application.newDraftRequest(fixture.selection, fixture.assistant))
-                    fixture.input.setMessageText("Existing draft")
-                    fixture.input.messageContent = listOf(fixture.attachment)
-                }
+                fixture.view = fixture.application.initialize(fixture.application.newDraftRequest(fixture.selection, fixture.assistant))
+                fixture.input.setMessageText("Existing draft")
+                fixture.input.messageContent = listOf(fixture.attachment)
                 return fixture
             }
         }

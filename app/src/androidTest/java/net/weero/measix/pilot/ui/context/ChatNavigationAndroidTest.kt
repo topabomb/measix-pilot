@@ -47,13 +47,14 @@ class ChatNavigationAndroidTest {
     private val contexts = mutableListOf<org.koin.core.KoinApplication>()
     @After fun close() { contexts.forEach { it.close() } }
 
-    @Test fun missingEnterpriseDefaultOffersSpaceSelection() {
+    @Test fun unavailableImplicitAssistantKeepsTheRouteAndDiagnostic() {
         val f = Fixture()
         coEvery { f.application.newDraftRequest(f.original, null, null) } throws
-            ConversationAssistantUnavailableException("conversation_assistant_missing")
+            ConversationAssistantUnavailableException("conversation_assistant_missing", f.original)
         f.show()
         compose.onNodeWithText("Create").performClick()
-        compose.waitUntil(5_000) { f.stack == listOf(Screen.Enterprise) }
+        compose.onNodeWithText("conversation_assistant_missing", substring = true).assertIsDisplayed()
+        compose.runOnIdle { assertEquals(listOf(Screen.History), f.stack) }
         coVerify(exactly = 1) { f.configuration.requireSelection(f.original) }
     }
 
@@ -61,7 +62,7 @@ class ChatNavigationAndroidTest {
         val f = Fixture()
         val assistant = ConfigurationReference.Enterprise(f.authority, "asd_revoked")
         coEvery { f.application.newDraftRequest(f.original, assistant, null) } throws
-            ConversationAssistantUnavailableException("conversation_assistant_unavailable")
+            ConversationAssistantUnavailableException("conversation_assistant_unavailable", f.original)
         f.show(assistant)
         compose.onNodeWithText("Create").performClick()
         compose.onNodeWithText("conversation_assistant_unavailable", substring = true).assertIsDisplayed()

@@ -19,8 +19,6 @@ import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationOpenRequest
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConfigurationQueryService
-import net.weero.measix.pilot.service.ConversationAssistantUnavailableException
-import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.utils.logDiagnosticFailure
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.compose.koinInject
@@ -59,15 +57,7 @@ fun rememberChatNavigation(
                 if (original == null) toaster.show(failure, type = ToastType.Error) else scope.launch {
                     if (navigator.currentEntry !== sourceEntry) return@launch
                     try {
-                        val request = try {
-                            application.newDraftRequest(original, assistant, draftFolder)
-                        } catch (error: ConversationAssistantUnavailableException) {
-                            if (assistant != null || original.access !is RealmAccess.Enterprise) throw error
-                            configuration.requireSelection(original)
-                            if (navigator.currentEntry !== sourceEntry) return@launch
-                            navigator.clearAndNavigate(Screen.Enterprise)
-                            return@launch
-                        }
+                        val request = application.newDraftRequest(original, assistant, draftFolder)
                         configuration.requireSelection(original)
                         if (navigator.currentEntry !== sourceEntry) return@launch
                         navigator.clearAndNavigate(Screen.Chat(request, text, files.map(Uri::toString)))

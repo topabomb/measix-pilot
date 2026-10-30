@@ -1,6 +1,7 @@
 package net.weero.measix.pilot.ui.pages.enterprise
 
 import android.content.ClipData
+import net.weero.measix.pilot.ui.components.ui.Tooltip
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
@@ -14,8 +15,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.awaitCancellation
-import me.rerere.hugeicons.stroke.MessageAdd01
-import net.weero.measix.pilot.ui.components.ui.Tooltip
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
@@ -108,14 +107,8 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Date
 import java.util.Locale
-import net.weero.measix.pilot.utils.base64Encode
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.utils.ImageUtils
-
-private data class StarterPresentation(
-    val selection: RealmSelection,
-    val portal: PortalPresentation? = null,
-)
 
 private enum class EnterpriseConfigurationDetailsSection { DEFAULTS, POLICIES }
 
@@ -125,6 +118,7 @@ private fun synchronizationText(issue: EnterpriseSynchronizationIssue): Int = wh
     EnterpriseSynchronizationIssue.UNSUPPORTED_VERSION -> R.string.enterprise_snapshot_unsupported
     EnterpriseSynchronizationIssue.NETWORK -> R.string.enterprise_sync_network_failed
     EnterpriseSynchronizationIssue.INVALID_CONFIGURATION -> R.string.enterprise_snapshot_invalid
+    EnterpriseSynchronizationIssue.ASSISTANT_REQUIRED -> R.string.enterprise_assistant_required
     EnterpriseSynchronizationIssue.FAILED -> R.string.enterprise_sync_failed
 }
 
@@ -165,19 +159,18 @@ private fun EnterpriseSynchronizationNotice(failure: EnterpriseSynchronizationFa
 
 @Composable
 internal fun EnterpriseSpaceButton(
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
     vm: EnterpriseVM = koinViewModel(),
 ) {
     val state by vm.overview.collectAsStateWithLifecycle()
-    val nav = LocalNavController.current
     val access = state?.selection?.access
     val label = if (access is RealmAccess.Enterprise) {
         state?.enterpriseName ?: stringResource(R.string.enterprise_space)
     } else stringResource(R.string.enterprise_switch_space)
-    val open = { nav.navigate(Screen.Enterprise, launchSingleTop = true) }
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 40.dp) {
         Surface(
-            onClick = open,
+            onClick = onClick,
             modifier = modifier,
             shape = MaterialTheme.shapes.medium,
             color = Color.Transparent,
@@ -236,8 +229,6 @@ internal fun EnterpriseSpaceSettingsCard(modifier: Modifier = Modifier, vm: Ente
 internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinViewModel()) {
     val state by vm.overview.collectAsStateWithLifecycle()
     val queries = org.koin.compose.koinInject<net.weero.measix.pilot.service.ConfigurationQueryService>()
-    val webDavConfiguration by remember(queries) { queries.observeWebDavConfiguration() }
-        .collectAsStateWithLifecycle(initialValue = net.weero.measix.pilot.service.WebDavConfigurationReadState.Loading)
     val working by vm.busy.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
@@ -288,12 +279,6 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
         mutableStateOf<EnterpriseConfigurationResourceKind?>(null)
     }
     var configurationResourceKey by rememberSaveable { mutableStateOf<String?>(null) }
-    var starterPicker by remember { mutableStateOf<StarterPresentation?>(null) }
-    LaunchedEffect(state?.selection, portal) {
-        starterPicker?.let {
-            if (it.selection != state?.selection || (it.portal != null && it.portal != portal)) starterPicker = null
-        }
-    }
     LaunchedEffect(configurationDetails) {
         if (configurationDetails == null) {
             configurationDetailsOpen = false
@@ -336,11 +321,10 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     }
     val busy = working || state?.switching == true || state?.phase == EnterpriseSessionPhase.CLOSING
     val inEnterprise = state?.selection?.access is RealmAccess.Enterprise
-    val personalChatNavigation = if (!inEnterprise) net.weero.measix.pilot.ui.context.rememberChatNavigation(nav, state?.selection) else null
     val ready = state?.phase in setOf(EnterpriseSessionPhase.READY, EnterpriseSessionPhase.OFFLINE)
-    val openChat = { nav.clearAndNavigate(Screen.Startup()) }
+    val openChat = { nav.leaveSpace(selectionChanged = true) }
     val leavePage = {
-        if (initialSelectionCaptured && state?.selection != initialSelection) openChat() else nav.popBackStack()
+        nav.leaveSpace(selectionChanged = initialSelectionCaptured && state?.selection != initialSelection)
     }
     val closeConfigurationDetailsLayer = {
         when {
@@ -354,7 +338,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     BackHandler(enabled = portal == null && usageOpen) { usageOpen = false }
     BackHandler(enabled = portal == null && configurationDetailsOpen) { closeConfigurationDetailsLayer() }
     BackHandler(enabled = portal == null && !configurationDetailsOpen && !usageOpen &&
-        initialSelectionCaptured && state?.selection != initialSelection) { leavePage() }
+        (!nav.canGoBack || initialSelectionCaptured && state?.selection != initialSelection)) { leavePage() }
     LaunchedEffect(openUsage, state?.selection) {
         if (openUsage && !usageDestinationOpened && state?.selection?.access is RealmAccess.Enterprise) {
             usageDestinationOpened = true
@@ -415,27 +399,6 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                         }
                         DropdownMenu(expanded = pageMenuOpen, onDismissRequest = { pageMenuOpen = false }) {
                             DropdownMenuItem(
-                                text = { Text(stringResource(R.string.webdav_file_manager)) },
-                                enabled = !busy && (webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available)?.current != null,
-                                onClick = {
-                                    val current = webDavConfiguration as? net.weero.measix.pilot.service.WebDavConfigurationReadState.Available
-                                    if (current?.current != null) {
-                                        pageMenuOpen = false
-                                        nav.navigate(Screen.WebDavFiles(selection = current.selection))
-                                    }
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.settings)) },
-                                enabled = !busy,
-                                onClick = { pageMenuOpen = false; nav.navigate(Screen.Setting) },
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(if (inEnterprise) R.string.enterprise_all_chat_history else R.string.history_page_title)) },
-                                enabled = !busy,
-                                onClick = { pageMenuOpen = false; nav.navigate(Screen.History) },
-                            )
-                            DropdownMenuItem(
                                 text = { Text(stringResource(R.string.enterprise_budget_title)) },
                                 enabled = state?.access != null && !busy,
                                 onClick = { pageMenuOpen = false; usageOpen = true },
@@ -471,12 +434,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
     }) { padding ->
         val approved = portal
         if (approved != null) {
-            Column(Modifier.fillMaxSize().padding(padding)) {
-                TextButton(onClick = {
-                    starterPicker = StarterPresentation(approved.selection, approved)
-                }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.enterprise_start_conversation)) }
-                key(approved.id) { EnterprisePortal(approved, vm, Modifier.weight(1f).fillMaxWidth()) }
-            }
+            key(approved.id) { EnterprisePortal(approved, vm, Modifier.fillMaxSize().padding(padding)) }
         } else if (usageOpen) {
             Column(
                 Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
@@ -487,8 +445,16 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     EnterpriseBudgetSection(
                         budgets,
                         vm::refreshBudgets,
-                        onDetails = { if (inEnterprise) vm.showUsagePortal() else vm.switchSpace(openChat) },
-                        detailsLabel = if (inEnterprise) R.string.enterprise_budget_details else R.string.enterprise_switch_enterprise,
+                        onDetails = {
+                            if (inEnterprise) vm.showUsagePortal()
+                            else if (state?.generation == null) vm.synchronize()
+                            else vm.switchSpace(openChat)
+                        },
+                        detailsLabel = when {
+                            inEnterprise -> R.string.enterprise_budget_details
+                            state?.generation == null -> R.string.enterprise_sync
+                            else -> R.string.enterprise_switch_enterprise
+                        },
                     )
                     error?.let { failure ->
                         Text(stringResource(failure.resource, *failure.arguments.toTypedArray()),
@@ -531,17 +497,6 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     leadingContent = {
                         if (inEnterprise) OrchelmLogo(Modifier.size(20.dp), stringResource(R.string.enterprise_space))
                         else Icon(HugeIcons.User, contentDescription = null, modifier = Modifier.size(20.dp))
-                    },
-                    trailingContent = {
-                        Tooltip(tooltip = { Text(stringResource(R.string.enterprise_start_conversation)) }) {
-                            IconButton(onClick = {
-                                if (inEnterprise) state?.selection?.let { starterPicker = StarterPresentation(it) }
-                                else personalChatNavigation?.newChat()
-                            }, enabled = !busy && state?.selection != null && (!inEnterprise || ready),
-                                modifier = Modifier.testTag("space-start-conversation")) {
-                                Icon(HugeIcons.MessageAdd01, stringResource(R.string.enterprise_start_conversation))
-                            }
-                        }
                     },
                 ) {
                     if (inEnterprise) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -658,7 +613,7 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                             }
                         }
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (!inEnterprise && state?.canEnterEnterprise == true) {
+                            if (!inEnterprise && state?.canEnterEnterprise == true && state?.generation != null) {
                                 Button(onClick = { vm.switchSpace(openChat) }, enabled = !busy,
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
                                     Text(stringResource(R.string.enterprise_switch_enterprise))
@@ -782,16 +737,6 @@ internal fun EnterprisePage(openUsage: Boolean = false, vm: EnterpriseVM = koinV
                     }
                 }
             }
-        }
-    }
-    starterPicker?.let { original ->
-        key(original) {
-            EnterpriseStarterPicker(original.selection,
-                onOpenDraft = { request ->
-                    original.portal?.let(vm::dismissPortal)
-                    starterPicker = null
-                    nav.clearAndNavigate(Screen.Chat(request.request, text = request.text.base64Encode()))
-                }, onDismiss = { starterPicker = null })
         }
     }
     if (paste) AlertDialog(onDismissRequest = { paste = false; enrollment = "" },
@@ -1182,8 +1127,10 @@ private fun EnterpriseConfigurationResourceDetails(
             if (expanded) {
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                 failure?.let { net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it) }
-                starter?.let { detail ->
-                    EnterpriseStarterDefinitionContent(detail.prompt, target) { queries.readEnterpriseStarterDetails(target) }
+                if (!loading && failure == null) starter?.let { detail ->
+                    Text(stringResource(R.string.enterprise_starter_preview), style = MaterialTheme.typography.titleMedium)
+                    SelectionContainer { Text(detail.prompt) }
+                    net.weero.measix.pilot.ui.components.ai.StarterOpeningBody(detail)
                 }
                 if (!loading && failure == null && (kind == EnterpriseConfigurationResourceKind.TTS || kind == EnterpriseConfigurationResourceKind.ASR)) {
                     ConfigurationValueRow(stringResource(R.string.enterprise_configuration_fact_prompt), prompt ?: stringResource(R.string.enterprise_configuration_not_available))

@@ -37,31 +37,8 @@ internal fun starterOpeningIssueText(issue: StarterOpeningIssue): String = strin
     StarterOpeningIssue.ASSISTANT_CHANGED -> R.string.opening_not_applicable
 })
 
-/** The full enterprise text is queried only after the user expands this group. */
 @Composable
-internal fun StarterOpeningContext(key: Any, load: suspend () -> StarterOpeningDetailUiModel) {
-    var expanded by remember(key) { mutableStateOf(false) }
-    var detail by remember(key) { mutableStateOf<StarterOpeningDetailUiModel?>(null) }
-    var failure by remember(key) { mutableStateOf<String?>(null) }
-    var readRevision by remember(key) { mutableIntStateOf(0) }
-    LaunchedEffect(key, expanded, readRevision) {
-        if (expanded && detail == null) try { failure = null; detail = load() }
-        catch (cancelled: CancellationException) { throw cancelled }
-        catch (error: Exception) { failure = openingFailure(error) }
-    }
-    TextButton(onClick = { expanded = !expanded }) { Text(stringResource(R.string.opening_context)) }
-    if (expanded) {
-        failure?.let { diagnostic ->
-                    ErrorCard(remember(diagnostic) { ChatError(detail = diagnostic, retention = ChatErrorRetention.UNTIL_DISMISSED) },
-                        onRetry = { readRevision++ })
-                }
-        if (detail != null) OpeningBody(requireNotNull(detail))
-        else if (failure == null) LinearProgressIndicator(Modifier.fillMaxWidth())
-    }
-}
-
-@Composable
-private fun OpeningBody(detail: StarterOpeningDetailUiModel) {
+internal fun StarterOpeningBody(detail: StarterOpeningDetailUiModel) {
     detail.issue?.let { Text(starterOpeningIssueText(it), color = MaterialTheme.colorScheme.error) }
     if (!detail.systemApplicable) Text(stringResource(R.string.opening_not_applicable), style = MaterialTheme.typography.bodySmall)
     detail.systemPrompt?.let {
@@ -120,7 +97,7 @@ internal fun StarterOpeningDetails(
                     SelectionContainer { Text(value.prompt) }
                     value.issue?.let { Text(starterOpeningIssueText(it), color = MaterialTheme.colorScheme.error) }
                     TextButton(onClick = { expanded = !expanded }) { Text(stringResource(R.string.opening_context)) }
-                    if (expanded) OpeningBody(value.copy(issue = null))
+                    if (expanded) StarterOpeningBody(value.copy(issue = null))
                     if (value.canRefresh) TextButton(enabled = !shownBusy, onClick = {
                         if (!busy) {
                             busy = true

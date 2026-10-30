@@ -43,7 +43,7 @@ class EnterpriseEmptyAccountNavigationAndroidTest {
     @get:Rule val compose = createEmptyComposeRule()
 
     @Test
-    fun emptyAccountCanReturnFromEnrollmentAndCreateInsideAndOutsideChatWithoutDefaultAssistant() {
+    fun emptyAccountCanReturnFromEnrollmentWithoutSpaceCreationAndUseOptionalChatStarter() {
         val arguments = InstrumentationRegistry.getArguments()
         assumeTrue("Use a dedicated unbound Debug AVD and enterpriseEmptyAccountLive=true",
             arguments.getString("enterpriseEmptyAccountLive") == "true")
@@ -94,10 +94,8 @@ class EnterpriseEmptyAccountNavigationAndroidTest {
             }
         }
         fun openStarter() {
-            compose.onNodeWithTag("space-start-conversation").assertIsEnabled().performClick()
             compose.waitUntil(30_000) { compose.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty() }
-            compose.onNodeWithText(title).performClick()
-            compose.onNodeWithText(text(R.string.enterprise_starter_open)).performClick()
+            compose.onAllNodesWithText(title)[0].performClick()
             compose.waitUntil(30_000) {
                 compose.onAllNodes(hasTestTag("chat_input") and hasText(prompt)).fetchSemanticsNodes().size == 1
             }
@@ -109,7 +107,7 @@ class EnterpriseEmptyAccountNavigationAndroidTest {
             compose.waitUntil(30_000) { compose.onAllNodesWithTag("chat_input").fetchSemanticsNodes().size == 1 }
             openDrawer()
             compose.onNodeWithText(text(R.string.enterprise_switch_space)).performClick()
-            compose.onNodeWithTag("space-start-conversation").assertIsDisplayed()
+            compose.onNodeWithTag("space-start-conversation").assertDoesNotExist()
             val material = buildJsonObject {
                 put("formatVersion", 1); put("kind", "PLATFORM_ENROLLMENT")
                 put("platformUrl", server.origin); put("code", "empty-account-dedicated-fixture")
@@ -123,17 +121,15 @@ class EnterpriseEmptyAccountNavigationAndroidTest {
             val access = selection.access as RealmAccess.Enterprise
             fixtureAccess = access
             assertEquals(server.deploymentId, access.scope.authority.deploymentId)
-            assertNull(awaitUi(30_000) { queries.read(access).selections.assistantId })
+            assertEquals(me.rerere.common.configuration.ConfigurationReference.Enterprise(access.scope.authority,
+                starter.getValue("assistantDefinitionId").jsonPrimitive.content),
+                awaitUi(30_000) { queries.read(access).selections.assistantId })
             assertEquals(1, server.enrollments.get())
             // Return as soon as the real enrollment command completes; no restart or extra selection.
-            val enrollmentPage = compose.onNodeWithTag("space-start-conversation").fetchSemanticsNode().id
             compose.onNodeWithContentDescription(text(R.string.back)).performClick()
-            compose.waitUntil(30_000) {
-                compose.onAllNodesWithTag("space-start-conversation").fetchSemanticsNodes().singleOrNull()?.id
-                    ?.let { it != enrollmentPage } == true &&
-                    compose.onAllNodesWithTag("chat_input").fetchSemanticsNodes().isEmpty()
-            }
-            compose.onNodeWithTag("space-start-conversation").assertIsEnabled()
+            compose.onNodeWithTag("space-start-conversation").assertDoesNotExist()
+            compose.waitUntil(30_000) { compose.onAllNodesWithTag("chat_input").fetchSemanticsNodes().size == 1 }
+            assertTrue(server.modelRequests.isEmpty())
             openStarter()
             assertNull(awaitUi(30_000) { queries.read(access).storedSelections.assistantId })
             assertTrue(awaitUi(30_000) { query.recentConversations(access,
@@ -179,7 +175,10 @@ class EnterpriseEmptyAccountNavigationAndroidTest {
             compose.onNodeWithText(historyTitle).assertIsDisplayed()
             val enterpriseName = awaitUi(30_000) { requireNotNull(queries.read(access).enterpriseIdentity).enterpriseName }
             compose.onNodeWithText(enterpriseName).performClick()
-            compose.waitUntil(30_000) { compose.onAllNodesWithTag("space-start-conversation").fetchSemanticsNodes().size == 1 }
+            compose.waitUntil(30_000) { compose.onAllNodesWithTag("enterprise-page-menu").fetchSemanticsNodes().size == 1 }
+            compose.onNodeWithTag("space-start-conversation").assertDoesNotExist()
+            activity.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            compose.waitUntil(30_000) { compose.onAllNodesWithTag("chat_input").fetchSemanticsNodes().size == 1 }
             openStarter()
             assertNull(awaitUi(30_000) { queries.read(access).storedSelections.assistantId })
             assertEquals(listOf(row.id), awaitUi(30_000) { query.recentConversations(access, saved.header.assistantId, 10).map { it.id } })
@@ -197,13 +196,33 @@ class EnterpriseEmptyAccountNavigationAndroidTest {
             throw error
         } finally {
             val primary = failure
+            val cleanupStarted = android.os.SystemClock.elapsedRealtime()
+            val cleanupStages = mutableListOf<String>()
+            fun recordCleanup(stage: String) {
+                cleanupStages += "${android.os.SystemClock.elapsedRealtime() - cleanupStarted}ms $stage"
+            }
+            suspend fun <T> cleanupStage(name: String, action: suspend () -> T): T {
+                recordCleanup("$name start")
+                var outcome = "complete"
+                try { return action() }
+                catch (error: Throwable) {
+                    outcome = "failed ${error.javaClass.simpleName}"
+                    throw error
+                } finally { recordCleanup("$name end $outcome") }
+            }
             fun cleanup(action: () -> Unit) {
                 try { action() } catch (error: Throwable) {
                     if (failure == null) failure = error else failure!!.addSuppressed(error)
                 }
             }
-            cleanup { activity?.close() }
-            cleanup { view?.close() }
+            cleanup {
+                recordCleanup("activity-close start")
+                try { activity?.close() } finally { recordCleanup("activity-close end") }
+            }
+            cleanup {
+                recordCleanup("view-close start")
+                try { view?.close() } finally { recordCleanup("view-close end") }
+            }
             cleanup { runBlocking { withTimeout(60_000) {
                 val current = (sessions.state.value as EnterpriseState.Available).manifest.session
                 if (current != null) {
@@ -211,16 +230,23 @@ class EnterpriseEmptyAccountNavigationAndroidTest {
                     check(current.identity.authority.deploymentId == server.deploymentId &&
                         current.id == fixture.getValue("enrollment-response").jsonObject.getValue("sessionId").jsonPrimitive.content &&
                         (fixtureAccess == null || fixtureAccess == access)) { "refuse_foreign_session_cleanup" }
-                    val selected = requireNotNull(sessions.readPresentation().selection)
-                    if (selected.access != access) enterprise.switchRealm(RealmSwitchRequest(selected, access))
-                    createdId?.let { id ->
-                        val page = conversations.initialize(ConversationOpenRequest.OpenExisting(id, access))
-                        try { conversations.delete(page.commandTarget) } finally { page.close() }
+                    val selected = cleanupStage("read-presentation") { requireNotNull(sessions.readPresentation().selection) }
+                    if (selected.access != access) cleanupStage("switch-realm") {
+                        enterprise.switchRealm(RealmSwitchRequest(selected, access))
                     }
-                    val result = enterprise.exit(requireNotNull(enterprise.captureExitRequest()))
+                    createdId?.let { id ->
+                        val page = cleanupStage("open-conversation") {
+                            conversations.initialize(ConversationOpenRequest.OpenExisting(id, access))
+                        }
+                        try { cleanupStage("delete-conversation") { conversations.delete(page.commandTarget) } }
+                        finally { cleanupStage("close-conversation") { page.close() } }
+                    }
+                    val request = cleanupStage("capture-exit") { requireNotNull(enterprise.captureExitRequest()) }
+                    val result = cleanupStage("exit-enterprise") { enterprise.exit(request) }
                     check(result.maintenanceFailure == null && result.remoteLogoutFailure == null) { "empty_account_exit_cleanup_failed" }
                 }
             } } }
+            cleanup { File(evidence, "cleanup-stages.txt").writeText(cleanupStages.joinToString("\n")) }
             cleanup { context.writeBooleanPreference("create_new_conversation_on_start", priorNewChat) }
             cleanup { File(evidence, "request-diagnostics.txt").writeText(server.diagnostics()) }
             cleanup { server.close() }

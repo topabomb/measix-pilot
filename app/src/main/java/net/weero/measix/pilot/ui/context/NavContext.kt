@@ -6,6 +6,7 @@ import net.weero.measix.pilot.Screen
 
 class Navigator(private val backStack: MutableList<NavKey>) {
     internal val currentEntry: NavKey? get() = backStack.lastOrNull()
+    internal val canGoBack: Boolean get() = backStack.size > 1
 
     fun isCurrentConversation(request: net.weero.measix.pilot.service.ConversationOpenRequest): Boolean =
         (backStack.lastOrNull() as? Screen.Chat)?.request == request
@@ -13,12 +14,12 @@ class Navigator(private val backStack: MutableList<NavKey>) {
     /** Replace only deleted chat entries from the original principal; history remains in place. */
     internal fun replaceDeletedConversation(
         receipt: net.weero.measix.pilot.service.ConversationDeletionReceipt,
-        continuation: net.weero.measix.pilot.service.ConversationContinuation,
+        continuation: net.weero.measix.pilot.service.ConversationOpenRequest.NewDraft,
     ) {
         backStack.indices.forEach { index ->
             val chat = backStack[index] as? Screen.Chat ?: return@forEach
             if (chat.request.id == receipt.conversationId && chat.request.access == receipt.selection.access) {
-                backStack[index] = continuation.request?.let { Screen.Chat(it) } ?: Screen.Enterprise
+                backStack[index] = Screen.Chat(continuation)
             }
         }
     }
@@ -40,6 +41,17 @@ class Navigator(private val backStack: MutableList<NavKey>) {
     fun clearAndNavigate(screen: Screen) {
         backStack.clear()
         backStack.add(screen)
+    }
+
+    /** A realm change invalidates old conversation entries, but the general settings page is safe to return to. */
+    internal fun leaveSpace(selectionChanged: Boolean) {
+        if (!selectionChanged && backStack.size > 1) {
+            popBackStack()
+            return
+        }
+        val returnToSettings = backStack.getOrNull(backStack.lastIndex - 1) == Screen.Setting
+        clearAndNavigate(Screen.Startup())
+        if (returnToSettings) navigate(Screen.Setting)
     }
 
     fun popBackStack() {

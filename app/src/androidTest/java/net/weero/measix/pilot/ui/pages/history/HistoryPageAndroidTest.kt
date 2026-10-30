@@ -59,8 +59,7 @@ class HistoryPageAndroidTest {
         every { token.selection } returns selection
         every { token.deletion } returns ConversationDeletionReceipt(first.id, assistant, selection)
         coEvery { application.deleteForUndo(any(), preview) } coAnswers { rows.value = Result.success(listOf(second)); token }
-        coEvery { application.deletionContinuation(any()) } returns ConversationContinuation(
-            ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant))
+        coEvery { application.deletionContinuation(any()) } returns ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant)
         val pinEntered = AtomicBoolean(false)
         val releasePin = CompletableDeferred<Unit>()
         coEvery { application.togglePin(any()) } coAnswers { pinEntered.set(true); releasePin.await() }

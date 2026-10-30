@@ -6,6 +6,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -110,42 +111,49 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
-    fun personalTitleActionExplicitlyCreatesADraftInItsRenderedSelection() {
+    fun personalSpaceReturnsWithoutCreatingAConversation() {
         val selection = RealmSelection(RealmAccess.Personal, 2)
-        val fixture = Fixture(overview().copy(selection = selection))
-        val request = ConversationOpenRequest.NewDraft(Uuid.random(), RealmAccess.Personal, ConfigurationReference.random())
-        coEvery { fixture.conversations.newDraftRequest(selection, null) } returns request
+        val fixture = Fixture(overview().copy(selection = selection), mutableListOf(Screen.Setting, Screen.Enterprise))
         fixture.show()
-        compose.onNodeWithTag("space-start-conversation").assertIsDisplayed().performClick()
-        compose.waitUntil(5_000) { fixture.backStack.lastOrNull() == Screen.Chat(request) }
-        coVerify(exactly = 1) { fixture.conversations.newDraftRequest(selection, null) }
-        coVerify(exactly = 0) { fixture.conversations.initialRequest(any()) }
+        compose.onNodeWithTag("space-start-conversation").assertDoesNotExist()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Setting), fixture.backStack) }
     }
 
-    @Test fun enterpriseNewChatClearsPreviousChatsSettingsAndSpaceEntries() {
+    @Test
+    fun enrollmentFromSettingsReturnsToSettingsAndReplacesTheOldChat() {
         val old = Screen.Chat(ConversationOpenRequest.NewDraft(Uuid.random(), RealmAccess.Personal, ConfigurationReference.random()))
-        val fixture = Fixture(overview(), mutableListOf(old, Screen.Setting, Screen.Enterprise, Screen.EnterpriseUsage))
-        val selection = requireNotNull(fixture.state.value.selection)
-        val assistant = net.weero.measix.pilot.data.model.Assistant(
-            id = ConfigurationReference.Enterprise((selection.access.scope as ConfigurationScope.Enterprise).authority, "asd_available"),
-            name = "Entry assistant")
-        every { fixture.configurationQueries.observeEnterpriseStarters(selection) } returns MutableStateFlow(
-            EnterpriseStarterReadState.Available(EnterpriseStarterCatalogUiModel("Enterprise", emptyList())))
-        every { fixture.configurationQueries.observeAssistantCatalog() } returns MutableStateFlow(AssistantCatalogReadState.Available(
-            AssistantCatalogUiModel(selection, net.weero.measix.pilot.data.configuration.ConfigurationSelection(null, null),
-                mapOf(assistant.id to assistant), emptyList())))
-        val request = ConversationOpenRequest.NewDraft(Uuid.random(), selection.access, assistant.id)
-        coEvery { fixture.conversations.selectAssistantRequest(selection, assistant.id, true) } returns request
+        val fixture = Fixture(overview(access = null), mutableListOf(old, Screen.Setting, Screen.Enterprise))
         fixture.show()
-        compose.onNodeWithTag("space-start-conversation").performClick()
-        compose.onNodeWithContentDescription(text(R.string.safe_mode_switch_assistant)).performClick()
-        compose.onNodeWithText(assistant.name).performClick()
-        compose.waitUntil(5_000) { fixture.backStack.lastOrNull() is Screen.Chat }
+        compose.onNodeWithTag("space-start-conversation").assertDoesNotExist()
+        fixture.state.value = overview(revision = 2)
+        compose.waitUntil(5_000) { fixture.vm.overview.value == fixture.state.value }
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
         compose.runOnIdle {
-            assertEquals(listOf(Screen.Chat(request, text = "")), fixture.backStack)
+            assertEquals(listOf(Screen.Startup(), Screen.Setting), fixture.backStack)
             Navigator(fixture.backStack).popBackStack()
-            assertEquals(listOf(Screen.Chat(request, text = "")), fixture.backStack)
+            assertEquals(listOf(Screen.Startup()), fixture.backStack)
         }
+    }
+
+    @Test
+    fun firstEnrollmentWithoutAnAssistantKeepsSyncAndBackButDoesNotOfferEnterpriseChat() {
+        val pending = overview().copy(
+            selection = RealmSelection(RealmAccess.Personal, 2),
+            phase = EnterpriseSessionPhase.CONFIGURATION_PENDING,
+            generation = null,
+            configurationDetails = null,
+            synchronization = EnterpriseSynchronizationStatus(requireNotNull(overview().access), false,
+                EnterpriseSynchronizationFailure(EnterpriseSynchronizationIssue.ASSISTANT_REQUIRED, "enterprise_assistant_required")),
+        )
+        val fixture = Fixture(pending, mutableListOf(Screen.Setting, Screen.Enterprise))
+        fixture.show()
+        compose.onNodeWithText(text(R.string.enterprise_assistant_required)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.enterprise_switch_enterprise)).assertDoesNotExist()
+        compose.onNodeWithTag("space-start-conversation").assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.enterprise_sync)).performScrollTo().assertIsEnabled()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Setting), fixture.backStack) }
     }
 
     @Test
@@ -392,6 +400,9 @@ class EnterprisePageAndroidTest {
         compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertDoesNotExist()
         compose.onNodeWithText(text(R.string.enterprise_reset_title)).assertDoesNotExist()
         compose.onNodeWithTag("enterprise-page-menu").performClick()
+        compose.onNodeWithText(text(R.string.webdav_file_manager)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.settings)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.history_page_title)).assertDoesNotExist()
         capturePage("enterprise-space-menu.png")
         compose.onNodeWithText(text(R.string.enterprise_budget_title)).performClick()
         compose.onNodeWithText(text(R.string.enterprise_budget_capability_model)).assertIsDisplayed()
@@ -409,7 +420,7 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
-    fun disabledStarterDefinitionRemainsReadableWithoutOfferingADraftAction() {
+    fun disabledStarterDefinitionLoadsOncePerExpansionAndRetriesTheOriginalRead() {
         val initial = overview().copy(selection = RealmSelection(RealmAccess.Personal, 2))
         val target = EnterpriseResourceDetailTarget(requireNotNull(initial.selection), requireNotNull(initial.access), 1,
             ConfigurationReference.Enterprise(initial.access!!.scope.authority, "starter_disabled"), EnterpriseConfigurationResourceKind.STARTER)
@@ -418,20 +429,30 @@ class EnterprisePageAndroidTest {
             resources = listOf(EnterpriseConfigurationResourceGroupUiModel(EnterpriseConfigurationResourceKind.STARTER, listOf(resource))))))
         val detail = StarterOpeningDetailUiModel(resource.displayName, "Review the inspection report.", "Published opening system.",
             listOf(StarterContextUiModel("Published opening background.")), false, true)
-        coEvery { fixture.configurationQueries.readEnterpriseStarterDetails(target) } returns detail
+        val reads = AtomicInteger()
+        coEvery { fixture.configurationQueries.readEnterpriseStarterDetails(target) } coAnswers {
+            if (reads.incrementAndGet() == 1) throw java.io.IOException("starter_definition_read_failed")
+            detail
+        }
         fixture.show()
         click(R.string.enterprise_configuration_details_open)
         click(R.string.enterprise_configuration_resource_starters)
         compose.onNodeWithText(resource.displayName).performClick()
         compose.onNodeWithText(text(R.string.enterprise_configuration_disabled)).assertIsDisplayed()
+        coVerify(exactly = 0) { fixture.configurationQueries.readEnterpriseStarterDetails(target) }
+        click(R.string.enterprise_resource_definition)
+        compose.onNodeWithText(detail.systemPrompt!!).assertDoesNotExist()
+        click(R.string.chat_conversation_diagnostics)
+        compose.onNodeWithText("IOException: starter_definition_read_failed").assertIsDisplayed()
+        compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
+        click(R.string.enterprise_resource_definition)
         click(R.string.enterprise_resource_definition)
         compose.onNodeWithText(detail.prompt).performScrollTo().assertIsDisplayed()
         compose.onAllNodesWithText(resource.displayName).assertCountEquals(1)
-        compose.onNodeWithText(text(R.string.enterprise_starters_description)).assertDoesNotExist()
-        compose.onNodeWithText(text(R.string.enterprise_starter_open)).assertDoesNotExist()
-        click(R.string.opening_context)
+        compose.onNodeWithText(text(R.string.opening_context)).assertDoesNotExist()
         compose.onNodeWithText("Published opening system.").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Published opening background.").performScrollTo().assertIsDisplayed()
+        coVerify(exactly = 2) { fixture.configurationQueries.readEnterpriseStarterDetails(target) }
         capturePage("enterprise-disabled-starter-definition.png")
         compose.onNodeWithContentDescription(text(R.string.back)).performClick()
         compose.onNodeWithText(resource.displayName).assertIsDisplayed()
@@ -611,24 +632,7 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
-    fun historyRemainsReachableWithoutAnAppliedConfiguration() {
-        val fixture = Fixture(overview().copy(
-            phase = EnterpriseSessionPhase.CONFIGURATION_PENDING,
-            generation = null,
-            configurationDetails = null,
-            synchronization = EnterpriseSynchronizationStatus(access(), false,
-                EnterpriseSynchronizationFailure(EnterpriseSynchronizationIssue.INVALID_CONFIGURATION,
-                    "enterprise_configuration_unreadable")),
-        ))
-        fixture.show()
-        compose.onNodeWithTag("enterprise-page-menu").performClick()
-        compose.onNodeWithText(text(R.string.enterprise_all_chat_history)).assertIsDisplayed().performClick()
-        compose.runOnIdle { assertEquals(listOf(Screen.Enterprise, Screen.History), fixture.backStack) }
-        coVerify(exactly = 0) { fixture.service.synchronize(any()) }
-    }
-
-    @Test
-    fun unsupportedConfigurationAllowsEnteringTheEnterpriseSpaceAndShowsVersionDetails() {
+    fun firstUnsupportedConfigurationRequiresSynchronizationAndShowsVersionDetails() {
         val diagnostic = "enterprise_configuration_version_unsupported: server [6], client [4, 5]"
         val personal = RealmSelection(RealmAccess.Personal, 2)
         val enterprise = RealmSelection(access(), 3)
@@ -648,8 +652,9 @@ class EnterprisePageAndroidTest {
         compose.onNodeWithText(diagnostic).assertIsDisplayed()
         capturePage("enterprise-sync-version-diagnostic.png")
         compose.onNodeWithContentDescription(text(R.string.update_card_close)).performClick()
-        click(R.string.enterprise_switch_enterprise)
-        coVerify(exactly = 1) { fixture.service.switchRealm(RealmSwitchRequest(personal, access())) }
+        compose.onNodeWithText(text(R.string.enterprise_switch_enterprise)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.enterprise_sync)).assertIsEnabled()
+        coVerify(exactly = 0) { fixture.service.switchRealm(any()) }
     }
 
     @Test
@@ -743,6 +748,22 @@ class EnterprisePageAndroidTest {
     }
 
     @Test
+    fun standaloneSpaceToolbarBackReturnsToCurrentChatEntry() {
+        val fixture = Fixture(overview())
+        fixture.show()
+        compose.onNodeWithContentDescription(text(R.string.back)).performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Startup()), fixture.backStack) }
+    }
+
+    @Test
+    fun standaloneSpaceSystemBackReturnsToCurrentChatEntry() {
+        val fixture = Fixture(overview())
+        fixture.show()
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        compose.runOnIdle { assertEquals(listOf(Screen.Startup()), fixture.backStack) }
+    }
+
+    @Test
     fun ordinaryBackReturnsToTheSettingsPageThatOpenedSpaces() {
         val fixture = Fixture(overview(), mutableListOf(Screen.Setting, Screen.Enterprise))
         fixture.show()
@@ -832,7 +853,7 @@ class EnterprisePageAndroidTest {
         compose.waitForIdle()
         restoration.emulateSavedInstanceStateRestore()
         compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
-        compose.runOnIdle { assertEquals(listOf(Screen.Startup()), fixture.backStack) }
+        compose.runOnIdle { assertEquals(listOf(Screen.Startup(), Screen.Setting), fixture.backStack) }
     }
 
     @Test
@@ -1140,12 +1161,8 @@ class EnterprisePageAndroidTest {
         val service = mockk<EnterpriseApplicationService>()
         val workspaceSummary = MutableStateFlow<RemoteWorkspaceSummary?>(null)
         val workspaceQuery = MutableStateFlow<RemoteWorkspaceQueryState?>(null)
-        val conversations = mockk<ConversationApplicationService>()
-        private val conversationQuery = mockk<ConversationQueryService>()
         val configurationQueries = mockk<ConfigurationQueryService>()
         private val isolated = koinApplication { modules(module {
-            single { conversations }
-            single { conversationQuery }
             single { configurationQueries }
         }) }.also { isolatedContexts += it }
         lateinit var vm: EnterpriseVM
@@ -1153,12 +1170,6 @@ class EnterprisePageAndroidTest {
         fun show(withVerticalHinge: Boolean = false, restoration: StateRestorationTester? = null) {
             coEvery { configurationQueries.requireSelection(any()) } coAnswers {
                 check(firstArg<RealmSelection>() == state.value.selection) { "enterprise_source_changed" }
-            }
-            every { conversationQuery.observeCurrentSelection() } returns state.map { it.selection }
-            every { configurationQueries.observeWebDavConfiguration() } returns state.map {
-                it.selection?.let { selection ->
-                    WebDavConfigurationReadState.Available(selection, emptyList(), null)
-                } ?: WebDavConfigurationReadState.Loading
             }
             every { service.observe() } returns state
             every { service.runtimeUsageChanges() } returns emptyFlow()

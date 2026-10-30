@@ -93,10 +93,7 @@ class PlatformContextLiveAndroidTest {
         assertNull("Live text check must not expose workspace execution", assistant.workspaceId)
         assertFalse(assistant.localTools.contains(LocalToolOption.AssistantDelegation))
         assertFalse(assistant.localTools.contains(LocalToolOption.AssistantManagement))
-        val catalog = runBlocking { withTimeout(30_000) {
-            configurationQueries.observeEnterpriseStarters(selection).first()
-        } } as EnterpriseStarterReadState.Available
-        val starter = catalog.value.starters.first { it.assistantName == assistantName && !it.openingAvailable }
+        val starter = resolved.availableStarters(assistant.id).first { it.openingSnapshot == null }
         // Directory observation deliberately begins with an empty loading projection. A read
         // baseline must come from the authorized query, including retained earlier demo runs.
         val beforeIds = runBlocking { query.recentConversations(access, assistant.id, Int.MAX_VALUE).map { it.id }.toSet() }
@@ -108,7 +105,7 @@ class PlatformContextLiveAndroidTest {
         check(evidence.mkdirs()) { "Cannot create live evidence directory" }
         val report = File(evidence, "evidence.txt")
         report.writeText("snapshot_schema=${source.first}\nrelease=${source.second}\nsnapshot_hash=${source.third}\n" +
-            "assistant=${assistant.name}\nstarter_id=${starter.target.reference.id}\nstarter=${starter.title}\n")
+            "assistant=${assistant.name}\nstarter_id=${starter.id}\nstarter=${starter.title}\n")
         var activity: ActivityScenario<RouteActivity>? = null
         var view: ConversationViewLease? = null
         var modelChanged = false

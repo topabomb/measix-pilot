@@ -99,6 +99,46 @@ class PlatformSnapshotMapperTest {
         }
     }
 
+    @Test fun `a published configuration requires an enabled enterprise assistant even without a default`() {
+        val original = snapshot()
+        for (assistants in listOf(emptyList(), original.assistants.map { it.copy(enabled = false) })) {
+            val empty = original.copy(assistants = assistants, starters = emptyList(),
+                policy = original.policy.copy(defaultAssistantId = null))
+            val error = assertThrows(EnterpriseConfigurationException::class.java) { map(empty) }
+            assertEquals("enterprise_assistant_required", error.reason)
+        }
+        val candidate = map(original)
+        val disabled = candidate.configuration.copy(
+            assistants = candidate.configuration.assistants.map { it.copy(enabled = false) },
+            defaults = candidate.configuration.defaults.copy(assistantId = null), starters = emptyList())
+        val error = assertThrows(EnterpriseConfigurationException::class.java) {
+            EnterpriseConfigurationCodec.validateConfiguration(candidate.identity, disabled)
+        }
+        assertEquals("enterprise_assistant_required", error.reason)
+    }
+
+    @Test fun `enabled assistants require an enabled unique provider for their explicit model provider reference`() {
+        val original = snapshot()
+        val disabled = original.copy(providers = original.providers.map { it.copy(enabled = false) })
+        assertEquals("invalid_assistant_model_reference",
+            assertThrows(EnterpriseConfigurationException::class.java) { map(disabled) }.reason)
+        val missing = original.copy(providers = emptyList())
+        assertEquals("unknown_platform_model_provider",
+            assertThrows(IllegalArgumentException::class.java) { map(missing) }.message)
+
+        val candidate = map(original)
+        val configuration = candidate.configuration
+        for (providers in listOf(emptyList(), configuration.providers + configuration.providers,
+            configuration.providers.map { it.copy(enabled = false) })) {
+            val error = assertThrows(EnterpriseConfigurationException::class.java) {
+                EnterpriseConfigurationCodec.validateConfiguration(candidate.identity, configuration.copy(providers = providers))
+            }
+            assertEquals("invalid_assistant_model_reference", error.reason)
+        }
+        EnterpriseConfigurationCodec.validateConfiguration(candidate.identity, configuration.copy(
+            models = configuration.models.map { it.copy(providerId = null) }, providers = emptyList()))
+    }
+
     @Test fun `Core permitted repeated MCP references bind once in the assistant`() {
         val original = cases().first { it.jsonObject.getValue("name").jsonPrimitive.content == "v4-full" }
             .jsonObject.getValue("value").jsonObject

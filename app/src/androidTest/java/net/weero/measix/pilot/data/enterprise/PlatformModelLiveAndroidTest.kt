@@ -165,16 +165,15 @@ class PlatformModelLiveAndroidTest {
         }
     }
 
-    @Test fun initialEnterpriseRequestUsesDeclaredSelectionOrExistingSpaceEntry() = runBlocking {
+    @Test fun initialEnterpriseRequestUsesEffectiveAssistantSelection() = runBlocking {
         assumeTrue(InstrumentationRegistry.getArguments().getString("platformLive") == "true")
         val koin = GlobalContext.get()
         koin.get<ApplicationRecoveryGate>().awaitReady()
         val access = koin.get<EnterpriseSessionController>().captureSelectedRealmAccess()
         val selected = koin.get<ModelExecutionService>().read(access).configuration.selections.assistantId
         val initial = koin.get<net.weero.measix.pilot.service.ConversationApplicationService>().initialRequest(true)
-        if (selected == null) assertEquals(net.weero.measix.pilot.service.InitialConversationRequest.SelectEnterpriseAssistant, initial)
-        else assertEquals(selected, ((initial as net.weero.measix.pilot.service.InitialConversationRequest.Open).request as
-            net.weero.measix.pilot.service.ConversationOpenRequest.NewDraft).assistantId)
+        assertNotNull("An admitted enterprise configuration supplies an effective assistant", selected)
+        assertEquals(selected, (initial as net.weero.measix.pilot.service.ConversationOpenRequest.NewDraft).assistantId)
     }
 
     @Test fun enrolledPlatformMcpDiscoversAndPersistsPublicCatalog() = runBlocking {

@@ -129,6 +129,15 @@ class ConversationRecoveryAndroidTest {
         compose.runOnIdle { assertEquals(listOf(Screen.Startup(), Screen.Enterprise), stack) }
     }
 
+    @Test
+    fun unavailableConfigurationKeepsHistoryReachableWithoutOpeningSpaces() {
+        val stack = mutableListOf<NavKey>(Screen.Startup())
+        val failure = EnterpriseConfigurationException("enterprise_configuration_unreadable")
+        show(stack, text(conversationLoadFailureMessage(failure)), failure.userVisibleDiagnostic())
+        compose.onNodeWithText(text(R.string.history_page_title)).assertIsDisplayed().performClick()
+        compose.runOnIdle { assertEquals(listOf(Screen.Startup(), Screen.History), stack) }
+    }
+
     private fun show(
         stack: MutableList<NavKey>,
         message: String,

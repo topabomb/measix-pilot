@@ -780,12 +780,91 @@ class PlatformSessionNetworkTest {
             val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
             val id = first.acceptPlatformEnrollment(first.beginPlatformEnrollment(), connection, PlatformWireCodec.decode(fixture("enrollment-response")))
             val access = first.completePlatformBootstrap(id, PlatformWireCodec.decode(fixture("bootstrap")))
-            val result = service(first).synchronize(access)
+            val failure = runCatching { service(first).synchronize(access) }.exceptionOrNull()
+            assertEquals("enterprise_assistant_required", (failure as EnterpriseConfigurationException).reason)
+            val result = first.state.value as EnterpriseState.Available
             assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, result.manifest.phase)
             assertNull(result.configuration)
             assertEquals(refreshed.deployment.name, result.manifest.session?.identity?.enterpriseName)
             assertEquals(refreshed.user.displayName, result.manifest.session?.identity?.userName)
             assertEquals(1, requests.get())
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `unusable assistant publications reject enrollment and later synchronization without replacing Applied`() = runBlocking {
+        val base = PlatformWireCodec.decode<PlatformManagedSnapshot>(fixture("v4-full"))
+        val bootstrap = PlatformWireCodec.decode<PlatformBootstrap>(fixture("bootstrap"))
+        val generation = AtomicInteger(base.managedGeneration.toInt())
+        val empty = AtomicBoolean(true)
+        val providersDisabled = AtomicBoolean(false)
+        val invalidReasons = listOf("enterprise_assistant_required", "invalid_assistant_model_reference")
+        val reports = AtomicInteger()
+        val server = server {
+            when (requestURI.path) {
+                "/api/client/v1/bootstrap" -> reply(200, PlatformWireCodec.json.encodeToString(bootstrap.copy(
+                    managedState = bootstrap.managedState.copy(activeManagedGeneration = generation.get().toLong(),
+                        targetManagedGeneration = generation.get().toLong()))))
+                "/api/client/v1/managed/snapshots/${generation.get()}" -> {
+                    val snapshot = base.copy(managedGeneration = generation.get().toLong(),
+                        providers = if (providersDisabled.get()) base.providers.map { it.copy(enabled = false) } else base.providers,
+                        assistants = if (empty.get()) emptyList() else base.assistants,
+                        starters = if (empty.get()) emptyList() else base.starters,
+                        policy = base.policy.copy(defaultAssistantId = null))
+                    responseHeaders.set("ETag", "\"${snapshot.snapshotHash}\"")
+                    reply(200, PlatformWireCodec.json.encodeToString(snapshot))
+                }
+                "/api/client/v1/managed/applied" -> { reports.incrementAndGet(); sendResponseHeaders(204, -1) }
+                else -> reply(404, "unexpected route")
+            }
+        }
+        try {
+            val sessions = owner(temporary.newFolder())
+            val connection = PlatformConnection("http://127.0.0.1:${server.address.port}", PlatformWireCodec.decode(fixture("discovery")))
+            val id = sessions.acceptPlatformEnrollment(sessions.beginPlatformEnrollment(), connection,
+                PlatformWireCodec.decode(fixture("enrollment-response")))
+            val access = sessions.completePlatformBootstrap(id, bootstrap)
+            val platform = service(sessions)
+            for (reason in invalidReasons) {
+                empty.set(reason == "enterprise_assistant_required")
+                providersDisabled.set(reason == "invalid_assistant_model_reference")
+                val firstFailure = runCatching { platform.synchronize(access) }.exceptionOrNull()
+                assertTrue(firstFailure is EnterpriseSnapshotContentException)
+                assertEquals(reason, (firstFailure?.cause as EnterpriseConfigurationException).reason)
+                val pending = sessions.state.value as EnterpriseState.Available
+                assertEquals(EnterpriseSessionPhase.CONFIGURATION_PENDING, pending.manifest.phase)
+                assertEquals(id, pending.manifest.session?.id)
+                assertNull(pending.manifest.applied)
+                assertEquals(RealmAccess.Personal, sessions.captureSelectedRealmAccess())
+                assertEquals(0, reports.get())
+            }
+
+            empty.set(false)
+            providersDisabled.set(false)
+            val applied = platform.synchronize(access)
+            assertEquals(EnterpriseSessionPhase.READY, applied.manifest.phase)
+            assertEquals(id, applied.manifest.session?.id)
+            assertEquals(1, reports.get())
+
+            generation.incrementAndGet()
+            for (reason in invalidReasons) {
+                empty.set(reason == "enterprise_assistant_required")
+                providersDisabled.set(reason == "invalid_assistant_model_reference")
+                val nextFailure = runCatching { platform.synchronize(access) }.exceptionOrNull()
+                assertTrue(nextFailure is EnterpriseSnapshotContentException)
+                assertEquals(reason, (nextFailure?.cause as EnterpriseConfigurationException).reason)
+                val retained = sessions.state.value as EnterpriseState.Available
+                assertEquals(applied.manifest.applied, retained.manifest.applied)
+                assertEquals(applied.configuration, retained.configuration)
+                assertEquals(1, reports.get())
+                assertEquals("history", sessions.withRealmAccess(access) { "history" })
+            }
+
+            empty.set(false)
+            providersDisabled.set(false)
+            val repaired = platform.synchronize(access)
+            assertEquals(generation.get().toLong(), repaired.manifest.applied?.generation)
+            assertEquals(id, repaired.manifest.session?.id)
+            assertEquals(2, reports.get())
         } finally { server.stop(0) }
     }
 

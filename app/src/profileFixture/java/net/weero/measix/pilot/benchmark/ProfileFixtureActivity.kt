@@ -24,7 +24,6 @@ import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationOpenRequest
 import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationReadState
-import net.weero.measix.pilot.service.InitialConversationRequest
 import org.koin.android.ext.android.inject
 
 /** Dedicated profile/benchmark targets only; never packaged in formal Debug or Release. */
@@ -72,9 +71,9 @@ class ProfileFixtureActivity : ComponentActivity() {
                             val marker = requireNotNull(intent.getStringExtra("marker"))
                             require(marker.matches(Regex("PROFILE_[a-f0-9]+")))
                             stage = "await durable chat result"
-                            val initial = conversations.initialRequest(createNew = false) as InitialConversationRequest.Open
-                            check(initial.request is ConversationOpenRequest.OpenExisting)
-                            conversations.initialize(initial.request).use { lease ->
+                            val request = conversations.initialRequest(createNew = false)
+                            check(request is ConversationOpenRequest.OpenExisting)
+                            conversations.initialize(request).use { lease ->
                                 queries.observeConversation(lease).first { state ->
                                     if (state is ConversationReadState.Failed) throw state.error
                                     if (state !is ConversationReadState.Ready || state.snapshot.stream != null) return@first false

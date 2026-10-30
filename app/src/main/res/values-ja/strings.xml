@@ -1671,11 +1671,7 @@
   <string name="assistant_memory_owner_private">このアシスタント専用</string>
   <string name="assistant_runtime_memory_empty">記憶はまだありません。</string>
   <string name="configuration_speech_scope_notice">既定の音声サービスは現在のスペース用に選択します。自分のサービスの編集は利用中のすべてのスペースに影響します。企業のサービスは読み取り専用です。</string>
-  <string name="enterprise_start_conversation">会話を始める</string>
-  <string name="enterprise_starters_description">開始する話題を選んでください。送信前にメッセージを編集できます。</string>
-  <string name="enterprise_starters_empty">利用できる会話のきっかけはありません。</string>
   <string name="enterprise_starter_preview">メッセージのプレビュー</string>
-  <string name="enterprise_starter_open">下書きを開く</string>
   <string name="assistant_runtime_memory_disabled">記憶は無効です。記録は管理できますが、会話には使われません。</string>
   <string name="enterprise_portal_unavailable">システムの WebView に、企業ワークスペースを安全に開くための機能がありません。\nWebView：%1$s\n不足している機能：%2$s</string>
   <string name="enterprise_portal_open_failed">企業ワークスペースを開けませんでした。もう一度お試しください。\n理由：%1$s</string>
@@ -1969,10 +1965,8 @@
   <string name="enterprise_prepare_session">企業サービスがアクセス確認を拒否しました。この操作はまだ開始されていません。企業スペースでログイン状態とアクセス権を確認してください。</string>
   <string name="enterprise_prepare_rejected">企業サービスで確認を完了できませんでした。この操作はまだ開始されていません。企業スペースを開き、技術情報を確認してください。</string>
   <string name="enterprise_prepare_unavailable">企業スペースでこの操作を開始できる状態になっていません。操作はまだ開始されていません。企業スペースを開き、技術情報を確認してください。</string>
-  <string name="chat_deleted_assistant_unavailable">会話は削除されました。元のアシスタントは利用できません。スペースで選択してください。</string>
-  <string name="chat_deleted_continuation_failed">会話は削除されましたが、新しいチャットを開けませんでした。スペースから続けてください。</string>
+  <string name="chat_deleted_continuation_failed">会話は削除されましたが、新しいチャットを開けませんでした。診断情報を確認するか、チャット履歴を開いてください。</string>
   <string name="enterprise_refresh_status">状態を更新</string>
-  <string name="enterprise_all_chat_history">すべてのチャット履歴</string>
   <string name="remote_workspace_query_failed">リモートワークスペースの状態を確認できません</string>
   <string name="enterprise_publication_release">リリース ID</string>
   <string name="enterprise_publication_hash">設定 SHA-256</string>
@@ -2168,4 +2162,5 @@
   <string name="webdav_invalid_username">ユーザー名にコロンや改行は使用できません。</string>
   <string name="webdav_name_help">空欄の場合はサーバーのホスト名を使用します。</string>
   <string name="webdav_credentials_help">匿名アクセスでは空欄にできます。認証が必要な場合は、サービスから提供された WebDAV の認証情報を入力してください。</string>
+  <string name="enterprise_assistant_required">企業は、利用可能なチャットモデルを持つ有効なアシスタントを1つ以上公開する必要があります。管理者に設定の公開を依頼し、再度同期してください。</string>
 </resources>

@@ -82,6 +82,8 @@ import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
@@ -103,6 +105,7 @@ import net.weero.measix.pilot.R
 import net.weero.measix.pilot.ui.components.ui.TTSController
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.enterprise.EnterpriseConfigurationException
+import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.datastore.findProvider
 import net.weero.measix.pilot.data.datastore.getAssistantById
@@ -113,6 +116,9 @@ import net.weero.measix.pilot.data.model.Avatar
 import net.weero.measix.pilot.data.configuration.AssistantPreferenceChange
 import net.weero.measix.pilot.service.ConversationConfigurationUiModel
 import net.weero.measix.pilot.service.AssistantModelSummary
+import net.weero.measix.pilot.service.AssistantCatalogReadState
+import net.weero.measix.pilot.service.ConfigurationQueryService
+import net.weero.measix.pilot.service.ConversationApplicationService
 import net.weero.measix.pilot.service.ConversationAssistantTarget
 import net.weero.measix.pilot.service.ModelCatalogUiModel
 import net.weero.measix.pilot.service.modelSummaryFor
@@ -152,6 +158,7 @@ import net.weero.measix.pilot.ui.components.ui.permission.PermissionCamera
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
 import net.weero.measix.pilot.ui.context.LocalNavController
+import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.context.LocalToaster
 import net.weero.measix.pilot.ui.context.Navigator
 import net.weero.measix.pilot.ui.hooks.ChatInputState
@@ -194,15 +201,9 @@ fun ChatPage(
     val conversationState by vm.conversationState.collectAsStateWithLifecycle()
     val handoff by vm.handoff.collectAsStateWithLifecycle()
     val activeRoute by rememberUpdatedState(isActiveRoute)
-    val assistantUnavailable = stringResource(R.string.chat_deleted_assistant_unavailable)
     val navigateHandoff: (ChatVM.ConversationHandoff) -> Unit = { result ->
         if (activeRoute && navController.isCurrentConversation(request)) {
-            val next = result.continuation?.request
-            if (next != null) navController.clearAndNavigate(Screen.Chat(next))
-            else {
-                toaster.show(assistantUnavailable, type = ToastType.Error)
-                navController.clearAndNavigate(Screen.Enterprise)
-            }
+            result.continuation?.let { navController.clearAndNavigate(Screen.Chat(it)) }
         }
     }
     LaunchedEffect(handoff, isActiveRoute) {
@@ -247,6 +248,7 @@ fun ChatPage(
                     title = stringResource(R.string.chat_conversation_load_failed_title),
                     message = stringResource(conversationLoadFailureMessage(state.error)),
                     diagnostic = state.error.userVisibleDiagnostic(),
+                    assistantSelection = (state.error as? net.weero.measix.pilot.service.ConversationAssistantUnavailableException)?.selection,
                     onRetry = vm::retryConversationLoad,
                     onNewChat = { chatNavigation.newChat() },
                 )
@@ -560,6 +562,7 @@ internal fun ConversationUnavailable(
     onNewChat: (() -> Unit)? = null,
     diagnostic: String? = null,
     showSpaces: Boolean = true,
+    assistantSelection: RealmSelection? = null,
 ) {
     val nav = LocalNavController.current
     Box(
@@ -581,18 +584,107 @@ internal fun ConversationUnavailable(
                     TextButton(onClick = action) { Text(stringResource(R.string.chat_page_new_chat)) }
                 }
                 if (showSpaces) {
+                    TextButton(onClick = { nav.navigate(Screen.History, launchSingleTop = true) }) {
+                        Text(stringResource(R.string.history_page_title))
+                    }
                     TextButton(
                         onClick = { nav.navigate(Screen.Enterprise, launchSingleTop = true) },
                         modifier = Modifier.testTag("conversation-recovery-spaces"),
                     ) { Text(stringResource(R.string.enterprise_spaces)) }
                 }
             }
+            assistantSelection?.let { ConversationAssistantRecovery(it) }
             diagnostic?.let { detail ->
                 net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(detail,
                     modifier = Modifier.testTag("conversation-recovery-diagnostics"))
             }
         }
     }
+}
+
+/** Only an explicit unavailable choice needs recovery; a missing enterprise default is resolved at admission. */
+@Composable
+private fun ConversationAssistantRecovery(
+    selection: RealmSelection,
+    queries: ConfigurationQueryService = koinInject(),
+    conversations: ConversationApplicationService = koinInject(),
+) {
+    val navigator = LocalNavController.current
+    val sourceEntry = remember(navigator, selection) { navigator.currentEntry }
+    val scope = rememberCoroutineScope()
+    var choosing by remember(selection) { mutableStateOf(false) }
+    var submitting by remember(selection) { mutableStateOf(false) }
+    var failure by remember(selection) { mutableStateOf<String?>(null) }
+    TextButton(onClick = { failure = null; choosing = true }, enabled = !submitting) {
+        Text(stringResource(R.string.safe_mode_switch_assistant))
+    }
+    failure?.let { net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure(it) }
+    if (!choosing) return
+    val catalogState by remember(queries, selection) {
+        queries.observeAssistantCatalog().map { catalog ->
+            queries.requireSelection(selection)
+            catalog
+        }.catch { error ->
+            if (error is CancellationException) throw error
+            logDiagnosticFailure("AssistantRecovery", "Assistant catalog read failed", error)
+            emit(AssistantCatalogReadState.Unavailable(error.userVisibleDiagnostic()))
+        }
+    }.collectAsStateWithLifecycle(AssistantCatalogReadState.Loading)
+    val catalog = (catalogState as? AssistantCatalogReadState.Available)?.catalog
+    val sourceChanged = stringResource(R.string.enterprise_source_changed)
+    LaunchedEffect(catalogState) {
+        when {
+            catalogState is AssistantCatalogReadState.Unavailable -> {
+                failure = (catalogState as AssistantCatalogReadState.Unavailable).detail
+                choosing = false
+            }
+            catalog != null && catalog.selection != selection -> {
+                failure = sourceChanged
+                choosing = false
+            }
+        }
+    }
+    if (catalogState == AssistantCatalogReadState.Loading) CircularProgressIndicator(Modifier.size(24.dp))
+    if (catalog == null || catalog.selection != selection) return
+    val reasons = catalog.resources.associate { it.key.reference to it.access.unavailableReason }
+        .toMutableMap().apply {
+            catalog.selected.reference?.let { reference ->
+                catalog.selected.unavailableReason?.let { put(reference, it) }
+            }
+        }
+    AssistantPickerSheet(
+        settings = LocalSettings.current,
+        currentAssistantId = catalog.selected.reference,
+        assistants = catalog.assistants.values.toList(),
+        unavailableReasons = reasons,
+        enabled = !submitting,
+        onDismiss = { choosing = false },
+        onAssistantSelected = { assistant ->
+            if (!submitting && navigator.currentEntry === sourceEntry) {
+                submitting = true
+                scope.launch {
+                    try {
+                        queries.requireSelection(selection)
+                        val request = conversations.selectAssistantRequest(selection, assistant.id, createNew = true)
+                        queries.requireSelection(selection)
+                        currentCoroutineContext().ensureActive()
+                        if (choosing && navigator.currentEntry === sourceEntry) {
+                            navigator.clearAndNavigate(Screen.Chat(request))
+                        }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        currentCoroutineContext().ensureActive()
+                        logDiagnosticFailure("AssistantRecovery", "Assistant selection failed", error)
+                        if (navigator.currentEntry === sourceEntry) failure = error.userVisibleDiagnostic()
+                    } finally {
+                        choosing = false
+                        submitting = false
+                    }
+                }
+            }
+        },
+    )
 }
 
 @Composable

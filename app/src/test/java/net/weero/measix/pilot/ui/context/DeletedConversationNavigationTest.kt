@@ -7,7 +7,6 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import me.rerere.common.configuration.EnterpriseAuthority
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
-import net.weero.measix.pilot.service.ConversationContinuation
 import net.weero.measix.pilot.service.ConversationDeletionReceipt
 import net.weero.measix.pilot.service.ConversationOpenRequest
 import org.junit.Assert.*
@@ -33,20 +32,21 @@ class DeletedConversationNavigationTest {
         val stack = mutableListOf<NavKey>(original, otherSession, otherId, Screen.History)
         val next = ConversationOpenRequest.NewDraft(Uuid.random(), access, assistant)
         val nav = Navigator(stack)
-        nav.replaceDeletedConversation(ConversationDeletionReceipt(id, assistant, RealmSelection(access, 1)), ConversationContinuation(next))
+        nav.replaceDeletedConversation(ConversationDeletionReceipt(id, assistant, RealmSelection(access, 1)), next)
         assertEquals(listOf(Screen.Chat(next), otherSession, otherId, Screen.History), stack)
         nav.popBackStack()
         assertEquals(otherId, stack.last())
     }
 
-    @Test fun `unavailable original assistant leads to space selection without silently substituting a default`() {
+    @Test fun `history return keeps the original assistant request for normal Draft validation`() {
         val request = ConversationOpenRequest.OpenExisting(Uuid.random(), RealmAccess.Personal)
         val stack = mutableListOf<NavKey>(Screen.Chat(request), Screen.History)
         val nav = Navigator(stack)
-        nav.replaceDeletedConversation(ConversationDeletionReceipt(request.id, ConfigurationReference.random(), RealmSelection(request.access, 1)),
-            ConversationContinuation(null, "conversation_assistant_unavailable"))
+        val assistant = ConfigurationReference.random()
+        val next = ConversationOpenRequest.NewDraft(Uuid.random(), request.access, assistant)
+        nav.replaceDeletedConversation(ConversationDeletionReceipt(request.id, assistant, RealmSelection(request.access, 1)), next)
         nav.popBackStack()
-        assertEquals(Screen.Enterprise, stack.last())
+        assertEquals(Screen.Chat(next), stack.last())
         assertFalse(nav.isCurrentConversation(request))
     }
 }

@@ -141,31 +141,6 @@ internal class ConfigurationQueryService(
         },
     )
 
-    fun observeEnterpriseStarters(selection: RealmSelection): Flow<EnterpriseStarterReadState> = observeSelected(
-        { failure -> when (failure) {
-            ConfigurationReadFailure.SelectionUnavailable -> EnterpriseStarterReadState.SourceChanged
-            is ConfigurationReadFailure.Unexpected -> EnterpriseStarterReadState.Failed(failure.detail)
-        } },
-        { configuration, current ->
-            configuration.takeIf { current == selection }?.enterpriseStarterCatalog(current)
-                ?.let { EnterpriseStarterReadState.Available(it) } ?: EnterpriseStarterReadState.SourceChanged
-        },
-    )
-
-    internal suspend fun readEnterpriseStarterDetails(target: EnterpriseStarterTarget): StarterOpeningDetailUiModel {
-        recoveryGate.awaitReady()
-        return enterpriseSessions.withSelectedRealmSelection(target.selection) {
-            settings.withResolvedConfiguration(target.selection.access.scope, enterpriseSessions.state.value) { configuration ->
-                enterpriseSessions.requirePublishedSelection(target.selection)
-                check(configuration.enterpriseConfiguration?.generation == target.generation &&
-                    configuration.enterpriseIdentity?.authority == target.reference.authority) { "enterprise_configuration_changed" }
-                val starter = configuration.availableStarters().singleOrNull { it.id == target.reference.id }
-                    ?: throw StarterOpeningException(StarterOpeningIssue.UNAVAILABLE)
-                starter.details(isDraft = false)
-            }
-        }
-    }
-
     fun observeSpeechCatalog(): Flow<SpeechCatalogReadState> = observeSelected(
         { failure -> SpeechCatalogReadState.Unavailable(failure.detail()) },
         { configuration, selection -> SpeechCatalogReadState.Available(SpeechCatalogUiModel(selection,

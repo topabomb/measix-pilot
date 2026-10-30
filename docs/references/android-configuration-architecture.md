@@ -148,7 +148,7 @@ Settings 在创建或更改地址、用户名、密码时重新分配 `accessRev
 
 `platformUrl` 是规范化 HTTP/HTTPS origin，允许域名、IP、IPv6 和显式端口，拒绝 userinfo、query、fragment、非根 path 与非法端口。解析只产生 `EnterpriseJoinConfirmation`；用户确认后才发起网络请求，取消或被替换的确认不执行接入。
 
-兑换成功先持久保存 pending enrollment，再由 Bootstrap 核对 Session/User/Device/Deployment 后发布身份。临时失败保留 pending，启动恢复继续 Bootstrap，不重复兑换一次性 code。refresh credential 与 pending idempotency key 加密、原子持久化，access token 仅在内存。接入成功不等于配置已同步或可以执行。
+兑换成功先持久保存 pending enrollment，再由 Bootstrap 核对 Session/User/Device/Deployment 后发布身份。临时失败保留 pending，启动恢复继续 Bootstrap，不重复兑换一次性 code。refresh credential 与 pending idempotency key 加密、原子持久化，access token 仅在内存。身份建立不等于接入完成；首次接入必须同步并应用至少包含一位启用企业助手的配置，之后仍须通过执行准入。
 
 installation ID 在本机企业连接生命周期内稳定。`enrollment_expired`、`enrollment_already_used` 与 `installation_user_conflict` 分别表示过期、已使用和本机绑定冲突，不混用诊断。普通换用户通过显式本机重置清除 installation ID；不能自动换 ID 绕过限制。管理员 hard delete 完成后，Core 可允许同一 installation 绑定新 principal；Android 只有在 Bootstrap 确认新主体后才清除旧 `IDENTITY_DELETED`。若 pending 主体也被删除，原子移除 pending credential 并保留 `SIGNED_OUT + IDENTITY_DELETED`。相同 username 不恢复旧主体、凭据或数据。
 
@@ -200,7 +200,7 @@ MCP Tool 原始定义及其 JCS contractHash 使用独立的完整定义合同�
 `PlatformWireCodec` 对已消费字段的错型、null、缺失和枚举错误提供稳定 reason 与字段路径，不回显原值或响应正文。
 候选仍沿原接纳和提交链完整验证后原子应用；失败保全身份、历史和原 Applied，成功同步即可恢复，不清库或自动重放。
 
-`PlatformSnapshotMapper` 与 `EnterpriseConfigurationCodec` 都校验领域约束。`PlatformManagedPolicy` 的各项默认引用可省略，缺失表示未设置，不取目录首项或复制 Chat 默认；非空模型引用须指向同快照内已启用模型，附件检查还要求 IMAGE 输入。可选 `imageGenerators` 缺失为空集合，已消费字段的显式 null、错型和无兜底的未知枚举仍拒绝；响应扩展按本节兼容规则忽略。Starter 的 v4/v5 条件和开场保全规则见下文。
+`PlatformSnapshotMapper` 与 `EnterpriseConfigurationCodec` 都校验领域约束。配置至少包含一位启用企业助手，且启用助手须绑定已启用的聊天模型；模型显式指定 Provider 时，还须指向唯一且启用的 Provider，规范配置中 `providerId = null` 保留既有无 Provider 引用语义；没有启用助手以 `enterprise_assistant_required` 拒绝候选。`PlatformManagedPolicy` 的各项默认引用可省略，缺失表示发布端未设置；模型和语音不取目录首项或复制 Chat 默认，助手的有效启动选择由下述按主体解析规则派生；非空模型引用须指向同快照内已启用模型，附件检查还要求 IMAGE 输入。可选 `imageGenerators` 缺失为空集合，已消费字段的显式 null、错型和无兜底的未知枚举仍拒绝；响应扩展按本节兼容规则忽略。Starter 的 v4/v5 条件和开场保全规则见下文。
 
 Applied 旧格式只经显式持久迁移进入当前格式；先核验原 revision hash 再解码，不在正常读取时回退旧格式。历史 Starter 缺少 opening 时保留 null，不补造正文或重写 release/hash。`EnterpriseExecution.Platform.snapshotSchemaVersion` 持久保存下载时验证的版本；历史缺失为 null，不根据字段形状、Discovery 或客户端版本补造。
 
@@ -228,7 +228,7 @@ Snapshot v5 的可选 `webdav[]` 经 `PlatformSnapshotMapper` 保存为 `Enterpr
 
 配置同步只由以下入口触发：原生空间页显式同步、Portal 显式 `refresh`、用户确认接入/重新登录后的初始化，以及启动时刚完成同一 Session 未完成 Bootstrap 后的一次初始化。初始化失败不自动重试。已有 Session 恢复、空间切换、页面进入、前后台切换、Portal 开关和执行 barrier 都不自动下载 Snapshot；凭据刷新、工作区与预算查询不是配置同步。
 
-有效身份在 `CONFIGURATION_PENDING` 也可进入企业空间；`readPresentation` 与 `switchRealm` 共用数据访问规则，选择可持久恢复。历史查询不等待当前配置正文。同步和本地配置错误由企业页投影简短原因与可复制诊断；个人会话不显示企业异常。pending Bootstrap 诊断只属于原 Session，替换 Session 后不得写到新接入状态。已观察到的同步失败只能由对应 Session 的成功同步清除。
+首次 `CONFIGURATION_PENDING` 尚无 Applied 时，空间页保留同步重试，不显示接入完成或允许进入聊天；generation 为零也保留 pending 身份并返回 `enterprise_assistant_required`，不下载或回报 Applied。领域数据访问仍由有效身份授权，`readPresentation` 与 `switchRealm` 共用数据访问规则；既有 Applied 的配置损坏不剥夺历史访问，历史查询不等待当前配置正文。后续发布删除全部启用助手时保留原 Applied；旧版空助手 Applied 恢复为配置不可用并呈现同一原因，保全身份、凭据和数据，由手动同步有效发布修复。同步和本地配置错误由企业页投影简短原因与可复制诊断；个人会话不显示企业异常。pending Bootstrap 诊断只属于原 Session，替换 Session 后不得写到新接入状态。已观察到的同步失败只能由对应 Session 的成功同步清除。
 
 执行前 `prepareExecution` 查询 Core Managed State，要求非零 generation、READY、版本一致且未阻断；`requireExecutionSupport` 还在开场、执行读取与租约入口检查持久化网络版本。缺配置、未知/退役格式、代际不符或已有同步失败时拒绝本次执行并提示手动同步，保留原 Applied。缓存可读不代替执行准入，也不限制历史、本地退出和个人空间。
 
@@ -273,6 +273,12 @@ Gradle 配置阶段均核验两份 manifest 的主合同、Core 支持集合、�
 ### 按主体解析与使用偏好
 
 `ConfigurationQueryService` 组合 `UserSettingsDocument`、原 Session 和 Applied；`ConfigurationResolver` 按完整 Deployment/User 产生 `ResolvedConfiguration`，只做纯派生，不落盘镜像。用户定义保持一份；企业助手定义、system prompt 与固定 MCP 只读，本域允许的模型和使用偏好通过 typed 命令写回用户文档。助手模型的默认、空间默认、指定引用必须保持可区分，失效的显式引用不能静默替换。所有列表、查询和命令携带原 `RealmSelection` 或 `RealmAccess`；等待 Settings、数据库、文件或网络后须重新验证原主体，切域返回也不恢复旧授权。
+
+新聊天助手统一由 `ConfigurationResolver` 解析：本企业主体已保存的选择优先，其次使用企业发布的默认助手；
+两者均未设置时，按原发布列表顺序选择首个可用企业助手，不自动借用个人助手。
+自动选择只产生本域有效读值，不保存为企业或个人偏好；已创建会话始终保留自身助手。
+企业主体的显式选择或发布默认引用若已删除、禁用或不被允许，保留原引用与原因，不自动改选；个人显式失效选择也不被回写。
+未保存选择且配置不可用时保持未设置，聊天入口显示可行动的配置说明。启动、新建及恢复使用同一解析结果，不各自猜选目录首项。
 
 资源选择和修改在 Settings 写锁内依据最新文档、原域与准入规则完成；UI 只消费有效目录和不可用原因，不从显示名称推断持久化引用。
 MCP 选择差量以本次写入前的持久偏好为基准，仅对真正新增的引用检查准入；显示投影过滤掉的历史企业引用不能阻断其他选择的编辑。
@@ -344,7 +350,7 @@ Android 保留发布值的空串、空白、顺序和字面内容，不把已发
 
 | 阶段 | 当前行为与负责入口 |
 | --- | --- |
-| 浏览与导航 | 目录包含标题、完整起始 prompt 与 opening 可用性；`StarterOpeningReference` 仅携带定义摘要与原发布身份，opening 的 System/背景正文经授权 query 按需读取 |
+| 浏览与导航 | 聊天目录包含标题、完整起始 prompt 与 opening 可用性；选择 Starter 沿当前 Draft 的绑定命令提交，opening 的 System/背景正文经授权 query 按需读取，导航不携带另一套 Starter 开场引用 |
 | Draft 选择 | `ConversationApplicationService` 经 `BindDraftOpening` 在内存绑定；selection token 比较并交换（CAS）防止迟到选择覆盖新选择，输入拒收只补偿本次 token |
 | 显式刷新 | 复验最新完整定义并更新绑定，不再次追加起始提示词；选择 v4 入口会清除已有 Draft opening |
 | 首次发送 | `requireCurrentStarterOpening` 比较助手、当前准入和完整 Starter 定义；单独 generation 改变不拒绝，定义变更/撤销则保留草稿与附件并报告原因 |
@@ -353,7 +359,7 @@ Android 保留发布值的空串、空白、顺序和字面内容，不把已发
 
 `ConversationOpening` 保存原助手、releaseId、generation、snapshotHash 和完整 Starter 定义，
 不保存凭据、Session 或执行租约。原始 prompt 与用户编辑后发送的 USER 是不同事实；未发送 Draft 不落库。
-三个界面入口（空间预览、聊天快捷菜单、空白聊天卡片）使用同一 application 协议，不自动发送。
+聊天快捷菜单与空白聊天卡片使用同一 application 协议，不自动发送；空间配置详情只提供只读预览，不创建会话。
 
 Opening 的 System 只在当前会话助手等于原助手时参与选择，优先级低于合法非空会话覆盖、高于助手定义；
 切走后不应用，切回且获准时可再次应用。模板每个 START 按当次变量渲染，同一 Turn 固定。

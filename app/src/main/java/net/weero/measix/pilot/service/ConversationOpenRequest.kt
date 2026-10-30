@@ -20,7 +20,6 @@ sealed interface ConversationOpenRequest {
         override val id: Uuid,
         override val access: RealmAccess,
         val assistantId: ConfigurationReference,
-        val starter: StarterOpeningReference? = null,
         val folderId: Uuid? = null,
     ) : ConversationOpenRequest
 
@@ -46,29 +45,6 @@ class ConversationDeletionReceipt internal constructor(
     internal val selection: RealmSelection,
     val maintenanceFailure: Throwable? = null,
 )
-
-@ConsistentCopyVisibility
-data class ConversationContinuation internal constructor(
-    val request: ConversationOpenRequest.NewDraft?,
-    val unavailableReason: String? = null,
-)
-
-/** Navigation carries content identity and provenance, never enterprise prompt bodies. */
-@Serializable
-data class StarterOpeningReference(
-    val reference: ConfigurationReference.Enterprise,
-    val definitionHash: String,
-    val releaseId: String,
-    val generation: Long,
-    val snapshotHash: String,
-) {
-    init {
-        require(definitionHash.matches(Regex("[0-9a-f]{64}")) && generation > 0 &&
-            releaseId.matches(Regex("rel_[0-9a-f-]{36}")) && snapshotHash.matches(Regex("sha256:[0-9a-f]{64}"))) {
-            "invalid_starter_opening_reference"
-        }
-    }
-}
 
 /** Opaque page ownership; closing or revoking it cannot authorize a later subscription. */
 class ConversationViewLease internal constructor(

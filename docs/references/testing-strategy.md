@@ -151,7 +151,8 @@ SDK 或宿主网络变化后重新验证，不额外重复传入 `-netsim-args -
 | 场景 | 启用参数与前提 | 证据边界 |
 | --- | --- | --- |
 | Starter v5 隔离 Mock | `starterV5MockLive=true`；专用且从未绑定企业的设备 | 实际 UI、Applied、Session、Room 与 adapter，HTTP 为 Mock |
-| 空账号企业聊天入口 | `EnterpriseEmptyAccountNavigationAndroidTest`、`enterpriseEmptyAccountLive=true`；专用且从未绑定企业、无自有 Provider 配置的 Debug 设备 | 未配置个人 Provider、无企业默认助手下接入后立即返回、Starter 首发、聊天内外新建及抽屉历史；真实应用与 Room，企业 HTTP 为隔离 Mock，不证明真实 Core/Provider |
+| 空账号企业聊天入口 | `EnterpriseEmptyAccountNavigationAndroidTest`、`enterpriseEmptyAccountLive=true`；专用且从未绑定企业、无自有 Provider 配置的 Debug 设备 | 未配置个人 Provider、无企业默认助手下接入后自动进入可用助手聊天、可选 Starter 首发、聊天内新建与空间往返及抽屉历史；真实应用与 Room，企业 HTTP 为隔离 Mock，不证明真实 Core/Provider |
+| 企业接入与返回 Core | `EnterpriseEnrollmentNavigationLiveAndroidTest`、`enterpriseNavigationInput` 指向专用新装 Debug 设备 cache 内的一次性接入文件 | 正式界面粘贴接入、返回当前空间聊天、未发送时再次新建、空 Draft 不落库、设置来源双向切域返回；输入读取即删除，保留已接入 Session 与无凭据截图/结果，不证明相机扫码或 Provider 执行 |
 | Starter v5 Core | `starterV5CoreLive=true` 与 `coreStarterInput` | 真实 Snapshot/Starter/临时接入资料，输入读取后删除；区分确定性 adapter 和实际 Provider |
 | 已接入平台上下文 | `platformContextLive=true`；可选 `platformContextModelSwitch=true` | 记录发布身份、实际版本与 Provider 结果；v4 不证明 v5 opening |
 | 远程文件 | `remoteWorkspaceInput`；未接入专用设备和独立 Core/Agent Space | 配置文件与主机配合步骤见下文，普通门禁无输入时跳过 |

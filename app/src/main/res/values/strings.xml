@@ -1661,11 +1661,7 @@
   <string name="assistant_memory_owner_private">Only this assistant</string>
   <string name="assistant_runtime_memory_empty">No memories yet.</string>
   <string name="configuration_speech_scope_notice">The default voice service is selected for this space. Editing your services affects every space that uses them; enterprise services are read-only.</string>
-  <string name="enterprise_start_conversation">Start a conversation</string>
-  <string name="enterprise_starters_description">Choose a starting point. You can edit the message before sending.</string>
-  <string name="enterprise_starters_empty">No conversation starters are available.</string>
   <string name="enterprise_starter_preview">Message preview</string>
-  <string name="enterprise_starter_open">Open draft</string>
   <string name="assistant_runtime_memory_disabled">Memory is off. Records can be managed but are not used in conversations.</string>
   <string name="enterprise_portal_unavailable">This system WebView is missing capabilities required to securely open the workbench.\nWebView: %1$s\nMissing capabilities: %2$s</string>
   <string name="enterprise_portal_open_failed">The enterprise workbench could not open. Please retry.\nReason: %1$s</string>
@@ -1977,10 +1973,8 @@
   <string name="enterprise_prepare_session">The enterprise service rejected the access check. This operation has not started. Open the enterprise space to check your sign-in and access.</string>
   <string name="enterprise_prepare_rejected">The enterprise service could not complete the check. This operation has not started. Open the enterprise space and review the technical information.</string>
   <string name="enterprise_prepare_unavailable">The enterprise space is not ready for this operation. This operation has not started. Open the enterprise space and review the technical information.</string>
-  <string name="chat_deleted_assistant_unavailable">The conversation was deleted. Its assistant is no longer available. Choose an assistant in Spaces.</string>
-  <string name="chat_deleted_continuation_failed">The conversation was deleted, but a new chat could not be opened. Go to Spaces to continue.</string>
+  <string name="chat_deleted_continuation_failed">The conversation was deleted, but a new chat could not be opened. View the diagnostics or open chat history.</string>
   <string name="enterprise_refresh_status">Refresh status</string>
-  <string name="enterprise_all_chat_history">All chat history</string>
   <string name="remote_workspace_query_failed">Remote workspace status could not be confirmed</string>
   <string name="enterprise_publication_release">Release ID</string>
   <string name="enterprise_publication_hash">Configuration SHA-256</string>
@@ -2176,4 +2170,5 @@
   <string name="webdav_invalid_username">The username cannot contain a colon or a line break.</string>
   <string name="webdav_name_help">Leave blank to use the server hostname.</string>
   <string name="webdav_credentials_help">Leave credentials blank for anonymous access. Otherwise, use the WebDAV credentials from your service.</string>
+  <string name="enterprise_assistant_required">The enterprise must publish at least one enabled assistant with an available chat model. Ask your administrator to publish the configuration, then sync again.</string>
 </resources>

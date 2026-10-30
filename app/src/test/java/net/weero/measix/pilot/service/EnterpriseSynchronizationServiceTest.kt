@@ -54,6 +54,18 @@ class EnterpriseSynchronizationServiceTest {
         assertTrue(failure.diagnostic.contains("IOException: truncated body"))
     }
 
+    @Test fun `assistant requirement survives snapshot wrapping and preserves the original diagnostic`() {
+        val original = EnterpriseConfigurationException("enterprise_assistant_required")
+        for (error in listOf(original, EnterpriseSnapshotContentException(original))) {
+            val failure = EnterpriseSynchronizationFailure.from(error)
+            assertEquals(EnterpriseSynchronizationIssue.ASSISTANT_REQUIRED, failure.issue)
+            assertTrue(failure.diagnostic.contains("EnterpriseConfigurationException: enterprise_assistant_required"))
+        }
+        val wrapped = EnterpriseSynchronizationFailure.from(EnterpriseSnapshotContentException(original))
+        assertTrue(wrapped.diagnostic.contains("EnterpriseSnapshotContentException"))
+        assertTrue(wrapped.diagnostic.contains("Caused by:"))
+    }
+
     @Test fun `failed shared sync retains original exception and successful retry clears its projection`() = runTest {
         val f = Fixture(StandardTestDispatcher(testScheduler))
         try {
@@ -90,6 +102,8 @@ class EnterpriseSynchronizationServiceTest {
             val access = f.enroll()
             for (error in listOf(
                 IOException("connection closed"),
+                EnterpriseConfigurationException("enterprise_assistant_required"),
+                EnterpriseSnapshotContentException(EnterpriseConfigurationException("enterprise_assistant_required")),
                 EnterpriseSnapshotContentException(IllegalArgumentException("invalid reference")),
                 EnterpriseSnapshotCompatibilityException(listOf(6L)),
                 IllegalStateException("unexpected storage failure"),

@@ -66,7 +66,6 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     var deletionCandidates by remember { mutableStateOf<List<ConversationSummary>?>(null) }
     val operationRunning by vm.running.collectAsStateWithLifecycle()
     val commandFailure by vm.commandFailure.collectAsStateWithLifecycle()
-    val continuationUnavailable by vm.continuationUnavailable.collectAsStateWithLifecycle()
     val deletedNavigation by vm.deletedNavigation.collectAsStateWithLifecycle()
     val undo by vm.undo.collectAsStateWithLifecycle()
     val pendingDeletion by vm.pendingDeletion.collectAsStateWithLifecycle()
@@ -144,9 +143,6 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
             contentPadding = contentPadding + PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (continuationUnavailable) item("continuation_unavailable") {
-                Text(stringResource(R.string.chat_deleted_assistant_unavailable), color = MaterialTheme.colorScheme.error)
-            }
             commandFailure?.let { detail -> item("command_failure") {
                 if (detail.contains("conversation_pending_inputs_changed") || detail.contains("conversation_pending_inputs_confirmation_required")) {
                     Text(stringResource(R.string.chat_queue_changed), color = MaterialTheme.colorScheme.error)

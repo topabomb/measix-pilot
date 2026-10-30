@@ -323,6 +323,7 @@ fun ChatDrawerContent(
                         }
 
                         net.weero.measix.pilot.ui.pages.enterprise.EnterpriseSpaceButton(
+                            onClick = { navigateFromDrawer(null) { navController.navigate(Screen.Enterprise, launchSingleTop = true) } },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp),

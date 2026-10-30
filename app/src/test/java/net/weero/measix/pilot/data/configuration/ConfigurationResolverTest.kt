@@ -69,19 +69,19 @@ class ConfigurationResolverTest {
         assertThrows(IllegalArgumentException::class.java) { original.preferences.withModelContextLength(scope, reference, 0) }
     }
 
-    @Test fun `starter catalog and chat suggestions share enabled target filtering and stable order`() {
+    @Test fun `chat Starter suggestions filter by enabled assistant and keep stable order`() {
         val base = exampleEnterprisePackage()
         val starter = base.configuration.starters.first()
         val packet = base.copy(configuration = base.configuration.copy(starters = listOf(
             starter.copy(id = "str_z", sortOrder = 1), starter.copy(id = "str_a", sortOrder = 1),
             starter.copy(id = "str_first", sortOrder = -1), starter.copy(id = "str_hidden", enabled = false))))
         val resolved = ConfigurationResolver.resolve(UserSettingsDocument.empty(), packet.identity.scope, appliedConfiguration(packet))
-        assertEquals(listOf("str_first", "str_a", "str_z"), resolved.availableStarters().map { it.id })
+        assertEquals(listOf("str_first", "str_a", "str_z"), resolved.availableStarters(packet.identity.reference(starter.assistantId)).map { it.id })
         val disabled = packet.copy(configuration = packet.configuration.copy(assistants = packet.configuration.assistants.map {
             if (it.id == starter.assistantId) it.copy(enabled = false) else it
         }))
         assertTrue(ConfigurationResolver.resolve(UserSettingsDocument.empty(), disabled.identity.scope, appliedConfiguration(disabled))
-            .availableStarters().isEmpty())
+            .availableStarters(packet.identity.reference(starter.assistantId)).isEmpty())
         assertTrue(resolved.availableStarters(ConfigurationReference.random()).isEmpty())
     }
 
@@ -275,14 +275,84 @@ class ConfigurationResolverTest {
     }
 
     @Test
-    fun `missing enterprise defaults do not inherit the personal selections`() {
+    fun `missing enterprise model and speech defaults stay unset while assistant derives a usable enterprise choice`() {
         val original = exampleEnterprisePackage()
         val packet = original.copy(configuration = original.configuration.copy(defaults = EnterpriseDefaults()))
         val resolved = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet))
         assertNull(resolved.selections.chatModelId)
-        assertNull(resolved.selections.assistantId)
+        assertEquals(packet.identity.reference(packet.configuration.assistants.first { it.enabled && !it.allowAsSubAssistant }.id),
+            resolved.selections.assistantId)
+        assertNull(resolved.storedSelections.assistantId)
         assertNull(resolved.selections.selectedTTSProviderId)
         assertFalse(resolved.modelSelection(ModelSelectionRole.CHAT).isAvailable)
+    }
+
+    @Test
+    fun `unset enterprise assistant uses the first selectable published enterprise assistant without storing it`() {
+        val original = exampleEnterprisePackage()
+        val definition = original.configuration.assistants.first()
+        val disabled = definition.copy(id = "asd_disabled", enabled = false)
+        val first = definition.copy(id = "asd_first", enabled = true)
+        val next = definition.copy(id = "asd_next", enabled = true)
+        fun resolve(definitions: List<EnterpriseAssistant>): ResolvedConfiguration {
+            val packet = original.copy(configuration = original.configuration.copy(
+                assistants = definitions, defaults = original.configuration.defaults.copy(assistantId = null)))
+            return ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet))
+        }
+        val resolved = resolve(listOf(disabled, first, next))
+        assertEquals(original.identity.reference(first.id), resolved.selections.assistantId)
+        assertNull(resolved.storedSelections.assistantId)
+        assertEquals(original.identity.reference(next.id), resolve(listOf(disabled, next, first)).selections.assistantId)
+        assertEquals(userAssistant.id, document.preferences.forScope(ConfigurationScope.Personal).assistantId)
+        assertNull(document.preferences.forScope(original.identity.scope).assistantId)
+    }
+
+    @Test
+    fun `unavailable enterprise assistants never derive a personal assistant fallback`() {
+        val original = exampleEnterprisePackage()
+        for (allowLocal in listOf(true, false)) {
+            for (definitions in listOf(emptyList(), original.configuration.assistants.map { it.copy(enabled = false) })) {
+                val packet = original.copy(configuration = original.configuration.copy(
+                    assistants = definitions, defaults = original.configuration.defaults.copy(assistantId = null),
+                    policy = original.configuration.policy.copy(allowLocalAssistants = allowLocal)))
+                val resolved = ConfigurationResolver.resolve(document, packet.identity.scope, appliedConfiguration(packet))
+                assertNull(resolved.selections.assistantId)
+                assertNull(resolved.storedSelections.assistantId)
+            }
+        }
+        assertNull(ConfigurationResolver.resolve(document, original.identity.scope, EnterpriseState.Loading).selections.assistantId)
+        val otherPrincipal = original.identity.scope.copy(userId = "another-user")
+        assertNull(ConfigurationResolver.resolve(document, otherPrincipal, appliedConfiguration(original)).selections.assistantId)
+    }
+
+    @Test
+    fun `explicit enterprise choices and published defaults remain authoritative even when unavailable`() {
+        val original = exampleEnterprisePackage()
+        val missing = original.identity.reference("asd_missing")
+        val disabled = original.configuration.assistants.first().copy(enabled = false)
+        val packet = original.copy(configuration = original.configuration.copy(
+            assistants = listOf(disabled) + original.configuration.assistants.drop(1),
+            defaults = original.configuration.defaults.copy(assistantId = null)))
+        val disabledReference = packet.identity.reference(disabled.id)
+        for ((reference, reason) in listOf(missing to ConfigurationUnavailableReason.REFERENCE_MISSING,
+            disabledReference to ConfigurationUnavailableReason.RESOURCE_DISABLED)) {
+            val selected = document.copy(preferences = document.preferences.withSelections(packet.identity.scope,
+                ResourceSelections(assistantId = reference)))
+            val resolved = ConfigurationResolver.resolve(selected, packet.identity.scope, appliedConfiguration(packet))
+            assertEquals(reference, resolved.selections.assistantId)
+            assertEquals(reason, resolved.selection(ResourceSelectionSlot.ASSISTANT).unavailableReason)
+            val published = packet.copy(configuration = packet.configuration.copy(
+                defaults = packet.configuration.defaults.copy(assistantId = reference.id)))
+            val inherited = ConfigurationResolver.resolve(document, published.identity.scope, appliedConfiguration(published))
+            assertEquals(reference, inherited.selections.assistantId)
+            assertEquals(reason, inherited.selection(ResourceSelectionSlot.ASSISTANT).unavailableReason)
+        }
+        val chosen = document.copy(preferences = document.preferences.withSelections(packet.identity.scope,
+            ResourceSelections(assistantId = userAssistant.id)))
+        val published = original.copy(configuration = original.configuration.copy(
+            defaults = original.configuration.defaults.copy(assistantId = missing.id)))
+        assertEquals(userAssistant.id,
+            ConfigurationResolver.resolve(chosen, published.identity.scope, appliedConfiguration(published)).selections.assistantId)
     }
 
     @Test

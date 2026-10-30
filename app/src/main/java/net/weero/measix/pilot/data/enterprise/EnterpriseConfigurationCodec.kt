@@ -39,6 +39,7 @@ internal object EnterpriseConfigurationCodec {
     fun validateConfiguration(identity: EnterpriseIdentity, config: EnterpriseConfiguration) {
         validateIdentity(identity)
         check(config.generation > 0, "invalid_enterprise_generation")
+        check(config.assistants.any { it.enabled }, "enterprise_assistant_required")
         check(config.gateways.size <= 1, "multiple_enterprise_gateways")
         check(config.mcpServers.all { it.id.startsWith("mcp_") }, "invalid_enterprise_mcp_id")
         config.gateways.forEach {
@@ -83,7 +84,9 @@ internal object EnterpriseConfigurationCodec {
         config.assistants.forEach { assistant ->
             check(assistant.name.isNotBlank(), "invalid_enterprise_assistant")
             val model = models[assistant.modelId]
-            check(model != null && model.type == ModelType.CHAT && (!assistant.enabled || model.enabled), "invalid_assistant_model_reference")
+            check(model != null && model.type == ModelType.CHAT && (!assistant.enabled ||
+                model.enabled && (model.providerId == null || config.providers.singleOrNull { it.id == model.providerId }?.enabled == true)),
+                "invalid_assistant_model_reference")
             check(assistant.mcpBindings.map { it.mcpServerId }.distinct().size == assistant.mcpBindings.size &&
                 assistant.mcpBindings.all { mcp[it.mcpServerId]?.let { server -> !assistant.enabled || server.enabled } == true },
                 "invalid_assistant_mcp_reference")

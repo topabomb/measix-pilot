@@ -113,7 +113,7 @@ class ChatVM internal constructor(
     private val page = MutableStateFlow<PageState>(PageState.Loading)
     internal data class ConversationHandoff(
         val selection: net.weero.measix.pilot.data.enterprise.RealmSelection,
-        val continuation: net.weero.measix.pilot.service.ConversationContinuation? = null,
+        val continuation: net.weero.measix.pilot.service.ConversationOpenRequest.NewDraft? = null,
         val diagnostic: String? = null,
         val failure: Throwable? = null,
     )

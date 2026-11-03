@@ -24,7 +24,9 @@
 
 `selectedTTSProviderId` 选中一个 provider；`defaultTTSPlaybackSpeed` 是播放层公共速度，不是服务端 TTS voice。
 
-`TtsController` 仅预取当前位置之后两段；同 turn 的追加只补足该窗口，不能按上次预取位置继续前推。合成失败保留诊断并继续后续队列项，不自动重试失败分片。远端 TTS 可并发预取；`SystemTTSProvider` 通过单一 `SystemTtsSynthesisCoordinator` 串行访问设备引擎，避免厂商实现同时绑定和合成多个分片。
+`TextChunker` 保留段落边界。新队列或自然结束后的重新启动优先输出首个短句：在不超过 80 字符的窗口内优先句末，其次选择靠近 40 字符的分句边界，再考虑空白；没有自然边界时沿用 160 字符硬上限。连续播放中的追加不重复缩短首段。分段保留词间空白，避免切开小数、可容纳的内联语气标记和 UTF-16 代理对；超过硬上限的无边界文本仍必须切分。
+
+`TtsController` 先完成当前段合成及播放准入，再预取下一段，与当前音频播放重叠；同 turn 的追加只补足这一段窗口。暂停不启动新预取，已经发出的请求可以完成并缓存；恢复先复验播放准入。播放准入等待期间发生的暂停也必须在准入回调中复验。合成失败保留诊断并继续后续队列项，不自动重试失败分片。`SystemTTSProvider` 通过单一 `SystemTtsSynthesisCoordinator` 串行访问设备引擎，避免厂商实现同时绑定和合成多个分片。
 
 企业公开定义使用 `EnterpriseTtsResource`，按协议区分云端模型/音色与 System TTS 的 rate/pitch。启用的普通云端 TTS 显式提供 `voice`；MiMo voicedesign 显式提供非空 `voiceDesignPrompt` 并省略 `voice`，不补默认音色。企业定义、用户 `TTSProviderSetting` 与平台执行描述 `EnterpriseExecution.Platform` 分开保存，短期凭据由 Session owner 提供。
 

@@ -22,15 +22,24 @@ class MarkdownUtilsTest {
     }
 
     @Test fun `speech retains link labels and list structure`() {
-        assertEquals("标题\n这是重点和链接\n第一项\n第二项\n引用",
+        assertEquals("标题\n\n这是重点和链接\n\n第一项\n\n第二项\n\n引用",
             "# 标题\n\n这是**重点**和[链接](https://example.com)\n\n- 第一项\n- 第二项\n\n> 引用".stripMarkdown())
     }
 
     @Test fun `speech excludes code images and math without removing surrounding words`() {
-        assertEquals("运行 即可\n结束", "运行 `ls` 即可\n\n```kotlin\nval a = 1\n```\n\n结束".stripMarkdown())
+        assertEquals("运行 即可\n\n结束", "运行 `ls` 即可\n\n```kotlin\nval a = 1\n```\n\n结束".stripMarkdown())
         assertEquals("开始 结束", "开始 ![图片](https://example.com/a.png) 结束".stripMarkdown())
         assertEquals("开始 结束", "开始 \\(x < y\\) 结束".stripMarkdown())
-        assertEquals("开始\n结束", "开始\n\n\$\$x+y\$\$\n\n结束".stripMarkdown())
+        assertEquals("开始\n\n结束", "开始\n\n\$\$x+y\$\$\n\n结束".stripMarkdown())
         assertEquals("开始", "开始\n\n````text\nnot spoken\n```\nstill code".stripMarkdown())
+    }
+
+    @Test fun `speech cleaning preserves paragraph boundaries for chunking`() {
+        val first = "甲".repeat(22)
+        val second = "乙".repeat(136)
+        val plain = "$first\n\n$second".stripMarkdown()
+        assertEquals("$first\n\n$second", plain)
+        assertEquals(listOf(first, second), me.rerere.tts.controller.TextChunker(160).split(plain).map { it.text })
+        assertEquals("第一行\n第二行", "第一行<br/>第二行".stripMarkdown())
     }
 }

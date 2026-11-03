@@ -36,12 +36,16 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val started = kotlinx.coroutines.channels.Channel<Int>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         val indices = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+        val firstReady = kotlinx.coroutines.CompletableDeferred<Unit>()
         val controller = withContext(Dispatchers.Main) {
             TtsController(context).also { controller ->
                 controller.setSession(TtsPlaybackSession(synthesize = { chunk ->
                     indices.add(chunk.index)
                     started.send(chunk.index)
-                    kotlinx.coroutines.awaitCancellation()
+                    if (chunk.index == 0) {
+                        firstReady.await()
+                        TTSResponse(ByteArray(24000 * 2 * 5), me.rerere.tts.model.AudioFormat.PCM, sampleRate = 24000)
+                    } else kotlinx.coroutines.awaitCancellation()
                 }, admitPlayback = { start -> start() }))
                 controller.speak("First queued sentence", false, queueSessionId = "bounded")
             }
@@ -51,14 +55,22 @@ class SystemTtsSequentialPlaybackInstrumentedTest {
             withContext(Dispatchers.Main) {
                 repeat(7) { controller.speak("Queued sentence $it", false, queueSessionId = "bounded") }
             }
-            withTimeout(CONTROLLER_TIMEOUT_MS) { repeat(2) { started.receive() } }
+            assertNull("Appending must not compete with pending current synthesis",
+                kotlinx.coroutines.withTimeoutOrNull(300) { started.receive() })
+            firstReady.complete(Unit)
+            assertEquals(1, withTimeout(CONTROLLER_TIMEOUT_MS) { started.receive() })
+            withTimeout(CONTROLLER_TIMEOUT_MS) {
+                controller.playbackState.first { it.status == PlaybackStatus.Playing }
+            }
             withContext(Dispatchers.Main) {
                 repeat(12) { controller.speak("Later sentence $it", false, queueSessionId = "bounded") }
             }
+            assertNull("Only the next segment may be prefetched",
+                kotlinx.coroutines.withTimeoutOrNull(300) { started.receive() })
         } finally {
             withContext(Dispatchers.Main) { controller.dispose().awaitClosed() }
         }
-        assertEquals(setOf(0, 1, 2), indices)
+        assertEquals(setOf(0, 1), indices)
     }
 
     private fun systemPlayback(context: android.content.Context, setting: TTSProviderSetting): TtsPlaybackSession {

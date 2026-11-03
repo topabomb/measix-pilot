@@ -50,13 +50,15 @@ fun String.stripMarkdown(): String {
                         "br" -> { append('\n'); return }
                     }
                     node.childNodes().forEach(::visit)
-                    if (node.isBlock) append('\n')
+                    if (node.normalName() in setOf("p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote")) append("\n\n")
+                    else if (node.isBlock) append('\n')
                     else if (node.normalName() in setOf("td", "th")) append(' ')
                 }
             }
         }
         visit(document.body())
-    }.replace(Regex("[ \\t]*\\n\\s*"), "\n")
+    }.replace(Regex("[ \\t]*\\n[ \\t]*"), "\n")
+        .replace(Regex("\\n{3,}"), "\n\n")
         .replace(Regex("[ \\t]{2,}"), " ").trim()
 }
 

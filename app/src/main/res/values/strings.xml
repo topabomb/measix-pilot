@@ -517,7 +517,7 @@
   <string name="permission_diaog_title">Permission Request</string>
   <string name="permission_go_to_settings">Go to Setting</string>
   <string name="permission_local_network">Local Network</string>
-  <string name="permission_local_network_desc">Allow the web server to be accessed from devices on the same local network</string>
+  <string name="permission_local_network_desc">Connect to devices and services on your local network</string>
   <string name="permission_microphone">Microphone</string>
   <string name="permission_microphone_desc">Microphone permission is required for speech recognition</string>
   <string name="permission_notification">Notification</string>
@@ -2171,4 +2171,5 @@
   <string name="webdav_name_help">Leave blank to use the server hostname.</string>
   <string name="webdav_credentials_help">Leave credentials blank for anonymous access. Otherwise, use the WebDAV credentials from your service.</string>
   <string name="enterprise_assistant_required">The enterprise must publish at least one enabled assistant with an available chat model. Ask your administrator to publish the configuration, then sync again.</string>
+  <string name="permission_local_network_denied">Local network access may be limited. Allow it in app settings.</string>
 </resources>

@@ -83,6 +83,7 @@ import net.weero.measix.pilot.ui.activity.SafeModeActivity
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.components.ui.TTSController
+import net.weero.measix.pilot.ui.components.ui.permission.StartupLocalNetworkPermission
 import net.weero.measix.pilot.ui.context.LocalASRState
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.context.LocalSettings
@@ -263,6 +264,7 @@ class RouteActivity : ComponentActivity() {
     @Suppress("OPT_IN_IS_NOT_ENABLED")
     @Composable
     fun AppRoutes() {
+        StartupLocalNetworkPermission()
         val settings by settingsStore.userSettings.collectAsStateWithLifecycle()
         val speech = koinInject<net.weero.measix.pilot.service.SpeechApplicationService>()
         val tts = speech.playback

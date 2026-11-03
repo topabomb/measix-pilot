@@ -498,7 +498,7 @@
   <string name="permission_diaog_title">Запрос разрешения</string>
   <string name="permission_go_to_settings">Перейти в настройки приложения</string>
   <string name="permission_local_network">Локальная сеть</string>
-  <string name="permission_local_network_desc">Разрешить устройствам в той же локальной сети доступ к веб-серверу</string>
+  <string name="permission_local_network_desc">Подключение к устройствам и сервисам в локальной сети</string>
   <string name="permission_microphone">Микрофон</string>
   <string name="permission_microphone_desc">Для распознавания речи требуется разрешение на использование микрофона</string>
   <string name="permission_notification">Уведомление</string>
@@ -2163,4 +2163,5 @@
   <string name="webdav_name_help">Оставьте пустым, чтобы использовать имя хоста сервера.</string>
   <string name="webdav_credentials_help">Для анонимного доступа оставьте поля пустыми. Иначе укажите учётные данные WebDAV, предоставленные сервисом.</string>
   <string name="enterprise_assistant_required">Организация должна опубликовать хотя бы одного включённого ассистента с доступной моделью чата. Попросите администратора опубликовать настройки и повторите синхронизацию.</string>
+  <string name="permission_local_network_denied">Доступ к локальной сети может быть ограничен. Разрешите его в настройках приложения.</string>
 </resources>

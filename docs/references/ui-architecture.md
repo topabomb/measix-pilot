@@ -10,6 +10,11 @@
 `Screen` 定义路由参数，entry decorators 管理页面状态和 ViewModel 生命周期。具体路由以
 `Screen` 与 `RouteActivity` 的注册为准，不在文档复制清单。
 
+`RouteActivity.AppRoutes` 在 Android 17 及以上启动时通过 `StartupLocalNetworkPermission` 申请尚未授权的本地网络权限，
+不按 MCP 或其他资源的地址分类。权限是可选的；拒绝时提示访问局域网资源可能受限，不阻断主界面。
+每次启动最多申请一次，Activity 重建通过 saved state 保留申请状态，切页和返回前台不重复申请；
+后续启动仍以系统授权状态为准，系统不再弹窗时保留同样的受限提示。
+
 页面消费 application/query UiModel 并提交类型化命令，不持有 Runtime Job，不从渲染列表推断持久化状态。
 `ConversationPresentation` 提供消息、执行阶段、工具定位和附件预览；工具结果是否存在不能代替执行阶段或访问权限。
 Koin 只负责装配依赖，不作为 UI 的服务定位器。`LocalSettings` 来自 `SettingsStore.userSettings`，

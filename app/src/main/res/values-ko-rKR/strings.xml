@@ -498,7 +498,7 @@
   <string name="permission_diaog_title">권한 요청</string>
   <string name="permission_go_to_settings">앱 설정으로 이동</string>
   <string name="permission_local_network">로컬 네트워크</string>
-  <string name="permission_local_network_desc">같은 로컬 네트워크의 기기에서 Web 서버에 접근할 수 있도록 허용합니다</string>
+  <string name="permission_local_network_desc">로컬 네트워크의 기기 및 서비스에 연결합니다</string>
   <string name="permission_microphone">마이크</string>
   <string name="permission_microphone_desc">음성 인식을 위해 마이크 권한이 필요합니다</string>
   <string name="permission_notification">알림</string>
@@ -2163,4 +2163,5 @@
   <string name="webdav_name_help">비워 두면 서버 호스트 이름을 사용합니다.</string>
   <string name="webdav_credentials_help">익명 접속은 비워 둘 수 있습니다. 인증이 필요하면 서비스에서 제공한 WebDAV 사용자 이름과 비밀번호를 입력하세요.</string>
   <string name="enterprise_assistant_required">기업에서 사용 가능한 채팅 모델이 연결된 활성 어시스턴트를 하나 이상 게시해야 합니다. 관리자에게 설정 게시를 요청한 후 다시 동기화하세요.</string>
+  <string name="permission_local_network_denied">로컬 네트워크 접근이 제한될 수 있습니다. 앱 설정에서 허용하세요.</string>
 </resources>

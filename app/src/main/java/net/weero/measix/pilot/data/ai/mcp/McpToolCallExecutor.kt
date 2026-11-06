@@ -44,6 +44,7 @@ internal data class McpInvocationLease(
 
 internal enum class McpInvocationFailureKind {
     REMOTE,
+    DIRECTORY_STALE,
     TIMEOUT,
     AUTHORIZATION,
     CONNECTION,
@@ -166,13 +167,14 @@ internal class McpToolCallExecutor(
                 receivedResult -> McpInvocationFailureKind.RESULT_PROCESSING
                 error is McpException && error.code == RPCError.ErrorCode.REQUEST_TIMEOUT -> McpInvocationFailureKind.TIMEOUT
                 error is McpException && error.code == RPCError.ErrorCode.CONNECTION_CLOSED -> McpInvocationFailureKind.CONNECTION
+                error is McpException && error.code == RPCError.ErrorCode.INVALID_PARAMS -> McpInvocationFailureKind.DIRECTORY_STALE
                 error is McpException -> McpInvocationFailureKind.REMOTE
                 McpProtocolFailureClassifier.isUnauthorized(error) -> McpInvocationFailureKind.AUTHORIZATION
                 McpProtocolFailureClassifier.isConnectionError(error) -> McpInvocationFailureKind.CONNECTION
                 else -> McpInvocationFailureKind.UNKNOWN
             }
             val projectedKind = when (kind) {
-                McpInvocationFailureKind.REMOTE -> McpToolFailureKind.REMOTE_ERROR
+                McpInvocationFailureKind.REMOTE, McpInvocationFailureKind.DIRECTORY_STALE -> McpToolFailureKind.REMOTE_ERROR
                 McpInvocationFailureKind.AUTHORIZATION -> McpToolFailureKind.AUTHORIZATION_REQUIRED
                 McpInvocationFailureKind.PROTOCOL -> McpToolFailureKind.PROTOCOL_INCOMPATIBLE
                 McpInvocationFailureKind.RESULT_PROCESSING -> McpToolFailureKind.RESULT_PROCESSING_FAILED

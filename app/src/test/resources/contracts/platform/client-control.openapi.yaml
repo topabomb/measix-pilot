@@ -1339,6 +1339,7 @@ components:
           type: string
     WorkspaceFileList:
       type: object
+      description: Files hides the workspace-root .agent-space entry and rejects direct access to it and its descendants. Similar names and nested same-name paths remain ordinary entries. Standard WebDAV does not apply this policy.
       required:
       - entries
       properties:
@@ -1356,6 +1357,7 @@ components:
           minimum: 0
     WorkspaceFileMutation:
       type: object
+      description: Files source and destination paths must not address the workspace-root .agent-space entry or its descendants.
       additionalProperties: false
       required:
       - action
@@ -1670,6 +1672,7 @@ components:
       enum: [AVAILABLE, EXHAUSTED, PENDING_RECONCILIATION]
     MeterQuantity:
       type: object
+      description: Request meters retain their recorded completeness. Aggregates sum only reliable EXACT/PARTIAL quantities; mixed reliable and incomplete contributions are PARTIAL, and no reliable contribution is UNKNOWN. A PARTIAL zero is an observed subtotal, not a complete total.
       required: [meter, quantity, completeness]
       properties:
         meter:
@@ -2931,7 +2934,9 @@ components:
           minLength: 1
           pattern: '^[^*]+$'
         contractHash:
-          $ref: '#/components/schemas/Sha256Hash'
+          description: Compatibility field, not an authorization condition. New publications emit an empty string; historical SHA-256 values remain accepted. Authorization uses server identity and exact tool name.
+          type: string
+          pattern: '^(sha256:[0-9a-f]{64})?$'
         approvalPolicy:
           description: AUTO adds no enterprise confirmation; REQUIRE_CONFIRMATION requires user approval before each invocation. Independent of tool selection and does not bypass existing runtime or system permissions. Required explicitly; no decoder default.
           type: string

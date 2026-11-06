@@ -2017,7 +2017,6 @@
   <string name="mcp_tool_not_allowed">未获企业批准</string>
   <string name="mcp_tool_not_selected">此助手未选择该工具</string>
   <string name="mcp_tool_missing">服务器无此工具，请联系管理员</string>
-  <string name="mcp_tool_contract_changed">定义已变更，需管理员重新发布</string>
   <string name="mcp_tool_directory_unavailable">首次使用时连接</string>
   <string name="mcp_assistant_fixed_binding">企业强制启用</string>
   <string name="mcp_tools_partially_available">%1$d 个可用 · %2$d 个需管理员处理</string>

@@ -95,9 +95,9 @@ internal class EnterpriseAssistantMcpSelectionTest : McpRuntimeCoordinatorTestBa
                 assertEquals("outcomes=${capabilities.serverOutcomes}; runtime=${manager.runtimeCapabilities.value}", 1, capabilities.tools.size)
                 val tool = capabilities.tools.single()
                 assertEquals(ref, tool.serverId)
-                suspend fun invoke(hash: String? = tool.contractHash, approval: Boolean = tool.needsApproval, approved: Boolean = false) =
+                suspend fun invoke(approval: Boolean = tool.needsApproval, approved: Boolean = false) =
                     manager.callTool(access, ref, tool.interactionId, tool.name, tool.definitionDigest, approval, JsonObject(emptyMap()),
-                        expectedContractHash = hash, approvedByUser = approved, onArtifactCreated = { error("unexpected artifact") })
+                        approvedByUser = approved, onArtifactCreated = { error("unexpected artifact") })
                 assertTrue(invoke().isNotEmpty())
                 assertEquals(1, calls.get())
                 fun restrictAssistant(names: List<String>) {
@@ -116,12 +116,12 @@ internal class EnterpriseAssistantMcpSelectionTest : McpRuntimeCoordinatorTestBa
                 packet = packet.copy(configuration = packet.configuration.copy(mcpServers = listOf(server.copy(
                     toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALLOWLIST,
                     allowedTools = listOf(PlatformMcpToolGrant(tool.name, hash, PlatformMcpToolGrantApprovalPolicy.REQUIRE_CONFIRMATION))))))
-                try { invoke(); fail("Server hash and confirmation ceiling must still apply") }
+                try { invoke(); fail("Server confirmation ceiling must still apply") }
                 catch (failure: ToolExecutionFailure) { assertEquals("MCP tool failure: tool_unavailable", failure.message) }
-                assertTrue(invoke(hash, true, true).isNotEmpty())
+                assertTrue(invoke(true, true).isNotEmpty())
                 assertEquals(3, calls.get())
                 document = document.changeAssistantPreference(packet.identity.scope, appliedConfiguration(packet), id, AssistantPreferenceChange.Mcp(ref, false))
-                try { invoke(hash, true, true); fail("Deselected service must reject an existing Turn runtime") }
+                try { invoke(true, true); fail("Deselected service must reject an existing Turn runtime") }
                 catch (failure: ToolExecutionFailure) { assertEquals("MCP tool failure: tool_unavailable", failure.message) }
                 assertEquals(3, calls.get())
             } finally {

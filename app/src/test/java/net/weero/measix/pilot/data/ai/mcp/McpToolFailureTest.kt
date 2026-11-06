@@ -26,6 +26,7 @@ class McpToolFailureTest {
     @Test
     fun `local failure projections contain only stable decision fields`() {
         val expected = mapOf(
+            McpToolFailureKind.TOOL_MISSING to Triple("unavailable", "tool_missing", McpToolFailureKind.TOOL_MISSING.detail),
             McpToolFailureKind.TOOL_UNAVAILABLE to Triple("unavailable", "tool_unavailable", McpToolFailureKind.TOOL_UNAVAILABLE.detail),
             McpToolFailureKind.SERVER_UNAVAILABLE to Triple("unavailable", "server_unavailable", McpToolFailureKind.SERVER_UNAVAILABLE.detail),
             McpToolFailureKind.AUTHORIZATION_REQUIRED to Triple(

@@ -217,15 +217,14 @@ class PlatformSnapshotMapperTest {
             fun consume() = map(PlatformWireCodec.decode<PlatformManagedSnapshot>(JsonObject(base + content).toString()))
             if (fields.getValue("expectedCode").jsonPrimitive.content.isEmpty()) consume()
             else if (fields.getValue("name").jsonPrimitive.content == "server-invalid-tool-hash") {
-                // Admin has the reviewed definition; Client receives only the hash and checks it against discovery.
+                // Historical Admin validation may reject this digest; Client grants names regardless of digest.
                 val candidate = consume()
                 val draftServer = fields.getValue("content").jsonObject.getValue("mcp").jsonArray.first().jsonObject
                 val discovered = draftServer.getValue("allowedTools").jsonArray.map {
                     net.weero.measix.pilot.data.ai.mcp.McpCatalogTool(it.jsonObject.getValue("definition").jsonObject)
                 }
                 val access = candidate.configuration.mcpServers.first().toolAccess(discovered)
-                assertTrue(access.none { it.enabled })
-                assertTrue(access.any { it.unavailableReason == net.weero.measix.pilot.data.ai.mcp.McpToolUnavailableReason.CONTRACT_CHANGED })
+                assertTrue(access.any { it.enabled })
             } else assertThrows(fields.getValue("name").jsonPrimitive.content, IllegalArgumentException::class.java) { consume() }
         }
     }

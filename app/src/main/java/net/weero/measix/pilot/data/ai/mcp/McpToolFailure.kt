@@ -17,6 +17,11 @@ internal enum class McpToolFailureKind(
         status = "unavailable",
         reason = "tool_unavailable",
     ),
+    TOOL_MISSING(
+        status = "unavailable",
+        reason = "tool_missing",
+        detail = "The original MCP tool no longer exists in the confirmed directory.",
+    ),
     SERVER_UNAVAILABLE(
         status = "unavailable",
         reason = "server_unavailable",

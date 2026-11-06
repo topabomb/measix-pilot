@@ -193,7 +193,7 @@ Snapshot 必须先识别 `schemaVersion`，未知合法版本独立报告不兼�
 当前 Snapshot 发布元数据、v4 Starter 废弃说明和 Problem 的 Admin activation/draft revision 不参与 Android
 显示、持久化或执行，由生成器排除；不为这些字段的必填、格式或变化设置接纳门槛。
 v4 适配只转换已验证 DTO，原始扩展字段不能在 v5 DTO 中重新取得含义；原发布版本与 hash 不变。
-MCP Tool 原始定义及其 JCS contractHash 使用独立的完整定义合同，扩展仍参与摘要，不能套用配置投影的忽略规则。
+MCP Tool 原始定义完整保留，扩展仍参与目录摘要，不能套用配置投影的忽略规则。Direct MCP 的 `contractHash` 仅作为兼容字段；名称授权和客户端部署顺序见 [MCP 架构](mcp-architecture.md)。Gateway surface 继续校验完整定义摘要。
 
 宽容限于响应读取。Client 提交命令、Bridge 请求/params 和扫码接入资料仍保持明确字段及操作意图；
 本地存储继续由各 owner 的格式与迁移管理。JSON 语法、重复键、嵌套和正文大小限制仍保护读取边界。

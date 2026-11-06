@@ -116,7 +116,9 @@ def checks(schema, key, field_type, optional, owner):
         if "maxLength" in schema:
             predicates.append(f'{target}.codePointCount(0, {target}.length) <= {schema["maxLength"]}')
         if "pattern" in schema:
-            predicates.append(f'Regex({quote(schema["pattern"])}).containsMatchIn({target})')
+            # The compatibility grant is exactly empty or a complete digest, not a substring.
+            match = "matches" if owner == "McpToolGrant" and key == "contractHash" else "containsMatchIn"
+            predicates.append(f'Regex({quote(schema["pattern"])}).{match}({target})')
         if schema.get("format") == "date-time":
             predicates.append(f'platformWireTimestamp({target})')
     for bound, operator in [("minimum", ">="), ("maximum", "<=")]:

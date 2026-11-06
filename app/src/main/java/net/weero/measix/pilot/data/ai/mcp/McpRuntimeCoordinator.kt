@@ -398,7 +398,7 @@ class McpRuntimeCoordinator internal constructor(
                 ?.mcpBindings?.find { it.mcpServerId == (id as? ConfigurationReference.Enterprise)?.id }
             val enabled = (resource?.toolAccess(catalog?.tools.orEmpty(), binding)
                 ?: catalog?.tools.orEmpty().map { tool -> McpToolAccess(tool.name, tool,
-                    policies[tool.name]?.needsApproval == true, null,
+                    policies[tool.name]?.needsApproval == true,
                     if (policies[tool.name]?.enable == false) McpToolUnavailableReason.NOT_ALLOWED else null) })
                 .filter { it.enabled }
             enabled.forEach { permission ->
@@ -408,7 +408,7 @@ class McpRuntimeCoordinator internal constructor(
                     namespace = if (id is ConfigurationReference.Enterprise) managedMcpNamespace(id) else name,
                     catalogRevision = requireNotNull(catalog).revision, definitionDigest = catalog.definitionDigest,
                     catalogDigest = catalog.catalogDigest, name = tool.name, description = tool.description,
-                    inputSchema = tool.inputSchema, needsApproval = permission.needsApproval, contractHash = permission.contractHash,
+                    inputSchema = tool.inputSchema, needsApproval = permission.needsApproval,
                 )
             }
             McpServerCapabilityOutcome(id, name,
@@ -761,7 +761,7 @@ class McpRuntimeCoordinator internal constructor(
                     serverId = definition.id, serverName = definition.name, namespace = definition.namespace, interactionId = interactionId,
                     catalogRevision = requireNotNull(catalog).revision, definitionDigest = catalog.definitionDigest, catalogDigest = catalog.catalogDigest,
                     name = tool.name, description = tool.description, inputSchema = tool.inputSchema,
-                    needsApproval = permission.needsApproval, contractHash = permission.contractHash,
+                    needsApproval = permission.needsApproval,
                 )
             }
             McpServerCapabilityOutcome(definition.id, definition.name, when {
@@ -794,7 +794,6 @@ class McpRuntimeCoordinator internal constructor(
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
         args: JsonObject,
-        expectedContractHash: String? = null,
         approvedByUser: Boolean = false,
         onResolvedTool: suspend (JsonObject) -> Unit = {},
         onArtifactCreated: (OwnedArtifact) -> Unit,
@@ -807,11 +806,11 @@ class McpRuntimeCoordinator internal constructor(
             toolName = toolName,
             expectedDefinitionDigest = expectedDefinitionDigest,
             expectedNeedsApproval = expectedNeedsApproval,
-            expectedContractHash = expectedContractHash, approvedByUser = approvedByUser,
+            approvedByUser = approvedByUser,
         )
         if (admission is McpToolCallAdmission.Rejected) {
             logMcp(admission.serverName, "Tool '$toolName' rejected before commitment: ${admission.message}")
-            throw McpToolFailureProjector.project(McpToolFailureKind.TOOL_UNAVAILABLE)
+            throw McpToolFailureProjector.project(admission.kind)
         }
         admission as McpToolCallAdmission.Candidate
 
@@ -844,7 +843,7 @@ class McpRuntimeCoordinator internal constructor(
                 toolName = toolName,
                 expectedDefinitionDigest = expectedDefinitionDigest,
                 expectedNeedsApproval = expectedNeedsApproval,
-                expectedContractHash = expectedContractHash, approvedByUser = approvedByUser,
+                approvedByUser = approvedByUser,
             )
             if (preparation is McpToolCallPreparation.Rejected) {
                 logMcp(
@@ -890,6 +889,7 @@ class McpRuntimeCoordinator internal constructor(
                 when (outcome.kind) {
                     McpInvocationFailureKind.AUTHORIZATION,
                     McpInvocationFailureKind.CONNECTION,
+                    McpInvocationFailureKind.DIRECTORY_STALE,
                     -> serverRuntime.recordInvocationFailure(lease, outcome.kind)
                     else -> Unit
                 }

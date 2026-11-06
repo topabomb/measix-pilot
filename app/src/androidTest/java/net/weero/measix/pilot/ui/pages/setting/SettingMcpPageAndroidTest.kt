@@ -360,7 +360,7 @@ class SettingMcpPageAndroidTest {
             null, access, requiredEnabled = true, status = McpStatus.Ready(3, 1), sessionCallable = true,
             tools = listOf(
                 McpToolPresentation("read", "Read tool details", JsonObject(emptyMap()), true, true),
-                McpToolPresentation("changed", null, JsonObject(emptyMap()), false, true, McpToolUnavailableReason.CONTRACT_CHANGED),
+                McpToolPresentation("not allowed", null, JsonObject(emptyMap()), false, true, McpToolUnavailableReason.NOT_ALLOWED),
             ), allowsAllTools = false, directoryConfirmed = true)
         val all = restricted.copy(serverId = ConfigurationReference.Enterprise(authority, "mcp_all"), name = "Dynamic tools",
             tools = emptyList(), allowsAllTools = true)
@@ -389,10 +389,10 @@ class SettingMcpPageAndroidTest {
         compose.onNodeWithText("Read tool details").assertIsDisplayed()
         compose.onNodeWithContentDescription(compose.activity.getString(R.string.code_block_collapse)).performClick()
         compose.onNodeWithText("Read tool details").assertDoesNotExist()
-        compose.onNodeWithText("changed").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText(compose.activity.getString(R.string.mcp_tool_contract_changed)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("not allowed").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(compose.activity.getString(R.string.mcp_tool_not_allowed)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.setting_mcp_page_needs_approval)).performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("changed").onParent().onChildren()
+        compose.onNodeWithText("not allowed").onParent().onChildren()
             .filter(hasText(compose.activity.getString(R.string.setting_mcp_page_needs_approval))).assertCountEquals(0)
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_managed_all_tools)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.mcp_managed_empty_directory)).performScrollTo().assertIsDisplayed()

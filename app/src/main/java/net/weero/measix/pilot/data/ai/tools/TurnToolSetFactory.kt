@@ -189,7 +189,6 @@ class TurnToolSetFactory internal constructor(
                                     toolName = tool.name,
                                     expectedDefinitionDigest = tool.definitionDigest,
                                     expectedNeedsApproval = tool.needsApproval,
-                                    expectedContractHash = tool.contractHash,
                                     approvedByUser = approvedByUser,
                                     args = it.jsonObject,
                                     onResolvedTool = { metadata ->

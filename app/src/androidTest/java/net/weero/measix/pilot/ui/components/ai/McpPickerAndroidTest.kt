@@ -35,8 +35,8 @@ class McpPickerAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val serverId = ConfigurationReference.Enterprise(EnterpriseAuthority("picker-test"), "mcp_fixed")
     private val valid = McpToolPresentation("read", null, JsonObject(emptyMap()), true, false)
-    private val changed = valid.copy(name = "changed", enabled = false, needsApproval = true,
-        unavailableReason = McpToolUnavailableReason.CONTRACT_CHANGED)
+    private val notAllowed = valid.copy(name = "not allowed", enabled = false, needsApproval = true,
+        unavailableReason = McpToolUnavailableReason.NOT_ALLOWED)
     private val missing = valid.copy(name = "missing", inputSchema = null, enabled = false,
         unavailableReason = McpToolUnavailableReason.MISSING)
 
@@ -79,7 +79,7 @@ class McpPickerAndroidTest {
     }
 
     @Test fun partialFailureSummaryDoesNotDependOnToolOrderOrUnlockFixedBinding() {
-        val state = mutableStateOf(choice(listOf(valid, changed, missing)))
+        val state = mutableStateOf(choice(listOf(valid, notAllowed, missing)))
         compose.setContent { MaterialTheme { McpPicker(listOf(state.value), onToggle = { _, _ -> error("fixed binding") }) } }
         val summary = compose.activity.getString(R.string.mcp_tools_partially_available, 1, 2)
         compose.onNodeWithText(summary).assertIsDisplayed()

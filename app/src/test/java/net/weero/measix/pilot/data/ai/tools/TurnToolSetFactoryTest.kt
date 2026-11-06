@@ -109,49 +109,47 @@ class TurnToolSetFactoryTest {
         val local = mockk<LocalTools>()
         every { local.getTools(any(), any(), any()) } returns emptyList()
         val manager = mockk<McpRuntimeCoordinator>()
-        val approvals = mutableListOf<Pair<String?, Boolean>>()
+        val approvals = mutableListOf<Boolean>()
         val destinations = mutableListOf<Pair<ConfigurationReference, String>>()
-        io.mockk.coEvery { manager.callTool(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
-            approvals += arg<String?>(7) to arg<Boolean>(8)
+        io.mockk.coEvery { manager.callTool(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) } coAnswers {
+            approvals += arg<Boolean>(7)
             destinations += arg<ConfigurationReference>(1) to arg<String>(3)
             listOf(me.rerere.ai.ui.UIMessagePart.Text("success"))
         }
         val factory = TurnToolSetFactory(local, mockk(), mockk(), mockk(), mockk(), manager, mockk(), mockk(), mockk())
-        for (hash in listOf(null, "sha256:" + "a".repeat(64))) {
-            for (needsApproval in listOf(false, true)) {
-                val reference = packet.identity.reference(packet.configuration.mcpServers.first().id)
-                val capability = availableTool(reference, "read",
-                    buildJsonObject { put("type", "object") }).copy(needsApproval = needsApproval, contractHash = hash,
-                        namespace = managedMcpNamespace(reference))
-                val definition = factory.buildTools(access, Assistant(), settings = Settings(), configuration = resolved,
-                    capabilityModel = null, mcpCapabilities = TurnMcpCapabilitySnapshot(listOf(capability)))
-                    .single { it.name == "mcp__${capability.namespace}__read" }
-                val runtime = ToolCallRuntime(Json)
-                val source = me.rerere.ai.ui.UIMessagePart.Tool(localCallId = kotlin.uuid.Uuid.random(),
-                    stepId = kotlin.uuid.Uuid.random(), providerCallId = "call", toolName = definition.name, input = "{}")
-                val messageId = kotlin.uuid.Uuid.random()
-                val index = freezeToolSet(listOf(definition)).bindingsByName
-                fun prepare(tool: me.rerere.ai.ui.UIMessagePart.Tool, availability: TurnInteractionCapability) =
-                    runtime.prepareBatch(messageId, listOf(LocatedToolCall(0, tool)), index, availability)
-                val first = prepare(source, TurnInteractionCapability.FULL)
-                val prepared = if (needsApproval) {
-                    assertEquals(1, first.pending.size)
-                    val pending = first.replacements.getValue(source.localCallId)
-                    val resumed = prepare(pending.copy(interactionState = me.rerere.ai.ui.ToolInteractionState.Approved), TurnInteractionCapability.FULL)
-                    (resumed.resolvedCalls.single() as ResolvedToolCall.Executable).call.also {
-                        assertEquals(first.pending.single().locator, it.locator)
-                    }
-                } else (first.resolvedCalls.single() as ResolvedToolCall.Executable).call
-                val outcome = runtime.execute(prepared, ToolExecutionHooks({ me.rerere.ai.core.ToolAttachmentResolution() }, { _, _ -> }, {}, {}))
-                assertEquals(me.rerere.ai.ui.ToolResultStatus.COMPLETED, outcome.resultStatus)
-                assertEquals(hash to needsApproval, approvals.last())
-                assertEquals(reference to "read", destinations.last())
-                val child = prepare(source, TurnInteractionCapability.USER_INPUT_ONLY)
-                if (needsApproval) {
-                    assertTrue(child.pending.isEmpty())
-                    assertEquals(1, child.immediateResults.size)
-                } else assertTrue(child.resolvedCalls.single() is ResolvedToolCall.Executable)
-            }
+        for (needsApproval in listOf(false, true)) {
+            val reference = packet.identity.reference(packet.configuration.mcpServers.first().id)
+            val capability = availableTool(reference, "read",
+                buildJsonObject { put("type", "object") }).copy(needsApproval = needsApproval,
+                    namespace = managedMcpNamespace(reference))
+            val definition = factory.buildTools(access, Assistant(), settings = Settings(), configuration = resolved,
+                capabilityModel = null, mcpCapabilities = TurnMcpCapabilitySnapshot(listOf(capability)))
+                .single { it.name == "mcp__${capability.namespace}__read" }
+            val runtime = ToolCallRuntime(Json)
+            val source = me.rerere.ai.ui.UIMessagePart.Tool(localCallId = kotlin.uuid.Uuid.random(),
+                stepId = kotlin.uuid.Uuid.random(), providerCallId = "call", toolName = definition.name, input = "{}")
+            val messageId = kotlin.uuid.Uuid.random()
+            val index = freezeToolSet(listOf(definition)).bindingsByName
+            fun prepare(tool: me.rerere.ai.ui.UIMessagePart.Tool, availability: TurnInteractionCapability) =
+                runtime.prepareBatch(messageId, listOf(LocatedToolCall(0, tool)), index, availability)
+            val first = prepare(source, TurnInteractionCapability.FULL)
+            val prepared = if (needsApproval) {
+                assertEquals(1, first.pending.size)
+                val pending = first.replacements.getValue(source.localCallId)
+                val resumed = prepare(pending.copy(interactionState = me.rerere.ai.ui.ToolInteractionState.Approved), TurnInteractionCapability.FULL)
+                (resumed.resolvedCalls.single() as ResolvedToolCall.Executable).call.also {
+                    assertEquals(first.pending.single().locator, it.locator)
+                }
+            } else (first.resolvedCalls.single() as ResolvedToolCall.Executable).call
+            val outcome = runtime.execute(prepared, ToolExecutionHooks({ me.rerere.ai.core.ToolAttachmentResolution() }, { _, _ -> }, {}, {}))
+            assertEquals(me.rerere.ai.ui.ToolResultStatus.COMPLETED, outcome.resultStatus)
+            assertEquals(needsApproval, approvals.last())
+            assertEquals(reference to "read", destinations.last())
+            val child = prepare(source, TurnInteractionCapability.USER_INPUT_ONLY)
+            if (needsApproval) {
+                assertTrue(child.pending.isEmpty())
+                assertEquals(1, child.immediateResults.size)
+            } else assertTrue(child.resolvedCalls.single() is ResolvedToolCall.Executable)
         }
     }
 

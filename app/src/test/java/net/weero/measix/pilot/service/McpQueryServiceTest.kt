@@ -17,6 +17,7 @@ import net.weero.measix.pilot.data.ai.mcp.McpStatus
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertEquals
 import net.weero.measix.pilot.data.enterprise.*
 import net.weero.measix.pilot.data.ai.mcp.*
@@ -106,7 +107,7 @@ class McpQueryServiceTest {
         } finally { appScope.cancel(); runCurrent() }
     }
 
-    @Test fun `managed query and assistant picker show only effective reviewed subset and retain missing reasons`() {
+    @Test fun `managed query and assistant picker show only effective named subset and retain missing reasons`() {
         val original = exampleEnterprisePackage()
         val first = original.configuration.mcpServers.first()
         val read = McpCatalogTool("read", inputSchema = buildJsonObject { put("type", "object") })
@@ -129,8 +130,8 @@ class McpQueryServiceTest {
         val capability = McpRuntimeCapability(McpStatus.Ready(3, 1), catalog, true)
         val row = snapshot.mcpPresentations(access, mapOf(id to McpCatalogCapability(catalog, listOf(capability)))).single { it.serverId == id }
         assertEquals(listOf("read", "changed"), row.tools.map { it.name })
-        assertEquals(1, row.tools.count { it.enabled })
-        assertEquals(McpToolUnavailableReason.CONTRACT_CHANGED, row.tools.last().unavailableReason)
+        assertEquals(2, row.tools.count { it.enabled })
+        assertNull(row.tools.last().unavailableReason)
         assertTrue(row.tools.last().needsApproval)
         assertEquals(false, row.allowsAllTools)
         val target = ConversationAssistantTarget(ConversationCommandTarget(kotlin.uuid.Uuid.random(), RealmSelection(access, 1)) {},

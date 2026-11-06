@@ -9,6 +9,27 @@ class PlatformWireTest {
         .bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonArray }
 
     @Test
+    fun `MCP grant requires a string and accepts only empty or historical SHA256 format`() {
+        fun raw(hash: JsonElement?) = buildJsonObject {
+            put("name", "read")
+            hash?.let { put("contractHash", it) }
+            put("approvalPolicy", "REQUIRE_CONFIRMATION")
+        }.toString()
+        for (hash in listOf("", "sha256:" + "a".repeat(64))) {
+            val grant = PlatformWireCodec.decode<PlatformMcpToolGrant>(raw(JsonPrimitive(hash)))
+            assertEquals(hash, grant.contractHash)
+            assertEquals(PlatformMcpToolGrantApprovalPolicy.REQUIRE_CONFIRMATION, grant.approvalPolicy)
+        }
+        for (hash in listOf(null, JsonNull, JsonPrimitive(" "), JsonPrimitive("*"),
+            JsonPrimitive("sha256:" + "A".repeat(64)), JsonPrimitive("\n"),
+            JsonPrimitive("sha256:" + "a".repeat(64) + "\n"), JsonPrimitive(0))) {
+            assertThrows("Invalid hash $hash", IllegalArgumentException::class.java) {
+                PlatformWireCodec.decode<PlatformMcpToolGrant>(raw(hash))
+            }
+        }
+    }
+
+    @Test
     fun `published Core v4 snapshots retain their declared version and absent opening`() {
         cases().filter {
             it.jsonObject.getValue("schema").jsonPrimitive.content == "ManagedSnapshotV4" &&

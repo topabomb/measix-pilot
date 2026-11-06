@@ -140,7 +140,6 @@ data class McpAvailableTool(
     val needsApproval: Boolean,
     val namespace: String = serverName,
     val interactionId: String? = null,
-    val contractHash: String? = null,
 )
 
 data class TurnMcpCapabilitySnapshot(

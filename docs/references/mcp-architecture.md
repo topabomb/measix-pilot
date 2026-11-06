@@ -73,10 +73,12 @@ Direct MCP 只装配已解析助手选中的服务。Snapshot v5 的企业助手
 被禁用、删除或撤权的主动引用保留原因和取消选择入口，不能执行。v4 及未记录格式版本继续限制企业助手的受管服务
 为绑定集合；准入允许时仍可添加用户 MCP，用户助手可选择本域受管服务。
 
-服务 ALL 使用动态发现目录，不增加逐次确认，也不锁定企业发布哈希。服务 ALLOWLIST 使用准确工具名和完整 Tool 的
-JCS UTF-8 SHA-256 `contractHash`，包括 description、outputSchema、annotations、`_meta` 和扩展字段。
-`McpCatalogTool.contractHash` 与共享 `mcp-tool-contract-vectors.json` 验证 Unicode、属性顺序和 ECMAScript 数字语义。
-无法按 JCS 编码的定义在 ALLOWLIST 中仅使该工具按契约不匹配不可用，不中断其他工具的投影；ALL 不要求此摘要。
+服务 ALL 使用动态发现目录，不增加逐次确认。服务 ALLOWLIST 按原服务身份与准确工具名称授权。
+`allowedTools[].contractHash` 保留为必填兼容字段，接受精确空字符串或原 `sha256:` 加 64 位小写十六进制格式；
+两者都不参与目录可用性或调用准入判断，缺失、null、空白和非法非空值仍拒绝。
+远端 description、inputSchema、outputSchema、annotations、`_meta` 和扩展字段变化不使同名获准工具失效；
+新增或重命名后的名称仍需服务器白名单许可。同名工具的远端行为不由契约哈希锁定。
+完整目录与 Gateway surface 的校验、配置 hash、目录 digest、服务身份及企业 generation 门禁保持独立。
 助手 ALL 不增加过滤；助手 ALLOWLIST 取名称子集，不能越过服务授权上限。`EnterpriseMcpResource.toolAccess`
 是 Turn 捕获、只读检查、UI 与调用门共同使用的纯投影，不保存第二份授权状态。
 ALLOWLIST 仅按发布的 AUTO/REQUIRE_CONFIRMATION 决定审批，不从远端 annotations 推断。
@@ -193,7 +195,7 @@ Gateway surface 改变被拒绝。私有 binding 可在同 generation 轮换而�
 目录发布另在原 Session 的 Applied revision gate 内验证，旧 binding 的发现结果不能覆盖新配置目录。
 旧 interaction 可保留原 binding 与已确认目录；发布不再获准时只能沿用匹配的已确认目录，无目录则明确失败。
 同一 definition 的目录被其他 interaction 刷新后，初次和最终调用准入均读取 `McpCatalogStore` 最新已发布目录，
-工具删除或契约变化不能由原 Runtime 缓存绕过。`McpRuntimeStateStore.publish` 同步更新同一 key、definitionDigest 和
+已确认的工具删除不能由原 Runtime 缓存绕过；同名工具的定义变化不撤销名称许可。`McpRuntimeStateStore.publish` 同步更新同一 key、definitionDigest 和
 managed 元数据的已有 Runtime 目录，保留各自连接状态、诊断和 sessionCallable；旧刷新恢复也不能倒退已知 revision。
 因此 durable head 被新发布替换后，旧 interaction 仍保留原发布最后确认的删除结果；不同发布不改写其捕获的 Provider schema。
 相同工具随新 generation 发布时仍持久化新 generation。这不能代替原 Session 的执行准入或服务端 428 barrier。
@@ -297,6 +299,11 @@ Catalog 提交；目录未变为 no-op，ALL 接纳新定义，ALLOWLIST 仍核�
 下次手动刷新或退出可重试，不关闭活动聊天的连接。页面使用原错误卡展示、复制诊断和重试；
 Runtime 自有清理超时作为带原始 cause 的操作失败呈现，不冒充用户取消。切换选择取消旧请求，旧结果不发布到新页面。
 
+明确的 MCP RPC `INVALID_PARAMS`（-32602）保留为 `remote_error`，原始 message/cause 随失败返回。
+受管 Direct Runtime 仅对原 client/generation 安排现有去抖、single-flight 目录重验；此提示不能证明发生撤权或定义变化。
+普通 `isError` 业务结果、其他 RPC 错误和错误文案不据此推断目录变化。刷新仍复验原授权，失败保留已确认目录；
+结果仅供后续轮次捕获，当前失败调用不自动重放。工具删除经完整成功目录确认；未知远端错误保留具体诊断。
+
 ## 6. 连接恢复与移动端策略
 
 恢复是每 server 单一调度器，不是页面 timer：
@@ -345,7 +352,9 @@ Assistant 选择
 ```
 
 `list_changed` 或手工刷新成功后，下一 run 捕获新 revision；当前 run 保留原 Provider schema。受管 Direct MCP 调用前还须在最新确认目录中存在；
-ALLOWLIST 的完整契约须匹配原捕获与当前发布的 hash，ALL 不做 hash 锁定。个人工具仍由 server 对旧 schema 返回协议错误。用户本地明确禁用/删除/definition 修改及 approval tightening 会在调用承诺前拒绝旧 binding。
+ALLOWLIST 只复验原服务与名称许可，不比较目录或发布的工具契约 hash。名称仍获准而最新匹配目录确认工具删除时报告
+`tool_missing`；同时撤回名称许可时报告 `tool_unavailable`。刷新失败或目录不可读本身不能证明工具删除。
+个人工具仍由 server 对旧 schema 返回协议错误。用户本地明确禁用/删除/definition 修改及 approval tightening 会在调用承诺前拒绝旧 binding。
 
 本地审批前通过共用 `Tool.parseArguments` 检查参数为合法 JSON object；非空损坏 JSON、数组或标量直接失败，
 不会先询问用户或发送 RPC。远端 `inputSchema` 仍完整保留，其完整 schema 与业务参数语义由 Server 校验；
@@ -359,9 +368,9 @@ ALLOWLIST 的完整契约须匹配原捕获与当前发布的 hash，ALL 不做 
 该门只覆盖 Settings 提交或 invocation commitment 这一极短临界区，不覆盖 OAuth、connect、discovery 或远端调用等待，也不
 持有 slot mutex 执行 I/O，因此不会把不同 server 的网络操作重新串行化。
 
-`McpRuntimeCoordinator.callTool()` 将捕获的契约 hash 与 `ToolExecutionContext.approvedByUser` 传到初次和凭据刷新后的
+`McpRuntimeCoordinator.callTool()` 将捕获的审批要求与 `ToolExecutionContext.approvedByUser` 传到初次和凭据刷新后的
 最终 admission。两次均在原 Session → Settings → Runtime gate 内读取当前企业服务授权及助手绑定；
-移除、授权收紧、契约漂移或缺少实际确认均在不可撤销承诺前拒绝。捕获的连接、release/generation 与 schema 不因此升级。
+移除、授权收紧或缺少实际确认均在不可撤销承诺前拒绝。捕获的连接、release/generation 与 schema 不因此升级。
 
 `McpRuntimeCoordinator.callTool()` 先从对应 `McpServerRuntime` 取得冻结 invocation lease，再由 `McpToolCallExecutor` 执行。
 调用结束的企业额度刷新按原调用的 `McpConnectionDefinition.ManagedPlatform` 判断；企业空间中的 `User` 连接不发送该信号。
@@ -388,8 +397,7 @@ server/tool 身份、generation、transport 阶段、`retryable`、`request_sent
 摘要平时显示工具数，连接或异常时显示对应状态，必要时另列目录计数与绑定说明。
 Idle 不显示“使用时连接”或“已保存目录”正文，已确认目录只保留一行工具计数，
 无目录不推测数量。连接、授权、等待网络、失败与撤权原因仍显示，完整诊断保留原展开入口。
-服务器与助手范围、确认规则和有效计数由同一投影给出；工具缺失或契约变化保留原因，
-契约变化提示管理员重新发布，不与“调用前确认”混用。详情与原诊断按需展开。
+服务器与助手范围、确认规则和有效计数由同一投影给出；工具缺失或未获许可保留各自原因，不与“调用前确认”混用。详情与原诊断按需展开。
 
 `userServers` 管理共享用户定义，保留 OAuth、工具策略与原编辑器，并说明跨空间影响。
 工具栏和下拉刷新共用携带原 `RealmSelection` 的刷新命令；仅有企业服务时也可刷新，不增加操作按钮。
@@ -423,3 +431,9 @@ Gateway 启停仍受发布 policy 约束，REQUIRED 只读，写入复验渲染�
 
 构建/JVM 通过不等于真实 Android 验收。前后台、Wi-Fi/蜂窝、Doze、OAuth 浏览器回调、真实通知通道和 MCP UI/Agent
 仍需连接设备后执行对应 instrumentation 与现场场景。
+
+### 客户端与 Core 发布顺序
+
+旧 Android 的 `PlatformMcpToolGrant` 拒绝空哈希。先部署并验证支持空字符串的客户端，再切换 Core 新发布的空哈希下发；
+仍需支持旧客户端时继续下发合法非空值或按能力分流。历史不可变发布及其 hash 不重写，Android 仍可消费其中合法非空值。
+本地测试通过不等于客户端已部署，也不授权直接修改线上配置。

@@ -416,5 +416,4 @@ internal fun mcpToolUnavailableText(reason: McpToolUnavailableReason): String =
         McpToolUnavailableReason.NOT_ALLOWED -> R.string.mcp_tool_not_allowed
         McpToolUnavailableReason.NOT_SELECTED -> R.string.mcp_tool_not_selected
         McpToolUnavailableReason.MISSING -> R.string.mcp_tool_missing
-        McpToolUnavailableReason.CONTRACT_CHANGED -> R.string.mcp_tool_contract_changed
     })

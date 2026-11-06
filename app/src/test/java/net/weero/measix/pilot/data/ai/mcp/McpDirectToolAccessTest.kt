@@ -5,6 +5,9 @@ import net.weero.measix.pilot.data.enterprise.*
 import org.junit.Assert.*
 import org.junit.Test
 
+/** Historical grant fixtures retain the original complete Tool digest. */
+internal fun McpCatalogTool.contractHash(): String = canonicalMcpContractHash(definition)
+
 class McpDirectToolAccessTest {
     private val read = McpCatalogTool(Json.parseToJsonElement(
         """{"name":"read","inputSchema":{"type":"object"},"annotations":{"readOnlyHint":false},"_meta":{"version":1}}"""
@@ -29,12 +32,12 @@ class McpDirectToolAccessTest {
         val added = McpCatalogTool("added", inputSchema = buildJsonObject { put("type", "object") })
         val permissions = server.toolAccess(listOf(read, added))
         assertEquals(listOf("read", "added"), permissions.map { it.name })
-        assertTrue(permissions.all { it.enabled && !it.needsApproval && it.contractHash == null })
+        assertTrue(permissions.all { it.enabled && !it.needsApproval })
         val changed = McpCatalogTool(JsonObject(read.definition + ("description" to JsonPrimitive("changed"))))
         assertTrue(server.toolAccess(listOf(changed)).single().enabled)
     }
 
-    @Test fun `ALLOWLIST intersects full contract and assistant names and preserves explicit approval`() {
+    @Test fun `ALLOWLIST intersects authorized and assistant names and preserves explicit approval`() {
         val write = McpCatalogTool("write", inputSchema = buildJsonObject { put("type", "object") })
         val missing = McpCatalogTool("missing", inputSchema = buildJsonObject { put("type", "object") })
         val restricted = server.copy(toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALLOWLIST,
@@ -47,15 +50,37 @@ class McpDirectToolAccessTest {
         val binding = PlatformAssistantMcpBinding(server.id, PlatformAssistantMcpBindingToolSelection.ALLOWLIST, listOf("read"))
         assertEquals(listOf("read"), restricted.toolAccess(listOf(read, write), binding).filter { it.enabled }.map { it.name })
         val changed = McpCatalogTool(JsonObject(read.definition + ("description" to JsonPrimitive("changed"))))
-        assertEquals(McpToolUnavailableReason.CONTRACT_CHANGED, restricted.toolAccess(listOf(changed)).first().unavailableReason)
+        assertTrue(restricted.toolAccess(listOf(changed)).first().enabled)
         assertEquals(McpToolUnavailableReason.NOT_ALLOWED,
             restricted.toolAccess(listOf(McpCatalogTool("unapproved", inputSchema = read.inputSchema))).first().unavailableReason)
         val unhashable = McpCatalogTool(JsonObject(read.definition +
             ("_meta" to Json.parseToJsonElement("""{"value":1e400}"""))))
         val isolated = restricted.toolAccess(listOf(unhashable, write)).associateBy { it.name }
-        assertEquals(McpToolUnavailableReason.CONTRACT_CHANGED, isolated.getValue("read").unavailableReason)
+        assertTrue(isolated.getValue("read").enabled)
         assertTrue(isolated.getValue("write").enabled)
         assertTrue("ALL does not require a reviewed contract", server.toolAccess(listOf(unhashable)).single().enabled)
+    }
+
+    @Test fun `empty and historical hashes permit schema changes without broadening names or approval`() {
+        val definitions = listOf(
+            """{"name":"read","description":"changed description","inputSchema":{"type":"object"}}""",
+            """{"name":"read","inputSchema":{"type":"object","properties":{"count":{"type":"integer","description":"new meaning"}},"required":["count"],"additionalProperties":false}}""",
+            """{"name":"read","inputSchema":{"type":"object","properties":{"count":{"type":"string"}},"required":[]},"annotations":{"readOnlyHint":true},"outputSchema":{"type":"string"},"_meta":{"version":2}}""",
+        ).map { McpCatalogTool(Json.parseToJsonElement(it).jsonObject) }
+        for (hash in listOf("", read.contractHash(), "sha256:" + "0".repeat(64))) {
+            val restricted = server.copy(toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALLOWLIST,
+                allowedTools = listOf(PlatformMcpToolGrant("read", hash, PlatformMcpToolGrantApprovalPolicy.REQUIRE_CONFIRMATION)))
+            for (changed in definitions) {
+                val added = McpCatalogTool("Read", inputSchema = changed.inputSchema)
+                val permissions = restricted.toolAccess(listOf(changed, added)).associateBy { it.name }
+                assertTrue(permissions.getValue("read").enabled)
+                assertTrue("Remote annotations cannot remove enterprise confirmation", permissions.getValue("read").needsApproval)
+                assertEquals(changed.definition, permissions.getValue("read").tool!!.definition)
+                assertEquals(McpToolUnavailableReason.NOT_ALLOWED, permissions.getValue("Read").unavailableReason)
+                val removed = restricted.toolAccess(listOf(added)).associateBy { it.name }
+                assertEquals(McpToolUnavailableReason.MISSING, removed.getValue("read").unavailableReason)
+            }
+        }
     }
 
     @Test fun `published modes require closed valid sets and assistant cannot exceed server ceiling`() {

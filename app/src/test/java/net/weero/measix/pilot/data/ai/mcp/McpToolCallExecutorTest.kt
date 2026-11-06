@@ -31,6 +31,35 @@ import org.junit.Assert.assertSame
 import org.junit.Test
 
 class McpToolCallExecutorTest {
+    @Test fun `invalid params preserves the remote failure and requests revalidation without replay`() = runTest {
+        val client = mockk<Client>()
+        val error = McpException(code = -32602, message = "required field url is missing")
+        coEvery { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) } throws error
+        val outcome = McpToolCallExecutor(mockk()).execute(
+            ConfigurationScope.Personal, McpInvocationLease(client, "Test", 1),
+            "query", JsonObject(emptyMap()), {},
+        ) as McpInvocationOutcome.Failed
+        assertEquals(McpInvocationFailureKind.DIRECTORY_STALE, outcome.kind)
+        assertSame(error, outcome.failure.cause)
+        val envelope = Json.parseToJsonElement((outcome.failure.output.single() as UIMessagePart.Text).text).jsonObject
+        assertEquals("remote_error", envelope.getValue("reason").jsonPrimitive.content)
+        org.junit.Assert.assertTrue(envelope.getValue("detail").jsonPrimitive.content.contains("required field url"))
+        io.mockk.coVerify(exactly = 1) { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) }
+    }
+
+    @Test fun `ordinary remote business errors are not inferred to be directory changes`() = runTest {
+        val client = mockk<Client>()
+        coEvery { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) } returns
+            CallToolResult(content = listOf(TextContent("invalid params: insufficient credits")), isError = true)
+        val outcome = McpToolCallExecutor(mockk()).execute(
+            ConfigurationScope.Personal, McpInvocationLease(client, "Test", 1),
+            "query", JsonObject(emptyMap()), {},
+        ) as McpInvocationOutcome.Failed
+        assertEquals(McpInvocationFailureKind.REMOTE, outcome.kind)
+        org.junit.Assert.assertTrue(outcome.failure.output.contains(UIMessagePart.Text("invalid params: insufficient credits")))
+        io.mockk.coVerify(exactly = 1) { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) }
+    }
+
     @Test fun `parent timeout propagates cancellation instead of an unknown tool result`() = runTest {
         val client = mockk<Client>()
         coEvery { client.callTool(any<CallToolRequest>(), any<RequestOptions>()) } coAnswers { awaitCancellation() }

@@ -45,10 +45,8 @@ internal fun McpCatalogKey.validateManaged(managed: McpManagedCatalog?) {
     }
 }
 
-/** Hash the full Tool, including extensions; never hash a lossy SDK or UI projection. */
-internal fun McpCatalogTool.contractHash(): String = canonicalMcpContractHash(definition)
-
-private fun canonicalMcpContractHash(value: JsonElement): String {
+/** Hash complete Gateway definitions, including extensions. Direct tool grants do not consume this hash. */
+internal fun canonicalMcpContractHash(value: JsonElement): String {
     val bytes = try {
         val canonical = JsonCanonicalizer(value.toString()).encodedString
         // JCS rejects lone surrogates; String.getBytes would silently replace them.

@@ -2017,7 +2017,6 @@
   <string name="mcp_tool_not_allowed">Не одобрен организацией</string>
   <string name="mcp_tool_not_selected">Не выбран для этого ассистента</string>
   <string name="mcp_tool_missing">Нет на сервере. Обратитесь к администратору</string>
-  <string name="mcp_tool_contract_changed">Определение изменилось. Нужна повторная публикация</string>
   <string name="mcp_tool_directory_unavailable">Подключится при первом использовании</string>
   <string name="mcp_assistant_fixed_binding">Обязательно включено организацией</string>
   <string name="mcp_tools_partially_available">Доступно: %1$d · нужен администратор: %2$d</string>

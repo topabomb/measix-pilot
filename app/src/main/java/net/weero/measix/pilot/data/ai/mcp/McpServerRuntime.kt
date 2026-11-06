@@ -94,7 +94,7 @@ internal sealed interface McpToolCallPreparation {
 
 internal sealed interface McpToolCallAdmission {
     data class Candidate(val config: McpConnectionDefinition) : McpToolCallAdmission
-    data class Rejected(val serverName: String, val message: String) : McpToolCallAdmission
+    data class Rejected(val serverName: String, val message: String, val kind: McpToolFailureKind = McpToolFailureKind.TOOL_UNAVAILABLE) : McpToolCallAdmission
 }
 
 internal class McpServerRuntime(
@@ -661,7 +661,6 @@ internal class McpServerRuntime(
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
-        expectedContractHash: String? = null,
         approvedByUser: Boolean = false,
     ): McpToolCallAdmission = withDefinition { current ->
         val rejection = invocationRejection(
@@ -669,14 +668,9 @@ internal class McpServerRuntime(
             toolName,
             expectedDefinitionDigest,
             expectedNeedsApproval,
-            expectedContractHash, approvedByUser,
+            approvedByUser,
         )
-        if (rejection != null) {
-            return@withDefinition McpToolCallAdmission.Rejected(
-                current?.name ?: serverId.toString(),
-                rejection,
-            )
-        }
+        if (rejection != null) return@withDefinition rejection
         McpToolCallAdmission.Candidate(requireNotNull(current))
     }
 
@@ -686,7 +680,6 @@ internal class McpServerRuntime(
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
-        expectedContractHash: String? = null,
         approvedByUser: Boolean = false,
     ): McpToolCallPreparation = withDefinition { current ->
         val rejection = invocationRejection(
@@ -694,14 +687,14 @@ internal class McpServerRuntime(
             toolName,
             expectedDefinitionDigest,
             expectedNeedsApproval,
-            expectedContractHash, approvedByUser,
+            approvedByUser,
         )
         val serverName = current?.name ?: serverId.toString()
         if (rejection != null) {
             return@withDefinition McpToolCallPreparation.Rejected(
-                kind = McpToolFailureKind.TOOL_UNAVAILABLE,
+                kind = rejection.kind,
                 serverName = serverName,
-                diagnosticMessage = rejection,
+                diagnosticMessage = rejection.message,
             )
         }
         val currentConfig = requireNotNull(current)
@@ -803,6 +796,12 @@ internal class McpServerRuntime(
                 setStatusLocked(McpStatus.NeedsAuthorization)
             }
             McpInvocationFailureKind.CONNECTION -> scheduleReconnectLocked(lease.generation)
+            McpInvocationFailureKind.DIRECTORY_STALE -> {
+                // The failed call is never replayed; only future turns consume the refreshed schema.
+                if (activeCatalog?.managed != null && activeCatalog?.managed?.gatewaySurface == null) {
+                    requestCatalogRefreshLocked()
+                }
+            }
             else -> Unit
         }
     }
@@ -812,11 +811,12 @@ internal class McpServerRuntime(
         toolName: String,
         expectedDefinitionDigest: String,
         expectedNeedsApproval: Boolean,
-        expectedContractHash: String?,
         approvedByUser: Boolean,
-    ): String? {
-        if (closing || !stateStore.isCurrent(this)) return "TOOL_REVOKED: MCP runtime is closing"
-        if (currentConfig == null) return "TOOL_REVOKED: MCP tool is no longer available"
+    ): McpToolCallAdmission.Rejected? {
+        fun rejected(message: String, kind: McpToolFailureKind = McpToolFailureKind.TOOL_UNAVAILABLE) =
+            McpToolCallAdmission.Rejected(currentConfig?.name ?: serverId.toString(), message, kind)
+        if (closing || !stateStore.isCurrent(this)) return rejected("TOOL_REVOKED: MCP runtime is closing")
+        if (currentConfig == null) return rejected("TOOL_REVOKED: MCP tool is no longer available")
         val policy = currentConfig.toolPolicy(toolName)
         val currentNeedsApproval = policy?.needsApproval ?: false
         if (
@@ -824,7 +824,7 @@ internal class McpServerRuntime(
             policy?.enable == false ||
             (!expectedNeedsApproval && currentNeedsApproval)
         ) {
-            return "TOOL_REVOKED: MCP tool is no longer available"
+            return rejected("TOOL_REVOKED: MCP tool is no longer available")
         }
         if (currentConfig is McpConnectionDefinition.ManagedPlatform) {
             // Other interactions can refresh the same definition. Recheck its durable head while
@@ -834,13 +834,15 @@ internal class McpServerRuntime(
             } ?: activeCatalog?.takeIf {
                 it.key == currentConfig.catalogKey && it.definitionDigest == expectedDefinitionDigest && it.managed == currentConfig.managed
             }
-                ?: return "TOOL_REVOKED: confirmed MCP directory is unavailable"
-            val permission = currentConfig.toolAccess(catalog.tools.filter { it.name == toolName }).find { it.name == toolName }
-                ?: return "TOOL_REVOKED: MCP tool was removed from the directory"
-            if (!permission.enabled || permission.contractHash != expectedContractHash ||
+                ?: return rejected("DIRECTORY_UNAVAILABLE: confirmed MCP directory is unavailable")
+            val permission = currentConfig.toolAccess(toolName, catalog.tools)
+            if (permission.unavailableReason == McpToolUnavailableReason.MISSING) {
+                return rejected("TOOL_MISSING: MCP tool was removed from the directory", McpToolFailureKind.TOOL_MISSING)
+            }
+            if (!permission.enabled ||
                 (!expectedNeedsApproval && permission.needsApproval) ||
                 (permission.needsApproval && !approvedByUser)) {
-                return "TOOL_REVOKED: ${permission.unavailableReason ?: "approval_or_contract_changed"}"
+                return rejected("TOOL_REVOKED: ${permission.unavailableReason ?: "approval_required"}")
             }
         }
         return null

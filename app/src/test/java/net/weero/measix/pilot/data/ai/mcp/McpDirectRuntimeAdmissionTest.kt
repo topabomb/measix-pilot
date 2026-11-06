@@ -17,7 +17,7 @@ import kotlin.uuid.Uuid
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class McpDirectRuntimeAdmissionTest {
-    @Test fun `live managed rules and full contract are rechecked after the initial admission`() = runTest {
+    @Test fun `live managed name and approval rules are rechecked after the initial admission`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val scope = AppScope(dispatcher)
         val packet = exampleEnterprisePackage()
@@ -54,8 +54,8 @@ class McpDirectRuntimeAdmissionTest {
             catalogs.value = mapOf(original.catalogKey to snapshot)
             if (hydrate) runtime.hydrateCatalog(snapshot) else peer.hydrateCatalog(snapshot)
         }
-        suspend fun admit(hash: String? = null, needsApproval: Boolean = false, approved: Boolean = false) =
-            runtime.admitInvocation("read", digest, needsApproval, hash, approved)
+        suspend fun admit(needsApproval: Boolean = false, approved: Boolean = false) =
+            runtime.admitInvocation("read", digest, needsApproval, approved)
         try {
             directory(listOf(tool), 1)
             assertTrue(admit() is McpToolCallAdmission.Candidate)
@@ -67,29 +67,32 @@ class McpDirectRuntimeAdmissionTest {
             val restricted = resource.copy(toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALLOWLIST,
                 allowedTools = listOf(PlatformMcpToolGrant("read", tool.contractHash(), PlatformMcpToolGrantApprovalPolicy.AUTO)))
             current = original.withToolAccess(restricted, null)
-            assertTrue(admit() is McpToolCallAdmission.Rejected)
-            assertTrue(admit(tool.contractHash()) is McpToolCallAdmission.Candidate)
-            val admitted = admit(tool.contractHash()) as McpToolCallAdmission.Candidate
+            assertTrue(admit() is McpToolCallAdmission.Candidate)
+            val admitted = admit() as McpToolCallAdmission.Candidate
             val confirmation = restricted.copy(allowedTools = restricted.allowedTools.map {
                 it.copy(approvalPolicy = PlatformMcpToolGrantApprovalPolicy.REQUIRE_CONFIRMATION)
             })
             current = original.withToolAccess(confirmation, null)
-            val rejected = runtime.completeInvocationAdmission(admitted.config, "read", digest, false, tool.contractHash(), false)
+            val rejected = runtime.completeInvocationAdmission(admitted.config, "read", digest, false, false)
                 as McpToolCallPreparation.Rejected
             assertEquals(McpToolFailureKind.TOOL_UNAVAILABLE, rejected.kind)
-            assertTrue(admit(tool.contractHash(), true, false) is McpToolCallAdmission.Rejected)
-            assertTrue(admit(tool.contractHash(), true, true) is McpToolCallAdmission.Candidate)
+            assertTrue(admit(true, false) is McpToolCallAdmission.Rejected)
+            assertTrue(admit(true, true) is McpToolCallAdmission.Candidate)
             val binding = PlatformAssistantMcpBinding(resource.id, PlatformAssistantMcpBindingToolSelection.ALLOWLIST, listOf("other"))
             current = original.withToolAccess(confirmation, binding)
-            assertTrue(admit(tool.contractHash(), true, true) is McpToolCallAdmission.Rejected)
+            assertTrue(admit(true, true) is McpToolCallAdmission.Rejected)
             current = original.withToolAccess(restricted, null)
             val changed = McpCatalogTool(JsonObject(tool.definition + ("_meta" to buildJsonObject { put("version", 2) })))
             // Another interaction publishes a new directory; this runtime keeps its original provider schema.
             directory(listOf(changed), 2, hydrate = false)
-            assertTrue(admit(tool.contractHash()) is McpToolCallAdmission.Rejected)
-            val refreshed = runtime.completeInvocationAdmission(admitted.config, "read", digest, false, tool.contractHash(), false)
-                as McpToolCallPreparation.Rejected
-            assertEquals(McpToolFailureKind.TOOL_UNAVAILABLE, refreshed.kind)
+            assertTrue("A changed remote definition does not revoke the authorized name", admit() is McpToolCallAdmission.Candidate)
+            current = original.withToolAccess(restricted.copy(allowedTools = listOf(
+                PlatformMcpToolGrant("read", "", PlatformMcpToolGrantApprovalPolicy.AUTO))), null)
+            assertTrue("Empty and historical hashes grant the same name", admit() is McpToolCallAdmission.Candidate)
+            current = original.withToolAccess(restricted.copy(allowedTools = listOf(
+                PlatformMcpToolGrant("other", "", PlatformMcpToolGrantApprovalPolicy.AUTO))), null)
+            assertEquals("Removing the granted name revokes the existing turn", McpToolFailureKind.TOOL_UNAVAILABLE,
+                (admit() as McpToolCallAdmission.Rejected).kind)
             current = original
             assertTrue("ALL has no reviewed-contract lock", admit() is McpToolCallAdmission.Candidate)
             directory(emptyList(), 3, hydrate = false)
@@ -97,7 +100,8 @@ class McpDirectRuntimeAdmissionTest {
             val head = catalogs.value.getValue(original.catalogKey)
             catalogs.value = mapOf(original.catalogKey to head.copy(definitionDigest = "new-publication",
                 managed = original.managed.copy(generation = original.managed.generation + 1)))
-            assertTrue("A later publication cannot resurrect a tool already removed by a peer", admit() is McpToolCallAdmission.Rejected)
+            assertEquals("A later publication cannot resurrect a tool already removed by a peer", McpToolFailureKind.TOOL_MISSING,
+                (admit() as McpToolCallAdmission.Rejected).kind)
             val retained = states.capabilities.value.getValue(runtime.key)
             assertEquals(3L, retained.catalog?.revision)
             assertTrue(retained.catalog!!.tools.isEmpty())
@@ -111,7 +115,18 @@ class McpDirectRuntimeAdmissionTest {
             assertEquals(McpCatalogRefresh.Failed(McpStatus.Error("refresh failed")), restored.catalogRefresh)
             assertEquals(3L, restored.catalog?.revision)
             assertTrue("Connection state still belongs to the publishing runtime", restored.sessionCallable)
-            assertTrue(admit() is McpToolCallAdmission.Rejected)
+            assertEquals(McpToolFailureKind.TOOL_MISSING, (admit() as McpToolCallAdmission.Rejected).kind)
+
+            current = original.withToolAccess(restricted.copy(allowedTools = listOf(
+                PlatformMcpToolGrant("other", "", PlatformMcpToolGrantApprovalPolicy.AUTO))), null)
+            val revoked = admit() as McpToolCallAdmission.Rejected
+            assertEquals(McpToolFailureKind.TOOL_UNAVAILABLE, revoked.kind)
+            assertEquals("TOOL_REVOKED: NOT_ALLOWED", revoked.message)
+            val finalRevocation = runtime.completeInvocationAdmission(admitted.config, "read", digest, false, false)
+                as McpToolCallPreparation.Rejected
+            assertEquals(revoked.kind, finalRevocation.kind)
+            assertEquals(revoked.message, finalRevocation.diagnosticMessage)
+
             current = null
             assertTrue(admit() is McpToolCallAdmission.Rejected)
         } finally { scope.cancel() }

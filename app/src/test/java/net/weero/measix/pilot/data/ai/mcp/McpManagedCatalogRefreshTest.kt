@@ -38,6 +38,60 @@ import kotlin.uuid.Uuid
 /** Exercises discovery through the real managed HTTP transport without directory notifications. */
 internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
     @Test
+    fun `failed error-triggered refresh preserves the call error and confirmed directory`() = runBlocking {
+        withTimeout(30_000) {
+            Fixture(allowlistHash = "").use { fixture ->
+                val original = fixture.prepare().tools.single()
+                val confirmed = catalogs.value.values.single()
+                fixture.tools = fixture.tools + fixture.tools.first()
+                fixture.callError = """{"code":-32602,"message":"required_url is required"}"""
+                var failure: me.rerere.ai.core.ToolExecutionFailure? = null
+                try {
+                    manager.callTool(fixture.access, original.serverId, original.interactionId, original.name,
+                        original.definitionDigest, original.needsApproval, JsonObject(emptyMap()),
+                        onArtifactCreated = { error("unexpected artifact") })
+                    fail("Remote invalid params must remain a failure")
+                } catch (caught: me.rerere.ai.core.ToolExecutionFailure) { failure = caught }
+                manager.runtimeCapabilities.first { states -> states.values.any { it.catalogRefresh is McpCatalogRefresh.Failed } }
+                assertEquals("MCP tool failure: remote_error", failure!!.message)
+                assertTrue(failure.cause!!.message!!.contains("required_url"))
+                assertEquals(confirmed, catalogs.value.values.single())
+                assertEquals("old description", original.description)
+                assertEquals(1, fixture.calls.get())
+                assertEquals(2, fixture.lists.get())
+            }
+        }
+    }
+
+    @Test
+    fun `invalid params refreshes the managed directory but never replays the frozen call`() = runBlocking {
+        withTimeout(30_000) {
+            Fixture(allowlistHash = "").use { fixture ->
+                val original = fixture.prepare().tools.single()
+                fixture.tools = tools(9, "new description", "required_url")
+                fixture.callError = """{"code":-32602,"message":"required_url is required"}"""
+                try {
+                    manager.callTool(fixture.access, original.serverId, original.interactionId, original.name,
+                        original.definitionDigest, original.needsApproval, JsonObject(emptyMap()),
+                        onArtifactCreated = { error("unexpected artifact") })
+                    fail("Remote invalid params must remain a failure")
+                } catch (failure: me.rerere.ai.core.ToolExecutionFailure) {
+                    assertEquals("MCP tool failure: remote_error", failure.message)
+                    assertTrue(failure.cause!!.message!!.contains("required_url"))
+                }
+                catalogs.first { it.values.single().tools.first().description == "new description" }
+                manager.runtimeCapabilities.first { states -> states.values.all { it.catalogRefresh == McpCatalogRefresh.Idle } }
+                assertEquals(1, fixture.calls.get())
+                assertEquals(2, fixture.lists.get())
+                assertEquals("old description", original.description)
+                assertTrue(original.inputSchema.getValue("properties").jsonObject.containsKey("old_parameter"))
+                assertEquals("new description", fixture.prepare().tools.single().description)
+                assertEquals(1, fixture.calls.get())
+            }
+        }
+    }
+
+    @Test
     fun `cached turns reuse definitions and expired background discovery affects only later turns`() = runBlocking {
         withTimeout(30_000) {
             Fixture().use { fixture ->
@@ -61,6 +115,33 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                 assertEquals(8, first.tools.size)
                 assertEquals("old description", first.tools.first().description)
                 assertEquals(0, fixture.calls.get())
+            }
+        }
+    }
+
+    @Test
+    fun `allowlisted definition changes preserve old turn and only later turns expose the new schema`() = runBlocking {
+        withTimeout(30_000) {
+            for (hash in listOf("", "sha256:" + "0".repeat(64))) {
+                catalogs.value = emptyMap()
+                Fixture(allowlistHash = hash).use { fixture ->
+                    val first = fixture.prepare()
+                    val original = first.tools.single()
+                    assertEquals("tool_1", original.name)
+                    fixture.tools = tools(9, "changed description", "new_parameter")
+                    manager.refreshManagedServers(fixture.selection, fixture.version)
+                    val next = fixture.prepare()
+                    assertEquals(listOf("tool_1"), next.tools.map { it.name })
+                    assertEquals("changed description", next.tools.single().description)
+                    assertTrue(next.tools.single().inputSchema.getValue("properties").jsonObject.containsKey("new_parameter"))
+                    assertEquals("old description", original.description)
+                    assertTrue(original.inputSchema.getValue("properties").jsonObject.containsKey("old_parameter"))
+                    manager.callTool(fixture.access, original.serverId, original.interactionId, original.name,
+                        original.definitionDigest, original.needsApproval, JsonObject(emptyMap()),
+                        onArtifactCreated = { error("unexpected artifact") })
+                    assertEquals("The frozen turn can invoke the authorized name after a directory change", 1, fixture.calls.get())
+                    assertEquals(original, first.tools.single())
+                }
             }
         }
     }
@@ -416,9 +497,13 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
         }
     }
 
-    private inner class Fixture(serverCount: Int = 1) : AutoCloseable {
+    private inner class Fixture(serverCount: Int = 1, allowlistHash: String? = null) : AutoCloseable {
         val packet = exampleEnterprisePackage().let { packet ->
-            val resource = packet.configuration.mcpServers.single()
+            val resource = packet.configuration.mcpServers.single().let { resource ->
+                if (allowlistHash == null) resource else resource.copy(
+                    toolAccessMode = PlatformMcpDefinitionToolAccessMode.ALLOWLIST,
+                    allowedTools = listOf(PlatformMcpToolGrant("tool_1", allowlistHash, PlatformMcpToolGrantApprovalPolicy.AUTO)))
+            }
             val resources = (1..serverCount).map { index ->
                 if (index == 1) resource else resource.copy(id = "${resource.id}-$index", name = "${resource.name} $index")
             }
@@ -440,6 +525,7 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
         @Volatile var selectionRevoked = false
         @Volatile var releaseAction: suspend () -> Unit = {}
         @Volatile var afterCapture: (() -> Unit)? = null
+        @Volatile var callError: String? = null
         @Volatile var listStatus = 200
         @Volatile var initializeStatus = 200
         val http = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -482,7 +568,10 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                         else -> error("unexpected MCP request")
                     }
                     if (result == null) it.sendResponseHeaders(202, -1) else {
-                        val body = """{"jsonrpc":"2.0","id":${request["id"]},"result":$result}""".toByteArray()
+                        val error = if (request.getValue("method").jsonPrimitive.content == "tools/call") callError else null
+                        val body = if (error != null) {
+                            """{"jsonrpc":"2.0","id":${request["id"]},"error":$error}""".toByteArray()
+                        } else """{"jsonrpc":"2.0","id":${request["id"]},"result":$result}""".toByteArray()
                         it.responseHeaders.set("Content-Type", "application/json")
                         val status = when (request.getValue("method").jsonPrimitive.content) {
                             "tools/list" -> listStatus

@@ -332,6 +332,7 @@ checkpoint、资源登记等 Runtime 基础设施异常继续向 Turn owner 传�
 | 已确认事实 | status / reason |
 | --- | --- |
 | 本地定义或工具撤销 | unavailable/tool_unavailable |
+| 最新匹配确认目录中原工具已不存在 | unavailable/tool_missing |
 | 调用前无可用 session | unavailable/server_unavailable |
 | 调用前需要用户授权 | unavailable/authorization_required |
 | 明确 MCP error 或 isError | failed/remote_error |

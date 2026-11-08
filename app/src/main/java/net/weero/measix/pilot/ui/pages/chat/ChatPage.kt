@@ -1,5 +1,12 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import androidx.compose.runtime.MutableState
+import me.rerere.hugeicons.stroke.Delete01
+import me.rerere.hugeicons.stroke.Share03
+import net.weero.measix.pilot.data.configuration.ConfigurationScope
+import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
+import net.weero.measix.pilot.ui.components.ui.ItemAction
+import net.weero.measix.pilot.ui.components.ui.ItemActionMenu
 import net.weero.measix.pilot.utils.logDiagnosticFailure
 
 import androidx.compose.runtime.getValue
@@ -61,6 +68,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -191,6 +199,9 @@ fun ChatPage(
             parametersOf(request)
         }
     )
+    // One registration survives drawer and overview layout switches and receives expired picker results.
+    val launchExportDocument = rememberChatExportLauncher(vm.documentExport)
+    ChatExportFailure(vm.documentExport)
     val navController = LocalNavController.current
     val configurationQueries: net.weero.measix.pilot.service.ConfigurationQueryService = koinInject()
     val chatNavigation = rememberChatNavigation(navController)
@@ -369,25 +380,9 @@ fun ChatPage(
         mutableStateOf(if (nodeId == null) ChatScrollIntent.FOLLOW_TAIL else ChatScrollIntent.VIEW_HISTORY)
     }
     var assistantDetailsRequest by remember(currentSnapshot.conversationId) { mutableIntStateOf(0) }
-    var initializedChatListKey by remember { mutableStateOf<ChatListInitializationKey?>(null) }
-    LaunchedEffect(nodeId, currentSnapshot.nodes.size) {
-        val key = ChatListInitializationKey(currentSnapshot.conversationId, nodeId)
-        if (initializedChatListKey != key && currentSnapshot.nodes.isNotEmpty()) {
-            if (nodeId != null) {
-                val index = currentSnapshot.nodes.indexOfFirst { it.id == nodeId }
-                if (index >= 0) {
-                    scrollIntent.value = ChatScrollIntent.VIEW_HISTORY
-                    chatListState.scrollToItem(index)
-                } else {
-                    scrollIntent.value = ChatScrollIntent.FOLLOW_TAIL
-                    chatListState.requestScrollToItem(currentSnapshot.currentMessages().size + 5)
-                }
-            } else {
-                scrollIntent.value = ChatScrollIntent.FOLLOW_TAIL
-                chatListState.requestScrollToItem(currentSnapshot.currentMessages().size + 5)
-            }
-            initializedChatListKey = key
-        }
+    val initializedChatListKey = remember { mutableStateOf<ChatListInitializationKey?>(null) }
+    val overview = rememberSaveable(currentSnapshot.conversationId.toString(), stateSaver = overviewLocationSaver) {
+        mutableStateOf<OverviewLocation?>(null)
     }
 
     val pageLayout: @Composable () -> Unit = {
@@ -455,6 +450,10 @@ fun ChatPage(
                             navController = navController,
                             vm = vm,
                             chatListState = chatListState,
+                            initialNodeId = nodeId,
+                            initializedChatListKey = initializedChatListKey,
+                            overview = overview,
+                            launchExportDocument = launchExportDocument,
                             scrollIntent = scrollIntent,
                             onScrollIntentChange = { scrollIntent.value = it },
 
@@ -508,6 +507,10 @@ fun ChatPage(
                         navController = navController,
                         vm = vm,
                         chatListState = chatListState,
+                        initialNodeId = nodeId,
+                        initializedChatListKey = initializedChatListKey,
+                        overview = overview,
+                        launchExportDocument = launchExportDocument,
                         scrollIntent = scrollIntent,
                         onScrollIntentChange = { scrollIntent.value = it },
 
@@ -538,6 +541,15 @@ fun ChatPage(
         pageLayout()
     }
 }
+
+private data class OverviewLocation(val nodeId: Uuid?, val offset: Int)
+
+private val overviewLocationSaver = listSaver<OverviewLocation?, Any>(
+    save = { location -> location?.let { listOf(it.nodeId?.toString().orEmpty(), it.offset) }.orEmpty() },
+    restore = { values ->
+        OverviewLocation((values[0] as String).takeIf(String::isNotEmpty)?.let(Uuid::parse), values[1] as Int)
+    },
+)
 
 private data class ChatListInitializationKey(
     val conversationId: Uuid,
@@ -702,6 +714,10 @@ private fun ChatPageContent(
     navController: Navigator,
     vm: ChatVM,
     chatListState: LazyListState,
+    initialNodeId: Uuid?,
+    initializedChatListKey: MutableState<ChatListInitializationKey?>,
+    overview: MutableState<OverviewLocation?>,
+    launchExportDocument: (Boolean, String) -> Unit,
     scrollIntent: State<ChatScrollIntent>,
     onScrollIntentChange: (ChatScrollIntent) -> Unit,
     errors: List<ChatError>,
@@ -729,7 +745,16 @@ private fun ChatPageContent(
     val workspaceQueryService: WorkspaceQueryService = koinInject()
     val mcpQueryService: McpQueryService = koinInject()
 
-    var previewMode by rememberSaveable { mutableStateOf(false) }
+    val previewMode = overview.value != null
+    var requestExportSelection by remember(snapshot.conversationId) { mutableStateOf(false) }
+    val exportSource = conversationUiModel?.configuration?.target?.let(vm::detailSource)
+    vm.pendingConversationDeletion?.let { pending ->
+        PendingInputDeletionDialog(
+            count = pending.preview.pendingInputCount,
+            onConfirm = { vm.confirmConversationDeletion(pending) },
+            onDismiss = vm::dismissConversationDeletion,
+        )
+    }
     val hazeState = rememberHazeState()
     val configuration = conversationUiModel?.configuration
     val target = configuration?.target
@@ -859,6 +884,22 @@ private fun ChatPageContent(
     LaunchedEffect(target, readRetryRevision, readDiagnostics) {
         if (target != null) readDiagnostics.forEach { vm.reportReadFailure(target, it) }
     }
+    val prefix = chatListPrefix(snapshot, readiness)
+    LaunchedEffect(snapshot.conversationId, initialNodeId, snapshot.nodes.size, prefix, previewMode) {
+        if (previewMode) return@LaunchedEffect
+        val key = ChatListInitializationKey(snapshot.conversationId, initialNodeId)
+        if (initializedChatListKey.value != key && snapshot.nodes.isNotEmpty()) {
+            val index = initialNodeId?.let { chatListIndex(snapshot, prefix, it) }
+            if (index != null) {
+                onScrollIntentChange(ChatScrollIntent.VIEW_HISTORY)
+                chatListState.scrollToItem(index)
+            } else {
+                onScrollIntentChange(ChatScrollIntent.FOLLOW_TAIL)
+                chatListState.requestScrollToItem(snapshot.nodes.size + 5)
+            }
+            initializedChatListKey.value = key
+        }
+    }
     val latestReadiness by rememberUpdatedState(readiness)
     val latestAllowConversationSystemPrompt by rememberUpdatedState(
         assistant?.allowConversationSystemPrompt == true,
@@ -908,6 +949,27 @@ private fun ChatPageContent(
         onScrollIntentChange(ChatScrollIntent.VIEW_HISTORY)
     }
 
+    fun showOverview() {
+        readHistory()
+        val firstIndex = chatListState.firstVisibleItemIndex
+        val first = chatListState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstIndex }
+        // visibleItemsInfo can also contain a preceding row inside the list's padding.
+        overview.value = OverviewLocation(first?.key as? Uuid, chatListState.firstVisibleItemScrollOffset)
+    }
+
+    fun closeOverview(targetId: Uuid? = null) {
+        readHistory()
+        val targetIndex = targetId?.let { chatListIndex(snapshot, prefix, it) }
+        val anchor = overview.value
+        val anchorIndex = anchor?.nodeId?.let { chatListIndex(snapshot, prefix, it) }
+        if (targetIndex != null) chatListState.requestScrollToItem(targetIndex)
+        else if (anchor != null && anchorIndex != null) chatListState.requestScrollToItem(anchorIndex, anchor.offset)
+        initializedChatListKey.value = ChatListInitializationKey(snapshot.conversationId, initialNodeId)
+        overview.value = null
+    }
+
+    BackHandler(enabled = previewMode && !drawerState.isOpen) { closeOverview() }
+
     val completionProviders = remember(assistant?.workspaceId, snapshot.header.workspaceCwd, workspaceQueryService) {
         assistant?.workspaceId?.let { workspaceId ->
             listOf(
@@ -950,9 +1012,15 @@ private fun ChatPageContent(
                         onNewChat = {
                             chatNavigation.newChat(snapshot.header.assistantId)
                         },
-                        onClickMenu = {
-                            previewMode = !previewMode
-                        },
+                        onToggleOverview = { if (previewMode) closeOverview() else showOverview() },
+                        onExport = if (exportSource != null && snapshot.nodes.isNotEmpty() && !vm.documentExport.busy) {
+                            {
+                                if (previewMode) closeOverview()
+                                requestExportSelection = true
+                            }
+                        } else null,
+                        onDelete = exportSource?.takeUnless { snapshot.header.newConversation }
+                            ?.let { original -> { vm.deleteCurrentConversation(original) } },
                         onUpdateTitle = {
                             vm.updateTitle(it)
                         }
@@ -1118,7 +1186,7 @@ private fun ChatPageContent(
             containerColor = Color.Transparent,
         ) { innerPadding ->
             ChatList(
-                detailSource = configuration?.target?.let(vm::detailSource),
+                detailSource = exportSource,
                 draftFolderLocation = {
                     if (snapshot.header.newConversation && target != null) key(target) {
                         DraftFolderLocation(vm, target, snapshot.header.folderId)
@@ -1134,6 +1202,11 @@ private fun ChatPageContent(
                 turnPresentation = turnPresentation,
                 attachmentPreviews = conversationUiModel?.attachmentPreviews.orEmpty(),
                 previewMode = previewMode,
+                overviewNodeId = overview.value?.nodeId,
+                exportActions = vm.documentExport,
+                launchExportDocument = launchExportDocument,
+                requestExportSelection = requestExportSelection,
+                onExportSelectionOpened = { requestExportSelection = false },
                 settings = setting,
                 readiness = readiness,
                 assistant = assistant,
@@ -1175,13 +1248,7 @@ private fun ChatPageContent(
                     vm.inputState.editingMessage = null
                     vm.inputState.setMessageText(suggestion)
                 },
-                onJumpToMessage = { index ->
-                    readHistory()
-                    previewMode = false
-                    scope.launch {
-                        chatListState.requestScrollToItem(index)
-                    }
-                },
+                onJumpToMessage = { closeOverview(it) },
                 onToolDecision = if (turnPresentation.phase == TurnLivePhase.STOPPING) {
                     null
                 } else {
@@ -1556,6 +1623,19 @@ internal fun evaluateAppendScroll(
     else -> AppendScrollStatus.READY
 }
 
+internal enum class ChatListPrefix { SETUP, PROVIDER, MODEL }
+
+internal fun chatListPrefix(snapshot: ConversationPresentationSnapshot, readiness: ConversationReadiness): ChatListPrefix? =
+    when {
+        snapshot.nodes.isEmpty() -> ChatListPrefix.SETUP
+        readiness.requiresProviderConfiguration && snapshot.header.scope == ConfigurationScope.Personal -> ChatListPrefix.PROVIDER
+        !readiness.canSend -> ChatListPrefix.MODEL
+        else -> null
+    }
+
+internal fun chatListIndex(snapshot: ConversationPresentationSnapshot, prefix: ChatListPrefix?, nodeId: Uuid): Int? =
+    snapshot.nodes.indexOfFirst { it.id == nodeId }.takeIf { it >= 0 }?.let { index -> index + if (prefix == null) 0 else 1 }
+
 internal fun expectedChatListItemCount(
     snapshot: ConversationPresentationSnapshot,
     loading: Boolean,
@@ -1563,13 +1643,7 @@ internal fun expectedChatListItemCount(
     allowConversationSystemPrompt: Boolean,
 ): Int {
     val nodeCount = snapshot.nodes.size
-    val configurationItemCount = if (
-        nodeCount == 0 || readiness.requiresProviderConfiguration || !readiness.canSend
-    ) {
-        1
-    } else {
-        0
-    }
+    val configurationItemCount = if (chatListPrefix(snapshot, readiness) == null) 0 else 1
     val systemPromptItemCount = if (!loading && allowConversationSystemPrompt) 1 else 0
     val loadingItemCount = if (loading) 1 else 0
     val bottomSentinelItemCount = 1
@@ -1943,12 +2017,15 @@ private fun TopBar(
     navigationAction: ChatNavigationAction,
     onNavigationClick: () -> Unit,
     previewMode: Boolean,
-    onClickMenu: () -> Unit,
+    onToggleOverview: () -> Unit,
+    onExport: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
     onNewChat: () -> Unit,
     onUpdateTitle: (String) -> Unit,
     loading: Boolean = false,
 ) {
     val toaster = LocalToaster.current
+    var confirmDelete by remember(snapshot.conversationId) { mutableStateOf(false) }
     val titleState = useEditState<String> {
         onUpdateTitle(it)
     }
@@ -2041,14 +2118,20 @@ private fun TopBar(
         },
         actions = {
             IconButton(
-                onClick = {
-                    onClickMenu()
-                }
+                onClick = onToggleOverview
             ) {
                 Icon(
                     if (previewMode) HugeIcons.Cancel01 else HugeIcons.LeftToRightListBullet,
                     stringResource(R.string.chat_page_chat_options)
                 )
+            }
+
+            if (onExport != null || onDelete != null) {
+                ItemActionMenu(buildList {
+                    if (onExport != null) add(ItemAction(stringResource(R.string.export_title), HugeIcons.Share03, onClick = onExport))
+                    if (onDelete != null) add(ItemAction(stringResource(R.string.common_delete), HugeIcons.Delete01,
+                        destructive = true, onClick = { confirmDelete = true }))
+                })
             }
 
             IconButton(
@@ -2060,6 +2143,20 @@ private fun TopBar(
             }
         },
     )
+    if (confirmDelete && onDelete != null) {
+        ConfirmDialog(
+            show = true,
+            title = stringResource(R.string.confirm_delete),
+            confirmText = stringResource(R.string.common_delete),
+            dismissText = stringResource(R.string.cancel),
+            onConfirm = {
+                confirmDelete = false
+                onDelete()
+            },
+            onDismiss = { confirmDelete = false },
+            text = { Text(stringResource(R.string.common_delete_confirm_message, snapshot.header.title)) },
+        )
+    }
     titleState.EditStateContent { title, onUpdate ->
         AlertDialog(
             onDismissRequest = {

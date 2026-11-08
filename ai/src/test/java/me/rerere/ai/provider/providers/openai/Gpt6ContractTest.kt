@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers.openai
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import me.rerere.ai.core.*
 import me.rerere.ai.provider.*
@@ -23,8 +24,8 @@ class Gpt6ContractTest {
             reasoningLevel = level, tools = if (tools) listOf(tool) else emptyList(), customBody = custom, temperature = temperature)
         val provider = ProviderSetting.OpenAI(baseUrl = "https://$host/v1", useResponseApi = responses)
         val messages = listOf(ModelRequestMessage.user("hello"))
-        return if (responses) response.buildRequestBody(provider, messages, params, stream)
-        else chat.buildChatCompletionRequest(messages, params, provider, stream)
+        return if (responses) runBlocking { response.buildRequestBody(provider, messages, params, stream) }
+        else runBlocking { chat.buildChatCompletionRequest(messages, params, provider, stream) }
     }
 
     @Test fun `registry only grants verified identities image input and tool reasoning`() {
@@ -92,14 +93,14 @@ class Gpt6ContractTest {
             val params = TextGenerationParams(model = Model(modelId = id), reasoningLevel = ReasoningLevel.HIGH)
             val provider = ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1")
             val error = assertThrows(IllegalArgumentException::class.java) {
-                chat.buildChatCompletionRequest(history, params, provider)
+                runBlocking { chat.buildChatCompletionRequest(history, params, provider) }
             }
             assertTrue(error.message.orEmpty().contains("gpt6_tools_require_responses"))
-            val replay = response.buildRequestBody(provider, history, params, false)["input"]!!.jsonArray
+            val replay = runBlocking { response.buildRequestBody(provider, history, params, false) }["input"]!!.jsonArray
             assertEquals(2, replay.count { it.jsonObject["type"] == JsonPrimitive("function_call") })
             assertEquals(2, replay.count { it.jsonObject["type"] == JsonPrimitive("function_call_output") })
             if (ModelRegistry.GPT_6_OPTIONAL_REASONING.match(id)) {
-                assertTrue(chat.buildChatCompletionRequest(history, params.copy(reasoningLevel = ReasoningLevel.OFF), provider)
+                assertTrue(runBlocking { chat.buildChatCompletionRequest(history, params.copy(reasoningLevel = ReasoningLevel.OFF), provider) }
                     ["messages"]!!.jsonArray.any { it.jsonObject["role"] == JsonPrimitive("tool") })
             }
         }

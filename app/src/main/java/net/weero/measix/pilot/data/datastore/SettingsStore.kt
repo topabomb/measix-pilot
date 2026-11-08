@@ -461,7 +461,7 @@ class SettingsStore internal constructor(
         }
         withCommit { commitUserDocument(requireOwner) { document ->
             val before = document.preferences.forScope(scope)
-            val proposed = transform(before)
+            val proposed = transform(before).let { it.copy(favoriteModels = it.favoriteModels.distinct()) }
             val updated = document.copy(preferences = document.preferences.withSelections(scope, proposed))
             requireResourceSelectionsWriteAllowed(before, proposed, ConfigurationResolver.resolve(updated, scope, enterpriseState))
             updated

@@ -3,6 +3,7 @@ package net.weero.measix.pilot.ui.pages.history
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelStore
@@ -29,6 +30,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.koin.compose.KoinIsolatedContext
+import org.koin.core.KoinApplication
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 import kotlin.uuid.Uuid
@@ -73,16 +75,7 @@ class HistoryPageAndroidTest {
         lateinit var vm: HistoryVM
         try {
             compose.runOnUiThread { vm = HistoryVM(query, configuration, application); store.put("history", vm) }
-            compose.setContent {
-                KoinIsolatedContext(isolated) {
-                    MaterialTheme {
-                        CompositionLocalProvider(LocalNavController provides Navigator(mutableListOf(Screen.History)),
-                            LocalToaster provides rememberToasterState()) {
-                            HistoryPage(vm)
-                        }
-                    }
-                }
-            }
+            setPageContent(vm, isolated)
             compose.onNode(hasAnyDescendant(hasText(first.title)) and hasClickAction()).performTouchInput { swipeLeft() }
             compose.onNodeWithText(compose.activity.getString(R.string.chat_queue_delete_confirm, 1)).assertIsDisplayed()
             coVerify(exactly = 0) { application.deleteForUndo(any(), any()) }
@@ -112,6 +105,87 @@ class HistoryPageAndroidTest {
             releasePin.complete(Unit)
             compose.runOnUiThread { store.clear() }
             isolated.close()
+        }
+    }
+
+    @Test fun selectedRowsWithQueuedInputRequireConfirmationAndLeaveOtherRowsUntouched() {
+        val realm = RealmSelection(RealmAccess.Personal, 1)
+        val assistant = ConfigurationReference.random()
+        fun row(title: String) =
+            ConversationSummary(Uuid.random(), assistant, title, null, false, Instant.EPOCH, Instant.EPOCH, realm)
+        val first = row("First selected history")
+        val other = row("Unselected history")
+        val last = row("Last selected history")
+        val rows = MutableStateFlow(Result.success(listOf(first, other, last)))
+        val sort = net.weero.measix.pilot.data.datastore.ConversationSortOrder.UPDATED
+        val query = mockk<ConversationQueryService>()
+        every { query.observeCurrentSelection() } returns flowOf(realm)
+        every { query.observeSortOrder() } returns flowOf(sort)
+        every { query.conversationsInRealm(realm, sort) } returns rows
+        val configuration = mockk<ConfigurationQueryService>()
+        every { configuration.observeAssistantCatalog() } returns flowOf(AssistantCatalogReadState.Available(
+            AssistantCatalogUiModel(realm, ConfigurationSelection(assistant, null), emptyMap(), emptyList())))
+        val preparedTargets = slot<List<ConversationCommandTarget>>()
+        val application = mockk<ConversationApplicationService>()
+        val preview = mockk<ConversationDeletionPreview>()
+        every { preview.pendingInputCount } returns 1
+        coEvery { application.prepareDeletion(capture(preparedTargets)) } returns preview
+        coEvery { application.deletionContinuation(any()) } returns
+            ConversationOpenRequest.NewDraft(Uuid.random(), realm.access, assistant)
+        coEvery { application.deleteConversations(any(), preview, any()) } coAnswers {
+            val committed = thirdArg<suspend (ConversationDeletionReceipt) -> Unit>()
+            rows.value = Result.success(listOf(other))
+            listOf(first, last).forEach { committed(ConversationDeletionReceipt(it.id, assistant, realm)) }
+        }
+        val isolated = koinApplication { modules(module {
+            single { query }
+            single { configuration }
+            single { application }
+        }) }
+        val store = ViewModelStore()
+        lateinit var vm: HistoryVM
+        try {
+            compose.runOnUiThread { vm = HistoryVM(query, configuration, application); store.put("history", vm) }
+            setPageContent(vm, isolated)
+            fun titledRow(title: String) = hasText(title) or hasAnyDescendant(hasText(title))
+            compose.onNode(titledRow(first.title) and SemanticsMatcher.keyIsDefined(SemanticsActions.OnLongClick))
+                .performTouchInput { longClick() }
+            compose.onNode(titledRow(first.title) and isToggleable()).assertIsOn()
+            compose.onNode(titledRow(last.title) and isToggleable()).performClick().assertIsOn()
+            compose.onNode(titledRow(other.title) and isToggleable()).assertIsOff()
+            compose.onNodeWithText(compose.activity.getString(R.string.history_page_selected_count, 2)).assertIsDisplayed()
+
+            val delete = compose.activity.getString(R.string.history_page_delete)
+            compose.onNodeWithContentDescription(delete).performClick()
+            compose.onNodeWithText(compose.activity.getString(R.string.history_page_delete_selected_confirmation, 2))
+                .assertIsDisplayed()
+            compose.onNode(hasText(delete) and hasClickAction()).performClick()
+            compose.onNodeWithText(compose.activity.getString(R.string.chat_queue_delete_confirm, 1)).assertIsDisplayed()
+            assertEquals(listOf(first.id, last.id), preparedTargets.captured.map { it.conversationId })
+            assertTrue(preparedTargets.captured.all { it.selection == realm })
+            coVerify(exactly = 0) { application.deleteConversations(any(), any(), any()) }
+            compose.onNode(hasText(delete) and hasClickAction()).performClick()
+            compose.onNodeWithText(first.title).assertDoesNotExist()
+            compose.onNodeWithText(last.title).assertDoesNotExist()
+            compose.onNodeWithText(other.title).assertIsDisplayed()
+            compose.onNodeWithText(compose.activity.getString(R.string.history_page_current_space)).assertIsDisplayed()
+            coVerify(exactly = 1) { application.deleteConversations(preparedTargets.captured, preview, any()) }
+        } finally {
+            compose.runOnUiThread { store.clear() }
+            isolated.close()
+        }
+    }
+
+    private fun setPageContent(vm: HistoryVM, isolated: KoinApplication) {
+        compose.setContent {
+            KoinIsolatedContext(isolated) {
+                MaterialTheme {
+                    CompositionLocalProvider(
+                        LocalNavController provides Navigator(mutableListOf(Screen.History)),
+                        LocalToaster provides rememberToasterState(),
+                    ) { HistoryPage(vm) }
+                }
+            }
         }
     }
 }

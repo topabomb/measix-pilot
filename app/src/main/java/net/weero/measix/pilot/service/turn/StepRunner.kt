@@ -16,6 +16,7 @@ import me.rerere.ai.ui.StepModelResult
 import me.rerere.ai.ui.StepUsage
 import net.weero.measix.pilot.service.runtime.TurnTransition
 
+import net.weero.measix.pilot.data.ai.attachments.ModelRequestImageEncoder
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -75,6 +76,7 @@ internal class StepRunner(
     private val toolOutputStore: net.weero.measix.pilot.data.ai.tools.ToolOutputStore,
     private val toolCallRuntime: ToolCallRuntime,
     private val artifactStore: net.weero.measix.pilot.data.files.ArtifactStore,
+    private val imageEncoder: ModelRequestImageEncoder = ModelRequestImageEncoder(),
 ) {
     suspend fun run(state: TurnRunState): StepExecutionResult {
         state.sendPhase(TurnRunPhase.PREPARING)
@@ -299,24 +301,6 @@ internal class StepRunner(
                     messages = messages.withAssistant(messages.last().copy(usage = usage))
                 }
 
-                val params = TextGenerationParams(
-                    model = model,
-                    temperature = assistant.temperature,
-                    topP = assistant.topP,
-                    maxTokens = assistant.maxTokens,
-                    tools = toolDefinitions,
-                    reasoningLevel = assistant.reasoningLevel,
-                    customHeaders = buildList {
-                        addAll(assistant.customHeaders)
-                        addAll(model.customHeaders)
-                    },
-                    customBody = buildList {
-                        addAll(assistant.customBodies)
-                        addAll(model.customBodies)
-                    },
-                    providerSessionId = providerSessionId,
-                    mediaCapabilities = mediaCapabilities,
-                )
                 // 请求构建完成，进入等待模型响应阶段
                 onPhase?.invoke(TurnRunPhase.MODEL_WAITING)
                 attachUsage(turnUsage.recordRequestStarted(estimatedRequestContextTokens, model.contextLength?.toLong()))
@@ -342,7 +326,27 @@ internal class StepRunner(
                 }
                 var requestOutcome = ProviderRequestOutcome.FAILED
                 var providerFailure: Throwable? = null
+                val imageEncoding = imageEncoder.open(realmAccess, artifactReads)
                 try {
+                    val params = TextGenerationParams(
+                        model = model,
+                        temperature = assistant.temperature,
+                        topP = assistant.topP,
+                        maxTokens = assistant.maxTokens,
+                        tools = toolDefinitions,
+                        reasoningLevel = assistant.reasoningLevel,
+                        customHeaders = buildList {
+                            addAll(assistant.customHeaders)
+                            addAll(model.customHeaders)
+                        },
+                        customBody = buildList {
+                            addAll(assistant.customBodies)
+                            addAll(model.customBodies)
+                        },
+                        providerSessionId = providerSessionId,
+                        mediaCapabilities = mediaCapabilities,
+                        imageEncoder = imageEncoding,
+                    )
                     if (stream) {
                         var reasoningPhaseSent = false
                         var answerPhaseSent = false
@@ -420,6 +424,7 @@ internal class StepRunner(
                     }
                     throw error
                 } finally {
+                    imageEncoding.close()
                     val completedUsage = requestUsage.close(
                         outcome = requestOutcome,
                         providerRequestDurationMillis = providerDurationMillis(),

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -25,6 +26,7 @@ import me.rerere.ai.provider.EmbeddingGenerationResult
 import me.rerere.ai.provider.ImageEditParams
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.prepareBalanceRequest
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestCredentials
@@ -48,6 +50,8 @@ import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.HttpException
+import me.rerere.ai.util.redactProviderSecrets
 import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.formatProviderHttpError
@@ -56,6 +60,8 @@ import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.readResponse
 import me.rerere.common.http.getByKey
+import me.rerere.common.http.withSingleAttemptBody
+import me.rerere.common.util.ThrowableDiagnosticText
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MultipartBody
 import okhttp3.MediaType.Companion.toMediaType
@@ -113,33 +119,61 @@ class OpenAIProvider(
             }
         }
 
+    private val balancePostClient by lazy {
+        client.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .build()
+    }
+
     override suspend fun getBalance(providerSetting: ProviderSetting.OpenAI): String = withContext(Dispatchers.IO) {
         val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
-        val url = if (providerSetting.balanceOption.apiPath.startsWith("http")) {
-            providerSetting.balanceOption.apiPath
-        } else {
-            "${providerSetting.baseUrl}${providerSetting.balanceOption.apiPath}"
-        }
+        val prepared = providerSetting.prepareBalanceRequest(key)
         val request = Request.Builder()
-            .url(url)
+            .url(prepared.url)
             .headers(providerSetting.customHeaders.toHeaders())
             .header("Authorization", "Bearer $key")
-            .get()
-            .build()
-        val bodyStr = client.newCall(request).readResponse { response ->
-            if (!response.isSuccessful) {
-                error("Failed to get balance: ${response.code} ${response.body?.string()}")
+            .apply {
+                prepared.jsonBody?.let {
+                    tag(PrivateRequest::class.java, PrivateRequest)
+                    post(it.toRequestBody("application/json".toMediaType()))
+                }
             }
-            response.body.string()
+            .build()
+            .withSingleAttemptBody()
+        val balanceClient = if (prepared.jsonBody == null) client else balancePostClient
+        val body = balanceClient.newCall(request).readResponse { response ->
+            val text = response.body.string()
+            if (!response.isSuccessful) {
+                val detail = redactProviderSecrets(text.redactBalanceKey(key))
+                throw HttpException("Failed to get balance: ${response.code} $detail", statusCode = response.code)
+            }
+            text
         }
-        val bodyJson = json.parseToJsonElement(bodyStr).jsonObject
-        val value = bodyJson.getByKey(providerSetting.balanceOption.resultPath)
-        val digitalValue = value.toFloatOrNull()
-        if(digitalValue != null) {
-            "%.2f".format(digitalValue)
-        } else {
-            value
+        val parsed = try {
+            json.parseToJsonElement(body)
+        } catch (error: SerializationException) {
+            val detail = ThrowableDiagnosticText(error).message(error).orEmpty()
+            val safeDetail = redactProviderSecrets(detail.redactBalanceKey(key))
+            // Retain the parser type, offset and frames without attaching its raw JSON excerpt.
+            throw SerializationException(
+                "balance_response_invalid_json: ${error.javaClass.simpleName}: $safeDetail",
+            ).apply { stackTrace = error.stackTrace }
         }
+        val value = parsed.jsonObject.getByKey(providerSetting.balanceOption.resultPath)
+        val numeric = value.toDoubleOrNull()
+        when {
+            key.isNotEmpty() && (value == key || (numeric != null && numeric == key.toDoubleOrNull())) -> "…"
+            numeric != null -> "%.2f".format(numeric)
+            else -> value.redactBalanceKey(key)
+        }
+    }
+
+    private fun String.redactBalanceKey(key: String): String {
+        if (key.isEmpty()) return this
+        val escaped = JsonPrimitive(key).toString().removeSurrounding("\"")
+        return replace(escaped, "…").replace(key, "…")
     }
 
     override suspend fun streamText(

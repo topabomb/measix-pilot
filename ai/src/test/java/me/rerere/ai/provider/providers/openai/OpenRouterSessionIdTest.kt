@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers.openai
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -51,11 +52,13 @@ class OpenRouterSessionIdTest {
             providerSessionId = sessionId,
             openCodeSessionId = "auxiliary-must-not-enter-openrouter-body",
         )
-        return chatApi.buildChatCompletionRequest(
-            messages = listOf(UIMessage.user("hi")).toModelRequests(),
-            params = params,
-            providerSetting = provider,
-        )
+        return runBlocking {
+            chatApi.buildChatCompletionRequest(
+                messages = listOf(UIMessage.user("hi")).toModelRequests(),
+                params = params,
+                providerSetting = provider,
+            )
+        }
     }
 
     private fun buildResponsesRequest(
@@ -67,12 +70,14 @@ class OpenRouterSessionIdTest {
             providerSessionId = sessionId,
             openCodeSessionId = "auxiliary-must-not-enter-openrouter-body",
         )
-        return responseApi.buildRequestBody(
-            provider,
-            listOf(UIMessage.user("hi")).toModelRequests(),
-            params,
-            false,
-        )
+        return runBlocking {
+            responseApi.buildRequestBody(
+                provider,
+                listOf(UIMessage.user("hi")).toModelRequests(),
+                params,
+                false,
+            )
+        }
     }
 
     @Test

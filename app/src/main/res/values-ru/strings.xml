@@ -2163,4 +2163,16 @@
   <string name="webdav_credentials_help">Для анонимного доступа оставьте поля пустыми. Иначе укажите учётные данные WebDAV, предоставленные сервисом.</string>
   <string name="enterprise_assistant_required">Организация должна опубликовать хотя бы одного включённого ассистента с доступной моделью чата. Попросите администратора опубликовать настройки и повторите синхронизацию.</string>
   <string name="permission_local_network_denied">Доступ к локальной сети может быть ограничен. Разрешите его в настройках приложения.</string>
+  <string name="provider_balance_method">Метод запроса</string>
+  <string name="provider_balance_json_body">Тело запроса JSON</string>
+  <string name="provider_balance_template_hint">Используйте {{apiKey}} или {{baseUrl}} в строковых значениях JSON.</string>
+  <string name="chat_overview_matches">Совпадений: %1$d</string>
+  <string name="chat_overview_reading_position">Место чтения</string>
+  <string name="chat_overview_message_without_text">Сообщение без текста</string>
+  <string name="permission_local_network_allow">Разрешить доступ к локальной сети</string>
+  <string name="history_summary_retention_invalid">Введите целое число от 0 до 2 147 483 647.</string>
+  <string name="history_page_select">Выбрать</string>
+  <string name="history_page_selected_count">Выбрано: %1$d</string>
+  <string name="history_page_delete_selected_confirmation">Удалить выбранные чаты (%1$d)? Это действие нельзя отменить.</string>
+  <string name="chat_page_export_save_gallery">Сохранить в галерею</string>
 </resources>

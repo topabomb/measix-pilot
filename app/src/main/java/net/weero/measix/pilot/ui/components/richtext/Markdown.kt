@@ -107,13 +107,13 @@ import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.LeafASTNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
-import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import net.weero.measix.pilot.utils.PilotMarkdownFlavour
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.parser.MarkdownParser
 import kotlin.time.Clock
 
 private val flavour by lazy {
-    GFMFlavourDescriptor(
+    PilotMarkdownFlavour(
         makeHttpsAutoLinks = true, useSafeLinks = true
     )
 }
@@ -1159,9 +1159,7 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                     color = colorScheme.primary,
                 )
             ) {
-                append(' ')
-                append(code)
-                append(' ')
+                appendInlineCode(code, inlineContents, colorScheme.outline)
             }
         }
 

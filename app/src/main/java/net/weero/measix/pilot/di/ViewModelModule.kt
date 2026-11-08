@@ -43,6 +43,7 @@ val viewModelModule = module {
             chatErrorStore = get(),
             configurationApplicationService = get(),
             remoteWorkspace = get(),
+            mediaExportService = get(),
         )
     }
     viewModelOf(::ChatDrawerVM)

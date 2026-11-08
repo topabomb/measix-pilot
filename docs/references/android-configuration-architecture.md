@@ -91,6 +91,8 @@ JSON 解码、个人配置物化和按域 Resolver 投影在 SettingsStore 的�
 个人备份的 Settings 投影另用显式 `settingsFormatVersion=2`，导出即使省略默认值也写出标记。
 `migrateLegacySettingsJson` 对缺标记／版本 1 的助手值执行同一转换，新格式保留 1–39，未来版本明确拒绝。
 备份仍仅含个人设置，企业 usage 只在本地文档迁移，不进入个人包；恢复沿原 Settings owner 保留企业偏好。
+`UserSettingsMigration` 在原文档的各 scope 内按引用身份保留首次模型收藏，同一修复适用于旧键及当前个人备份格式。
+它保留引用值及其顺序，不跨 scope 合并。Settings 提交同样保持唯一，`ModelCatalogUiModel` 对已有快照做显示层防护。
 不在这里复制完整属性清单，但必须区分四种默认语义：Kotlin 构造默认、旧 DataStore key 缺失默认、
 `materializeForRead()` 后的有效默认、企业字段未提供。不能用其中一种推断另一种。
 `Settings()` 的 `modeInjections` 构造默认包含 `DEFAULT_MODE_INJECTIONS`；`UserSettingsMigration` 在旧键缺失时
@@ -328,6 +330,8 @@ Conversation、Memory、Artifact、GeneratedMedia、收藏、分页与统计中�
 用户 `ProviderSetting` / `Model` 保存连接参数、模型能力和高级覆盖，字段以原类型声明为准。
 Provider `customHeaders` 缺字段解码为空列表；复制、类型转换与 Model providerOverwrite 保留该字段。
 Provider 编辑复用原 typed contract，目录、余额及生成请求共用各自 Adapter 合并入口，详情默认折叠显示请求头编辑器。
+用户自有 OpenAI 余额查询沿 `BalanceOption` 配置 GET 或 POST。旧配置缺 method 时沿 GET，POST 可在 JSON 字符串值中引用本次轮换的 key 和 base URL。
+编辑、预览与 Adapter 共用请求校验，缓存身份包含 method 和有效请求体。查询结果用于余额显示，企业额度由 Core 发布。
 余额订阅与草稿预览失败由 `ProviderBalanceUiState.Unavailable.detail` 保留脱敏诊断，取消向上传播；失败不进入余额缓存，重新订阅仍可重试。
 `providerOverwrite`、custom headers/body、URL 和 API key 只属于用户定义，可能含凭据；
 企业公开 Model 与私有 execution binding 独立，不以这些覆盖字段作为受管执行来源。

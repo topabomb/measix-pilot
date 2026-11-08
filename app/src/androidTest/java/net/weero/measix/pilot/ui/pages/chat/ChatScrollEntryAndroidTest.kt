@@ -46,6 +46,7 @@ import kotlinx.coroutines.withTimeout
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.common.configuration.ConfigurationReference
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.RouteActivity
 import net.weero.measix.pilot.Screen
@@ -100,6 +101,41 @@ class ChatScrollEntryAndroidTest {
         // A normal entry reinitializes at the tail; this is not durable draft/reading-position recovery.
         recreate(first.route())
         assertTail(first)
+    }
+
+    @Test fun overviewRestoresReadingPositionAndJumpsToTheMatchedNodeWithAReadinessRow() = withHistory { first, _ ->
+        val settings = GlobalContext.get().get<SettingsStore>()
+        runBlocking {
+            settings.updateLocal { current ->
+                current.copy(
+                    providers = current.providers.map { provider ->
+                        if (provider.id == first.providerId) provider.copyProvider(enabled = false) else provider
+                    },
+                    displaySetting = current.displaySetting.copy(enableBlurEffect = true),
+                )
+            }
+        }
+        launch(first.route(first.nodes[3]))
+        assertHistory(first, 3)
+        val readingPosition = position()
+        compose.onNodeWithText(first.texts.first()).assertIsNotDisplayed()
+
+        val overview = activityText(R.string.chat_page_chat_options)
+        compose.onNodeWithContentDescription(overview).performClick()
+        compose.onNodeWithText(activityText(R.string.chat_overview_reading_position)).assertIsDisplayed()
+        compose.onNodeWithContentDescription(overview).performClick()
+        assertHistory(first, 3)
+        assertEquals(readingPosition, position(), 0.01f)
+
+        compose.onNodeWithContentDescription(overview).performClick()
+        val keyword = first.texts.first().lineSequence().first()
+        compose.onNode(hasSetTextAction() and hasText(activityText(R.string.history_page_search)))
+            .performTextReplacement(keyword)
+        closeSoftKeyboard()
+        compose.onNode(hasText(keyword, substring = true) and hasClickAction() and hasAnyAncestor(historyMatcher()))
+            .assertIsDisplayed().performClick()
+        compose.onNodeWithText(first.texts.first()).assertIsDisplayed()
+        assertTrue(position() < readingPosition)
     }
 
     @Test fun switchingEqualLengthConversationsSeparatesHistoryIntentAndKeepsRealVolumeAndImeInput() = withHistory { first, second ->
@@ -463,7 +499,12 @@ class ChatScrollEntryAndroidTest {
         }
     }
 
-    private data class History(val id: Uuid, val nodes: List<Uuid>, val texts: List<String>) {
+    private data class History(
+        val id: Uuid,
+        val nodes: List<Uuid>,
+        val texts: List<String>,
+        val providerId: ConfigurationReference,
+    ) {
         fun route(node: Uuid? = null) = Screen.Chat(
             ConversationOpenRequest.OpenExisting(id, RealmAccess.Personal), nodeId = node?.toString(),
         )
@@ -511,7 +552,7 @@ class ChatScrollEntryAndroidTest {
                 }
                 val stored = requireNotNull(repository.getConversationSnapshotById(lease.conversationId))
                 assertEquals(texts, stored.currentMessages().map { it.toText() })
-                History(lease.conversationId, stored.nodes.map { it.id }, texts)
+                History(lease.conversationId, stored.nodes.map { it.id }, texts, provider.id)
             } }
             val first = create("Scroll A")
             val second = create("Scroll B")
@@ -551,6 +592,7 @@ class ChatScrollEntryAndroidTest {
                         showMessageJumper = before.displaySetting.showMessageJumper,
                         enableVolumeKeyScroll = before.displaySetting.enableVolumeKeyScroll,
                         volumeKeyScrollRatio = before.displaySetting.volumeKeyScrollRatio,
+                        enableBlurEffect = before.displaySetting.enableBlurEffect,
                     ),
                 ) }
                 settings.rememberConversation(ConfigurationScope.Personal, previousConversation)

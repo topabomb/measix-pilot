@@ -12,11 +12,10 @@ import me.rerere.ai.ui.ImageEncodingMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.encodeImageBytes
-import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.encodeNativeImage
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
@@ -28,15 +27,14 @@ import org.robolectric.annotation.GraphicsMode
 class ModelImageEncodingTest {
     @Suppress("DEPRECATION")
     @Test
-    fun `external HEIC headers cannot bypass decoding by requesting original bytes`() {
+    fun `external HEIC headers cannot bypass decoding by requesting original bytes`() = runBlocking {
         val file = Files.createTempFile("external-image-", ".heic").toFile()
         try {
             val source = byteArrayOf(0, 0, 0, 24) + "ftypheic".toByteArray(Charsets.US_ASCII) + ByteArray(12)
             file.writeBytes(source)
             val image = UIMessagePart.Image("file://${file.toURI().rawPath}",
                 metadata = ImageEncodingMetadata(preserveOriginal = true).toMetadata())
-            val result = image.encodeBase64()
-            assertTrue("An undecodable HEIC must fail rather than forward its original bytes", result.isFailure)
+            assertThrows(IllegalStateException::class.java) { runBlocking { image.encodeNativeImage() } }
             assertArrayEquals(source, file.readBytes())
         } finally { check(file.delete()) }
     }

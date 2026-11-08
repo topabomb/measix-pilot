@@ -25,7 +25,7 @@ Scope 表达持久主体，Session 表达当前授权，两者不能互相替代
 | `ai` | Provider 抽象与线协议、消息和工具基础类型、usage 归一化；不拥有会话执行生命周期 |
 | `common` | 跨模块 Kotlin/Android 工具 |
 | `document` / `highlight` | 文档解析、原生代码语法高亮 |
-| `material3` | Material You 动态配色扩展 |
+| `material3` | Material You 动态配色扩展，编译仓内固定版本的 [MCU Kotlin 源码](../../material3/material-color-utilities/SOURCE.md) |
 | `search` / `speech` | 搜索 SDK、TTS 与 ASR adapter |
 | `workspace` | PRoot、Rootfs、文件与进程执行基础能力 |
 

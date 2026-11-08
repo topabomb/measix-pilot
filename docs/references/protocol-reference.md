@@ -31,6 +31,15 @@ Provider 类型决定原生协议族，`useResponseApi` 只选择 OpenAI 子协�
 
 Chat Completions SSE 允许跳过顶层 JSON null 和可选空引用注解；非对象数组/标量帧仍报告格式错误，
 非空 error 仍终止请求。空帧不构成成功终态，usage-only 帧及真正的 finish_reason 继续沿原解析和用量链处理。
+Chat Completions 的流式 delta 与非流式 message 共用响应角色解析。缺失、null、空字符串和未知字符串按
+assistant 处理，已知角色保留其含义。布尔、数字、数组及对象返回 `chat_completions_invalid_role_type`。
+该兼容规则只作用于响应读取，请求角色和持久消息枚举沿原契约。
+
+四线在实际生成图片内容块时调用 `TextGenerationParams.imageEncoder`。该挂起能力只随当前请求传递，
+按图片 part 选择编码并保持各线的原 MIME 与 Base64 容器。Responses 原始输出的 opaque 回放直接使用
+原始 JSON，只为本次真正构造的本地补充内容调用编码。应用提供的能力失效或失败时请求结束，
+独立 AI 调用的默认编码仍复用同一套像素规则。文件授权与派生缓存见
+[多模态资源](multimodal-context-and-turn-durability.md#模型请求图片编码)。
 
 模型目录匹配时，紧邻 `b/k` 的数量不参与版本 token 匹配，例如 8B、A3B、32K。
 Qwen3-VL 的已登记尺寸与 Instruct/Thinking 使用完整型号模式，支持渠道前缀和量化后缀；

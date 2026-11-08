@@ -103,6 +103,8 @@ import net.weero.measix.pilot.ui.components.ai.ModelAbilityTag
 import net.weero.measix.pilot.ui.components.ai.ModelModalityTag
 import net.weero.measix.pilot.ui.components.ai.ModelTypeTag
 import net.weero.measix.pilot.ui.components.ai.ProviderBalancePreview
+import net.weero.measix.pilot.ui.components.ai.matchesSearchTerms
+import net.weero.measix.pilot.ui.components.ai.modelSearchTerms
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
 import net.weero.measix.pilot.ui.components.ui.ShareSheet
@@ -298,10 +300,10 @@ internal fun SettingProviderConfigPage(
                 Text(detail, color = MaterialTheme.colorScheme.error)
             }
         }
-        if (internalProvider is ProviderSetting.OpenAI) {
+        val openAiDraft = internalProvider as? ProviderSetting.OpenAI
+        if (openAiDraft != null) {
             SettingProviderBalanceOption(
-                provider = internalProvider,
-                balanceOption = internalProvider.balanceOption,
+                provider = openAiDraft,
                 onEdit = { internalProvider = internalProvider.copyProvider(balanceOption = it) }
             )
             ProviderBalancePreview(draft = internalProvider, style = MaterialTheme.typography.labelSmall)
@@ -873,17 +875,8 @@ private fun ModelPicker(
             sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
         ) {
             var filterText by remember { mutableStateOf("") }
-            val filterKeywords = filterText.split(" ").filter { it.isNotBlank() }
-            val filteredModels = models.fastFilter {
-                if (filterKeywords.isEmpty()) {
-                    true
-                } else {
-                    filterKeywords.all { keyword ->
-                        it.modelId.contains(keyword, ignoreCase = true) ||
-                            it.displayName.contains(keyword, ignoreCase = true)
-                    }
-                }
-            }
+            val filterKeywords = modelSearchTerms(filterText)
+            val filteredModels = models.fastFilter { it.matchesSearchTerms(filterKeywords) }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()

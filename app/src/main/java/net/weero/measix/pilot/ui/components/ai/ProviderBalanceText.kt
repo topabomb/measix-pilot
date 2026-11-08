@@ -8,14 +8,19 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.produceState
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.BalanceMethod
 import androidx.compose.runtime.remember
 import org.koin.compose.koinInject
 import net.weero.measix.pilot.service.ProviderBalanceUiState
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -48,12 +53,28 @@ fun ProviderBalancePreview(
     style: TextStyle = LocalTextStyle.current,
     color: Color = Color.Unspecified,
 ) {
+    val provider = draft as? ProviderSetting.OpenAI ?: return
+    if (!provider.balanceOption.enabled) return
     val service: ProviderSettingsApplicationService = koinInject()
-    val balance by produceState<ProviderBalanceUiState>(ProviderBalanceUiState.Hidden, draft) {
-        value = ProviderBalanceUiState.Loading
-        value = service.previewBalance(draft)
+    key(provider) {
+        var attempt by remember { mutableIntStateOf(0) }
+        val explicitTest = provider.balanceOption.method == BalanceMethod.POST
+        val balance by produceState<ProviderBalanceUiState>(ProviderBalanceUiState.Hidden, attempt) {
+            if (!explicitTest || attempt != 0) {
+                value = ProviderBalanceUiState.Loading
+                value = service.previewBalance(provider)
+            }
+        }
+        if (explicitTest) {
+            TextButton(
+                onClick = { attempt++ },
+                enabled = balance != ProviderBalanceUiState.Loading,
+            ) {
+                Text(androidx.compose.ui.res.stringResource(R.string.setting_provider_page_test))
+            }
+        }
+        ProviderBalanceValue(balance, modifier, style, color)
     }
-    ProviderBalanceValue(balance, modifier, style, color)
 }
 
 @Composable

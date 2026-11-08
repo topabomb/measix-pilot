@@ -85,8 +85,10 @@ class ResponseFunctionResultsTest {
             assertEquals(ToolResultStatus.COMPLETED, tool.resultStatus)
             assertEquals(value, tool.metadataAs<ResponseFunctionResultMetadata>()!!.responseFunctionResult!!.output)
             val saved = Json.decodeFromString(UIMessage.serializer(), Json.encodeToString(UIMessage.serializer(), message))
-            val replay = api.buildMessages(listOf(ModelRequestMessage(saved.role, saved.parts, providerMetadata = saved.providerMetadata)),
-                ResponseEndpointProfile.OPENAI_COMPATIBLE)
+            val replay = runBlocking {
+                api.buildMessages(listOf(ModelRequestMessage(saved.role, saved.parts, providerMetadata = saved.providerMetadata)),
+                    ResponseEndpointProfile.OPENAI_COMPATIBLE)
+            }
             assertEquals(listOf(call, result(value)), replay.toList())
         }
     }
@@ -164,7 +166,7 @@ class ResponseFunctionResultsTest {
                         obj("""{"type":"web_search_call","id":"unsafe_search","status":"in_progress"}""")),
                 ))
             val persisted = Json.decodeFromString(UIMessage.serializer(), Json.encodeToString(UIMessage.serializer(), original))
-            val wire = api.buildMessages(listOf(persisted.replaySafeProjection()!!.toModelRequest()), ResponseEndpointProfile.OPENAI_COMPATIBLE)
+            val wire = runBlocking { api.buildMessages(listOf(persisted.replaySafeProjection()!!.toModelRequest()), ResponseEndpointProfile.OPENAI_COMPATIBLE) }
             assertEquals(listOf(search, call, result(value)), wire.take(3))
             assertEquals(4, wire.size)
             assertTrue(wire.last().toString().contains("readable partial answer"))

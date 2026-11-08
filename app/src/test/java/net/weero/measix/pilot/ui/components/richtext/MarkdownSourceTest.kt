@@ -6,7 +6,7 @@ import net.weero.measix.pilot.utils.prepareMarkdownSource
 import net.weero.measix.pilot.utils.markdownFence
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.ast.ASTNode
-import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import net.weero.measix.pilot.utils.PilotMarkdownFlavour
 import org.intellij.markdown.parser.MarkdownParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -14,6 +14,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownSourceTest {
+    @Test fun `strike delimiters render standard del without flattening emphasis or inline code`() {
+        val doc = generateMarkdownDocument("~first~ then ~~**second**~~ and `~literal~`").document
+        assertEquals(listOf("first", "second"), doc.select("del").map { it.text() })
+        assertEquals("second", doc.select("del strong").single().text())
+        assertEquals("~literal~", doc.select("code").single().text())
+        assertTrue(generateMarkdownDocument("~~~not a strike~~~").document.select("del").isEmpty())
+    }
+
     @Test fun `HTML backed render path preserves unknown inline tags and generic type names`() {
         val result = generateMarkdownDocument("条件 x<y>z、List<String> 和 <b>重点</b>、<answer>正文</answer>")
         assertEquals("条件 x<y>z、List<String> 和 重点、<answer>正文</answer>", result.document.body().text())
@@ -27,7 +35,7 @@ class MarkdownSourceTest {
             if (node.type == MarkdownElementTypes.CODE_FENCE) result += markdownFence(node, source)
             else node.children.forEach(::visit)
         }
-        visit(MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(source.text))
+        visit(MarkdownParser(PilotMarkdownFlavour()).buildMarkdownTreeFromString(source.text))
         return result
     }
 

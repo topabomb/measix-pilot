@@ -6,8 +6,14 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
@@ -15,6 +21,7 @@ import net.weero.measix.pilot.service.RenderedContentSource
 import net.weero.measix.pilot.ui.context.LocalSettings
 import net.weero.measix.pilot.ui.theme.LocalDarkMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,6 +34,44 @@ class MarkdownPreviewAndroidTest {
     @Test fun htmlPreviewUsesTrustedClosureAndCopiesOriginalLineEndings() = exercise("<b>Intro</b>\r\n\r\n")
     @Test fun mermaidAstDefaultsToDiagramAndKeepsSourceChoice() = exerciseMermaid("")
     @Test fun mermaidHtmlPathDefaultsToDiagramAndKeepsSourceChoice() = exerciseMermaid("<b>Intro</b>\n\n")
+
+    @Test fun astDisplaysInlineColorAndSingleTildeStrikethrough() = exerciseInlineStyles(withHtml = false)
+    @Test fun htmlDisplaysInlineColorAndSingleTildeStrikethrough() = exerciseInlineStyles(withHtml = true)
+
+    private fun exerciseInlineStyles(withHtml: Boolean) {
+        val prefix = if (withHtml) "<b>Intro</b> " else ""
+        compose.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalSettings provides Settings.dummy(),
+                    LocalDarkMode provides false,
+                    LocalRenderedContentSource provides RenderedContentSource.Static,
+                ) { MarkdownBlock(prefix + "`#00b742` ~discarded~") }
+            }
+        }
+        val paragraph = compose.onNodeWithText("#00b742", substring = true).assertIsDisplayed()
+        val layouts = mutableListOf<TextLayoutResult>()
+        paragraph.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertTrue(layouts.any { layout ->
+            val text = layout.layoutInput.text
+            text.spanStyles.any { span ->
+                span.item.textDecoration?.contains(TextDecoration.LineThrough) == true &&
+                    text.text.substring(span.start, span.end) == "discarded"
+            }
+        })
+        if (withHtml) {
+            assertTrue(layouts.any { layout ->
+                val text = layout.layoutInput.text
+                text.spanStyles.any { span ->
+                    span.item.fontWeight == FontWeight.Bold && text.text.substring(span.start, span.end) == "Intro"
+                }
+            })
+        }
+        val pixels = paragraph.captureToImage().toPixelMap()
+        assertTrue("The inline swatch must draw the requested color", (0 until pixels.height).any { y ->
+            (0 until pixels.width).any { x -> pixels[x, y] == Color(0xff00b742) }
+        })
+    }
 
     private fun exerciseMermaid(prefix: String) {
         var text by mutableStateOf(prefix + "```mermaid\ngraph TD\nA[Start] --> B[Finish]")

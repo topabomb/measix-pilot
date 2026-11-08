@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers.openai
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -42,11 +43,13 @@ class ChatCompletionsAPIToolSchemaTest {
                 )
             ),
         )
-        val body = api.buildChatCompletionRequest(
-            messages = listOf(UIMessage.user("hello")).toModelRequests(),
-            params = params,
-            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-        )
+        val body = runBlocking {
+            api.buildChatCompletionRequest(
+                messages = listOf(UIMessage.user("hello")).toModelRequests(),
+                params = params,
+                providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+            )
+        }
         val sent = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
             .jsonObject["parameters"]!!.jsonObject
 
@@ -75,11 +78,13 @@ class ChatCompletionsAPIToolSchemaTest {
                 )
             ),
         )
-        val body = api.buildChatCompletionRequest(
-            messages = listOf(UIMessage.user("hello")).toModelRequests(),
-            params = params,
-            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-        )
+        val body = runBlocking {
+            api.buildChatCompletionRequest(
+                messages = listOf(UIMessage.user("hello")).toModelRequests(),
+                params = params,
+                providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+            )
+        }
         val sent = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
             .jsonObject["parameters"]!!.jsonObject
 
@@ -105,11 +110,13 @@ class ChatCompletionsAPIToolSchemaTest {
                 )
             ),
         )
-        val body = api.buildChatCompletionRequest(
-            messages = listOf(UIMessage.user("hello")).toModelRequests(),
-            params = params,
-            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-        )
+        val body = runBlocking {
+            api.buildChatCompletionRequest(
+                messages = listOf(UIMessage.user("hello")).toModelRequests(),
+                params = params,
+                providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+            )
+        }
         val sent = body["tools"]!!.jsonArray.single().jsonObject["function"]!!
             .jsonObject["parameters"]!!.jsonObject
 
@@ -130,12 +137,14 @@ class ChatCompletionsAPIToolSchemaTest {
                 )
             ),
         )
-        val body = api.buildRequestBody(
-            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-            listOf(UIMessage.user("hello")).toModelRequests(),
-            params,
-            false,
-        )
+        val body = runBlocking {
+            api.buildRequestBody(
+                ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+                listOf(UIMessage.user("hello")).toModelRequests(),
+                params,
+                false,
+            )
+        }
         val sent = body["tools"]!!.jsonArray.single().jsonObject["parameters"]!!.jsonObject
 
         assertEquals("object", sent["type"]!!.jsonPrimitive.content)
@@ -166,12 +175,14 @@ class ChatCompletionsAPIToolSchemaTest {
                 )
             ),
         )
-        val body = api.buildRequestBody(
-            ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
-            listOf(UIMessage.user("hello")).toModelRequests(),
-            params,
-            false,
-        )
+        val body = runBlocking {
+            api.buildRequestBody(
+                ProviderSetting.OpenAI(baseUrl = "https://api.x.ai/v1"),
+                listOf(UIMessage.user("hello")).toModelRequests(),
+                params,
+                false,
+            )
+        }
         val sent = body["tools"]!!.jsonArray.single().jsonObject["parameters"]!!.jsonObject
 
         assertEquals(

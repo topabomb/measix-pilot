@@ -1,6 +1,17 @@
 package net.weero.measix.pilot.ui.pages.chat
 
-import net.weero.measix.pilot.utils.logDiagnosticFailure
+import net.weero.measix.pilot.ui.components.ui.rememberExportDocumentLauncher
+import net.weero.measix.pilot.ui.components.ui.ExportAction
+import net.weero.measix.pilot.ui.components.ui.DocumentExportActions
+import net.weero.measix.pilot.service.RenderedContentSource
+import net.weero.measix.pilot.service.FileManagementApplicationService
+import net.weero.measix.pilot.service.ConversationViewLease
+import net.weero.measix.pilot.service.AttachmentPreview
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.FlowRow
 
 import android.content.Context
 import android.graphics.Bitmap
@@ -9,9 +20,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Book02
 import me.rerere.hugeicons.stroke.Book04
 import me.rerere.hugeicons.stroke.Earth
-import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.FileView
-import me.rerere.hugeicons.stroke.Image02
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Wrench01
 import androidx.compose.foundation.Image
@@ -26,10 +35,8 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -69,7 +76,6 @@ import coil3.request.allowHardware
 import coil3.request.crossfade
 import net.weero.measix.pilot.ui.components.toast.ToastType
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -107,218 +113,176 @@ import net.weero.measix.pilot.utils.getActivity
 import net.weero.measix.pilot.utils.JsonInstantPretty
 import net.weero.measix.pilot.utils.jsonPrimitiveOrNull
 import net.weero.measix.pilot.utils.toLocalString
-import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import java.time.LocalDateTime
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.DurationUnit
 
 @Composable
-fun ChatExportSheet(
-    source: net.weero.measix.pilot.service.ConversationViewLease?,
+internal fun rememberChatExportLauncher(actions: DocumentExportActions): (Boolean, String) -> Unit {
+    val saveMarkdown = rememberExportDocumentLauncher(actions, "text/markdown")
+    val savePng = rememberExportDocumentLauncher(actions, "image/png")
+    return { image, name -> if (image) savePng(name) else saveMarkdown(name) }
+}
+
+@Composable
+internal fun ChatExportFailure(actions: DocumentExportActions) {
+    actions.failure?.let { detail ->
+        ErrorDetails(
+            ChatError(detail = stringResource(R.string.chat_page_export_failed, detail), retention = ChatErrorRetention.UNTIL_DISMISSED),
+            onDismiss = actions::clearFailure,
+        )
+    }
+}
+
+@Composable
+internal fun ChatExportSheet(
+    source: ConversationViewLease?,
+    actions: DocumentExportActions,
+    launchDocument: (Boolean, String) -> Unit,
     modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
     visible: Boolean,
     onDismissRequest: () -> Unit,
     conversationTitle: String,
     selectedMessages: List<UIMessage>,
-    attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview> = emptyMap(),
+    attachmentPreviews: Map<String, AttachmentPreview> = emptyMap(),
     queries: ConversationQueryService = org.koin.compose.koinInject(),
+    contentFiles: FileManagementApplicationService = org.koin.compose.koinInject(),
+    mediaExports: MediaExportService = org.koin.compose.koinInject(),
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val settings = LocalSettings.current
-    val verifyAccess: suspend () -> Unit = remember(source, queries) {
-        { queries.requireViewAccess(requireNotNull(source) { "conversation_view_unavailable" }) }
-    }
-    val contentSource = source?.let { net.weero.measix.pilot.service.RenderedContentSource.Conversation(it) }
-    val contentFiles: net.weero.measix.pilot.service.FileManagementApplicationService = org.koin.compose.koinInject()
-    val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource? = remember(contentSource, contentFiles) {
-        { url -> contentSource?.let { contentFiles.resolveContentImage(it, url) } }
-    }
-    val mediaExportService: MediaExportService = org.koin.compose.koinInject()
-    val attachmentPreview = remember(attachmentPreviews) {
-        { ref: String -> attachmentPreviews[ref] }
-    }
-    var exportOptions by remember { mutableStateOf(ChatExportOptions()) }
-    var exporting by remember { mutableStateOf(false) }
-    var exportFailure by remember(source, visible) { mutableStateOf<ChatError?>(null) }
-    val exportFailedFormat = stringResource(R.string.chat_page_export_failed)
+    var options by remember { mutableStateOf(ChatExportOptions()) }
 
-    if (visible) {
-        AdaptiveModal(
-            onDismissRequest = onDismissRequest,
-            sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(text = stringResource(id = R.string.chat_page_export_format))
-                ListItem(
-                    headlineContent = { Text(stringResource(R.string.chat_page_export_include_reasoning)) },
-                    trailingContent = {
-                        Switch(
-                            checked = exportOptions.includeReasoning,
-                            enabled = !exporting,
-                            onCheckedChange = { exportOptions = exportOptions.copy(includeReasoning = it) },
-                        )
-                    },
-                )
-
-                val markdownSuccessMessage =
-                    stringResource(id = R.string.chat_page_export_success, "Markdown")
-                OutlinedCard(
-                    onClick = {
-                        if (exporting) return@OutlinedCard
-                        exporting = true
-                        scope.launch {
-                            try {
-                                exportToMarkdown(context, conversationTitle, selectedMessages, attachmentPreview, mediaExportService, verifyAccess, exportOptions)
-                                toaster.show(markdownSuccessMessage, type = ToastType.Success)
-                                onDismissRequest()
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (error: Exception) {
-                                logDiagnosticFailure("ChatExport", "Markdown export failed", error)
-                                exportFailure = ChatError(
-                                    detail = exportFailedFormat.format(error.userVisibleDiagnostic()),
-                                    retention = ChatErrorRetention.UNTIL_DISMISSED,
-                                )
-                            } finally {
-                                exporting = false
-                            }
-                        }
-                    },
-                    enabled = !exporting,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    ListItem(
-                        supportingContent = {
-                            Text(stringResource(id = R.string.chat_page_export_markdown_desc))
-                        },
-                        leadingContent = {
-                            Icon(HugeIcons.File02, contentDescription = null)
-                        }
-                    ) {
-                        Text(stringResource(id = R.string.chat_page_export_markdown))
-                    }
-                }
-
-                val imageSuccessMessage =
-                    stringResource(id = R.string.chat_page_export_success, "Image")
-                OutlinedCard(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column {
-                        ListItem(
-                            supportingContent = {
-                                Text(stringResource(id = R.string.chat_page_export_image_desc))
-                            },
-                            leadingContent = {
-                                Icon(HugeIcons.Image02, contentDescription = null)
-                            }
-                        ) {
-                            Text(stringResource(id = R.string.chat_page_export_image))
-                        }
-
-                        HorizontalDivider()
-
-                        ListItem(
-                            trailingContent = {
-                                Switch(
-                                    checked = exportOptions.expandReasoning,
-                                    enabled = exportOptions.includeReasoning && !exporting,
-                                    onCheckedChange = {
-                                        exportOptions = exportOptions.copy(expandReasoning = it)
-                                    }
-                                )
-                            }
-                        ) {
-                            Text(stringResource(R.string.chat_page_export_image_expand_reasoning))
-                        }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            Button(
-                                onClick = {
-                                    if (exporting) return@Button
-                                    exporting = true
-                                    scope.launch {
-                                        try {
-                                            val view = requireNotNull(source) { "conversation_view_unavailable" }
-                                            val messageSources = selectedMessages.associate { message ->
-                                                message.id to queries.messageResourceSource(view, view.conversationId, message.id)
-                                            }
-                                            val rendering = messageSources.mapValues { (_, message) ->
-                                                val rendered = net.weero.measix.pilot.service.RenderedContentSource.Conversation(view, message)
-                                                MessageExportRendering(rendered) { url -> contentFiles.resolveContentImage(rendered, url) }
-                                            }
-                                            exportToImage(
-                                                context = context,
-                                                density = density,
-                                                conversationTitle = conversationTitle,
-                                                messages = selectedMessages,
-                                                settings = settings,
-                                                mediaExportService = mediaExportService,
-                                                attachmentPreview = attachmentPreview,
-                                                imageResolver = imageResolver,
-                                                contentSource = contentSource,
-                                                verifyAccess = { verifyAccess(); messageSources.values.forEach { it.requireAccess() } },
-                                                modelIconFallback = modelIconFallback,
-                                                options = exportOptions,
-                                                messageRendering = rendering,
-                                            )
-                                            toaster.show(imageSuccessMessage, type = ToastType.Success)
-                                            onDismissRequest()
-                                        } catch (cancelled: CancellationException) {
-                                            throw cancelled
-                                        } catch (error: Exception) {
-                                            logDiagnosticFailure("ChatExport", "Image export failed", error)
-                                            exportFailure = ChatError(
-                                                detail = exportFailedFormat.format(error.userVisibleDiagnostic()),
-                                                retention = ChatErrorRetention.UNTIL_DISMISSED,
-                                            )
-                                        } finally {
-                                            exporting = false
-                                        }
-                                    }
-                                },
-                                enabled = !exporting,
-                            ) {
-                                Text(stringResource(R.string.mermaid_export))
-                            }
-                        }
-                    }
-                }
-            }
+    actions.completedName?.let { name ->
+        val message = stringResource(R.string.chat_page_export_success, name)
+        LaunchedEffect(name) {
+            toaster.show(message, type = ToastType.Success)
+            actions.acknowledgeCompletion()
+            onDismissRequest()
         }
-        exportFailure?.let { error ->
-            ErrorDetails(error, onDismiss = { exportFailure = null })
+    }
+    if (!visible) return
+
+    fun export(action: ExportAction, image: Boolean) {
+        val view = source ?: return
+        val messages = selectedMessages.toList()
+        if (messages.isEmpty()) return
+        val selectedOptions = options
+        val title = conversationTitle
+        val attachmentPreview = attachmentPreviews::get
+        val extension = if (image) "png" else "md"
+        val fileName = "chat-export-${LocalDateTime.now().format(EXPORT_TIME_FORMAT)}.$extension"
+        scope.launch {
+            actions.execute(context, action, prepare = {
+                queries.requireViewAccess(view)
+                if (image) {
+                    val messageSources = messages.associate { message ->
+                        message.id to queries.messageResourceSource(view, view.conversationId, message.id)
+                    }
+                    val rendering = messageSources.mapValues { (_, messageSource) ->
+                        val rendered = RenderedContentSource.Conversation(view, messageSource)
+                        MessageExportRendering(rendered) { url -> contentFiles.resolveContentImage(rendered, url) }
+                    }
+                    val contentSource = RenderedContentSource.Conversation(view)
+                    val bitmap = renderConversationBitmap(
+                        context = context,
+                        density = density,
+                        conversationTitle = title,
+                        messages = messages,
+                        settings = settings,
+                        attachmentPreview = attachmentPreview,
+                        imageResolver = { contentFiles.resolveContentImage(contentSource, it) },
+                        contentSource = contentSource,
+                        modelIconFallback = modelIconFallback,
+                        options = selectedOptions,
+                        messageRendering = rendering,
+                    )
+                    try {
+                        mediaExports.prepareConversationImage(context, view, messageSources.values.toList(), bitmap, fileName)
+                    } finally {
+                        bitmap.recycle()
+                    }
+                } else {
+                    val text = withContext(Dispatchers.Default) {
+                        renderMarkdownExport(title, messages, attachmentPreview, selectedOptions)
+                    }
+                    mediaExports.prepareConversationMarkdown(view, text, fileName)
+                }
+            }, launchDocument = { launchDocument(image, it) })
+        }
+    }
+
+    val canExport = source != null && selectedMessages.isNotEmpty() && !actions.busy
+    AdaptiveModal(
+        onDismissRequest = { if (!actions.busy) onDismissRequest() },
+        sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(stringResource(R.string.chat_page_export_format), style = MaterialTheme.typography.titleMedium)
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.chat_page_export_include_reasoning)) },
+                trailingContent = {
+                    Switch(options.includeReasoning, { options = options.copy(includeReasoning = it) }, enabled = !actions.busy)
+                },
+            )
+            ExportFormatCard(
+                title = stringResource(R.string.chat_page_export_markdown),
+                description = stringResource(R.string.chat_page_export_markdown_desc),
+                enabled = canExport,
+                onSave = { export(ExportAction.SAVE, image = false) },
+                onShare = { export(ExportAction.SHARE, image = false) },
+            )
+            ExportFormatCard(
+                title = stringResource(R.string.chat_page_export_image),
+                description = stringResource(R.string.chat_page_export_image_desc),
+                enabled = canExport,
+                onSave = { export(ExportAction.SAVE, image = true) },
+                onShare = { export(ExportAction.SHARE, image = true) },
+                onGallery = { export(ExportAction.GALLERY, image = true) },
+                options = {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.chat_page_export_image_expand_reasoning)) },
+                        trailingContent = {
+                            Switch(options.expandReasoning, { options = options.copy(expandReasoning = it) },
+                                enabled = options.includeReasoning && !actions.busy)
+                        },
+                    )
+                },
+            )
         }
     }
 }
 
-private suspend fun exportToMarkdown(
-    context: Context,
-    conversationTitle: String,
-    messages: List<UIMessage>,
-    attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
-    mediaExportService: MediaExportService,
-    verifyAccess: suspend () -> Unit,
-    options: ChatExportOptions,
-) {
-    val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.md"
+private val EXPORT_TIME_FORMAT = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
 
-    val text = renderMarkdownExport(conversationTitle, messages, attachmentPreview, options)
-    mediaExportService.shareText(context, text, filename, verifyAccess)
+@Composable
+private fun ExportFormatCard(
+    title: String,
+    description: String,
+    enabled: Boolean,
+    onSave: () -> Unit,
+    onShare: () -> Unit,
+    onGallery: (() -> Unit)? = null,
+    options: @Composable () -> Unit = {},
+) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        ListItem(headlineContent = { Text(title) }, supportingContent = { Text(description) })
+        options()
+        FlowRow(Modifier.padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            TextButton(onClick = onSave, enabled = enabled) { Text(stringResource(R.string.export_to_file)) }
+            TextButton(onClick = onShare, enabled = enabled) { Text(stringResource(R.string.export_share)) }
+            if (onGallery != null) TextButton(onClick = onGallery, enabled = enabled) {
+                Text(stringResource(R.string.chat_page_export_save_gallery))
+            }
+        }
+    }
 }
 
 internal fun renderMarkdownExport(
@@ -462,27 +426,23 @@ internal data class MessageExportRendering(
     val imageResolver: suspend (String) -> net.weero.measix.pilot.service.ImageSource?,
 )
 
-internal suspend fun exportToImage(
+internal suspend fun renderConversationBitmap(
     context: Context,
     density: Density,
     conversationTitle: String,
     messages: List<UIMessage>,
     settings: Settings,
-    mediaExportService: MediaExportService,
     attachmentPreview: (String) -> net.weero.measix.pilot.service.AttachmentPreview?,
     imageResolver: (suspend (String) -> net.weero.measix.pilot.service.ImageSource?)?,
     contentSource: net.weero.measix.pilot.service.RenderedContentSource?,
-    verifyAccess: suspend () -> Unit,
     modelIconFallback: ModelIconFallback = ModelIconFallback.INITIALS,
     options: ChatExportOptions = ChatExportOptions(),
     messageRendering: Map<kotlin.uuid.Uuid, MessageExportRendering> = emptyMap(),
-) {
-    val filename = "chat-export-${LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"))}.png"
+): Bitmap {
     val composer = BitmapComposer()
     val activity = requireNotNull(context.getActivity()) { "Unable to access the current activity" }
 
-    verifyAccess()
-    val bitmap = composer.composableToBitmap(
+    return composer.composableToBitmap(
         activity = activity,
         width = 540.dp,
         screenDensity = density,
@@ -504,12 +464,6 @@ internal suspend fun exportToImage(
             }
         }
     )
-
-    try {
-        mediaExportService.saveAndShareBitmap(context, bitmap, filename, verifyAccess)
-    } finally {
-        bitmap.recycle()
-    }
 }
 
 data class ChatExportOptions(val includeReasoning: Boolean = true, val expandReasoning: Boolean = false)

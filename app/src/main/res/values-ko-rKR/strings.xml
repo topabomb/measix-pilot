@@ -2163,4 +2163,16 @@
   <string name="webdav_credentials_help">익명 접속은 비워 둘 수 있습니다. 인증이 필요하면 서비스에서 제공한 WebDAV 사용자 이름과 비밀번호를 입력하세요.</string>
   <string name="enterprise_assistant_required">기업에서 사용 가능한 채팅 모델이 연결된 활성 어시스턴트를 하나 이상 게시해야 합니다. 관리자에게 설정 게시를 요청한 후 다시 동기화하세요.</string>
   <string name="permission_local_network_denied">로컬 네트워크 접근이 제한될 수 있습니다. 앱 설정에서 허용하세요.</string>
+  <string name="provider_balance_method">요청 메서드</string>
+  <string name="provider_balance_json_body">JSON 요청 본문</string>
+  <string name="provider_balance_template_hint">JSON 문자열 값에 {{apiKey}} 또는 {{baseUrl}}을 사용할 수 있습니다.</string>
+  <string name="chat_overview_matches">일치 항목 %1$d개</string>
+  <string name="chat_overview_reading_position">현재 읽는 위치</string>
+  <string name="chat_overview_message_without_text">텍스트가 없는 메시지</string>
+  <string name="permission_local_network_allow">로컬 네트워크 액세스 허용</string>
+  <string name="history_summary_retention_invalid">0부터 2,147,483,647까지의 정수를 입력하세요.</string>
+  <string name="history_page_select">선택</string>
+  <string name="history_page_selected_count">%1$d개 선택됨</string>
+  <string name="history_page_delete_selected_confirmation">선택한 대화 %1$d개를 삭제할까요? 이 작업은 되돌릴 수 없습니다.</string>
+  <string name="chat_page_export_save_gallery">갤러리에 저장</string>
 </resources>

@@ -11,6 +11,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.ImageGenSize
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.util.RequestImageEncoder
 
 // 提供商实现
 // 采用无状态设计，使用时除了需要传入需要的参数外，还需要传入provider setting作为参数
@@ -127,6 +128,8 @@ data class TextGenerationParams(
     val openCodeSessionId: String? = null,
     @kotlinx.serialization.Transient
     val credentials: RequestCredentials = RequestCredentials.UserSettings,
+    @kotlinx.serialization.Transient
+    val imageEncoder: RequestImageEncoder = RequestImageEncoder.Uncached,
 )
 
 @Serializable

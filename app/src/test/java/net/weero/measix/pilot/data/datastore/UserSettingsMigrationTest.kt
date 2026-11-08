@@ -27,6 +27,32 @@ import org.junit.Test
 
 class UserSettingsMigrationTest {
     @Test
+    fun `favorite repair is stable per scope for document legacy keys and current backups`() = runTest {
+        val a = ConfigurationReference.random()
+        val b = ConfigurationReference.random()
+        val personal = Settings(favoriteModels = listOf(a, b, a))
+        val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_favorites"), "user")
+        val document = UserSettingsDocument.empty().withPersonalSettings(personal).let {
+            it.copy(preferences = it.preferences.copy(scopes = it.preferences.scopes +
+                ScopedUserPreferences(enterprise, ResourceSelections(favoriteModels = listOf(b, b, a)))))
+        }
+        val migration = UserSettingsMigration()
+        val before = mutablePreferencesOf(SettingsStore.USER_SETTINGS to JsonInstant.encodeToString(document))
+        assertTrue(migration.shouldMigrate(before))
+        val after = migration.migrate(before)
+        assertFalse(migration.shouldMigrate(after))
+        val repaired = JsonInstant.decodeFromString<UserSettingsDocument>(after[SettingsStore.USER_SETTINGS]!!)
+        assertEquals(listOf(a, b), repaired.preferences.forScope(ConfigurationScope.Personal).favoriteModels)
+        assertEquals(listOf(b, a), repaired.preferences.forScope(enterprise).favoriteModels)
+        assertEquals(JsonInstant.encodeToString(document.configuration), JsonInstant.encodeToString(repaired.configuration))
+        val old = mutablePreferencesOf(SettingsStore.FAVORITE_MODELS to JsonInstant.encodeToString(personal.favoriteModels))
+        val adopted = JsonInstant.decodeFromString<UserSettingsDocument>(migration.migrate(old)[SettingsStore.USER_SETTINGS]!!)
+        assertEquals(listOf(a, b), adopted.personalSettings().favoriteModels)
+        val restored = JsonInstant.decodeFromString<Settings>(migrateLegacySettingsJson(JsonInstant.encodeToString(personal)))
+        assertEquals(listOf(a, b), restored.favoriteModels)
+    }
+
+    @Test
     fun `summary default migration preserves custom templates and enterprise preferences`() = runTest {
         val migration = UserSettingsMigration()
         val legacy = net.weero.measix.pilot.data.ai.prompts.LEGACY_COMPRESS_PROMPT

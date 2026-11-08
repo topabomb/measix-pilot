@@ -2163,4 +2163,16 @@
   <string name="webdav_credentials_help">匿名访问可留空；需要认证时，填写服务商提供的 WebDAV 用户名和密码。</string>
   <string name="enterprise_assistant_required">企业需发布至少一个已启用的助手及其可用聊天模型。请联系管理员发布配置后，重新同步。</string>
   <string name="permission_local_network_denied">访问局域网资源可能受限，可在应用权限设置中开启。</string>
+  <string name="provider_balance_method">请求方法</string>
+  <string name="provider_balance_json_body">JSON 请求体</string>
+  <string name="provider_balance_template_hint">可在 JSON 字符串值中使用 {{apiKey}} 或 {{baseUrl}}。</string>
+  <string name="chat_overview_matches">%1$d 条匹配</string>
+  <string name="chat_overview_reading_position">当前阅读位置</string>
+  <string name="chat_overview_message_without_text">无文本消息</string>
+  <string name="permission_local_network_allow">允许访问局域网</string>
+  <string name="history_summary_retention_invalid">请输入 0 至 2,147,483,647 之间的整数。</string>
+  <string name="history_page_select">选择</string>
+  <string name="history_page_selected_count">已选 %1$d 项</string>
+  <string name="history_page_delete_selected_confirmation">删除选中的 %1$d 个会话？此操作无法撤销。</string>
+  <string name="chat_page_export_save_gallery">保存到相册</string>
 </resources>

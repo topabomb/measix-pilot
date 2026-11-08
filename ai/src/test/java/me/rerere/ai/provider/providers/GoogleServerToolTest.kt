@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import me.rerere.ai.core.*
 import me.rerere.ai.provider.*
@@ -18,9 +19,9 @@ class GoogleServerToolTest {
                     put("functionCallingConfig", buildJsonObject { put("mode", mode) })
                 })))
             if (mode == "AUTO") assertThrows(IllegalArgumentException::class.java) {
-                provider.buildCompletionRequestBody(listOf(ModelRequestMessage.user("go")), params, profile)
+                runBlocking { provider.buildCompletionRequestBody(listOf(ModelRequestMessage.user("go")), params, profile) }
             } else {
-                val body = provider.buildCompletionRequestBody(listOf(ModelRequestMessage.user("go")), params, profile)
+                val body = runBlocking { provider.buildCompletionRequestBody(listOf(ModelRequestMessage.user("go")), params, profile) }
                 assertEquals(mode, body["toolConfig"]!!.jsonObject["functionCallingConfig"]!!.jsonObject["mode"]!!.jsonPrimitive.content)
             }
         }
@@ -48,7 +49,7 @@ class GoogleServerToolTest {
         ))
         val restored = me.rerere.ai.util.json.decodeFromString<UIMessage>(me.rerere.ai.util.json.encodeToString(original))
         val request = ModelRequestMessage(MessageRole.ASSISTANT, restored.parts, samplingPartCounts = listOf(5, 1))
-        val contents = provider.buildContents(listOf(request), RequestMediaCapabilities.NONE, "gemini-test", profile)
+        val contents = runBlocking { provider.buildContents(listOf(request), RequestMediaCapabilities.NONE, "gemini-test", profile) }
         assertEquals(listOf("model", "user", "model"), contents.map { it.jsonObject["role"]!!.jsonPrimitive.content })
         val parts = contents[0].jsonObject["parts"]!!.jsonArray
         assertEquals(raw("toolCall"), parts[0])
@@ -57,7 +58,7 @@ class GoogleServerToolTest {
         assertEquals(raw("toolCall"), parts[3])
         assertEquals(raw("toolResponse"), parts[4])
         assertEquals(1, contents[1].jsonObject["parts"]!!.jsonArray.size)
-        val switched = provider.buildContents(listOf(request), RequestMediaCapabilities.NONE, "other-model", profile).toString()
+        val switched = runBlocking { provider.buildContents(listOf(request), RequestMediaCapabilities.NONE, "other-model", profile) }.toString()
         assertFalse(switched.contains("toolCall"))
         assertFalse(switched.contains("signature-tool"))
     }

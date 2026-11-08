@@ -2,6 +2,7 @@ package me.rerere.ai.provider.providers.openai
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -12,6 +13,7 @@ import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.util.KeyRoulette
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -28,6 +30,31 @@ class ChatCompletionsAPIParserTest {
     @Before
     fun setUp() {
         api = ChatCompletionsAPI(OkHttpClient(), KeyRoulette.default())
+    }
+
+    @Test
+    fun `response role tolerates empty and unknown strings while malformed types fail`() {
+        val roles = listOf(null, JsonNull, JsonPrimitive("  "), JsonPrimitive("gateway-assistant"), JsonPrimitive("Assistant"))
+        for (role in roles) {
+            val envelope = buildJsonObject {
+                put("content", "hello")
+                role?.let { put("role", it) }
+            }
+            val payload = Json.parseToJsonElement(
+                """{"choices":[{"delta":$envelope,"finish_reason":"stop"}]}""",
+            ).jsonObject
+            val choice = api.parseStreamPayload(payload).choices.single()
+            assertEquals(me.rerere.ai.core.MessageRole.ASSISTANT, choice.delta?.role)
+            assertEquals("stop", choice.finishReason)
+            val message = api.parseMessage(envelope)
+            assertEquals(me.rerere.ai.core.MessageRole.ASSISTANT, message.role)
+            assertEquals("hello", (message.parts.single() as UIMessagePart.Text).text)
+        }
+        for (bad in listOf("7", "false", "{}", "[]")) {
+            val message = Json.parseToJsonElement("""{"role":$bad}""").jsonObject
+            val error = assertThrows(IllegalStateException::class.java) { api.parseMessage(message) }
+            assertTrue(error.message.orEmpty().contains("chat_completions_invalid_role_type"))
+        }
     }
 
     @Test

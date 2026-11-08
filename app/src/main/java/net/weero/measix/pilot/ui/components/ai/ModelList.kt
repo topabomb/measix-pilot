@@ -455,15 +455,17 @@ private fun ColumnScope.ModelList(
     var searchKeywords by remember { mutableStateOf("") }
 
     val searchFilteredModelsByProvider = remember(providers, modelType, searchKeywords) {
+        val terms = modelSearchTerms(searchKeywords)
         providers.associate { provider ->
             provider.id to provider.models.fastFilter {
-                it.model.displayName.contains(searchKeywords, true)
+                it.model.matchesSearchTerms(terms)
             }
         }
     }
     val displayedFavorites = remember(favoriteModels, searchKeywords) {
+        val terms = modelSearchTerms(searchKeywords)
         favoriteModels.filter { favorite ->
-            searchKeywords.isBlank() || favorite.choice?.model?.displayName?.contains(searchKeywords, true) == true
+            favorite.choice?.model?.matchesSearchTerms(terms) == true
         }
     }
     val displayedProviders = remember(providers, searchFilteredModelsByProvider) {

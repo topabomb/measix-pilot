@@ -9,6 +9,7 @@ import android.util.Base64
 import android.util.Base64OutputStream
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -50,48 +51,69 @@ internal fun mapExifOrientationToTransform(orientation: Int): ExifTransformType 
     else -> ExifTransformType.NONE
 }
 
-fun UIMessagePart.Image.encodeNativeImage(withPrefix: Boolean = true): EncodedImage =
-    encodeBase64(withPrefix).getOrElse { cause ->
-        throw IllegalStateException("native image encoding failed for $url", cause)
-    }
+/** Request-local authority to encode the selected wire image part. */
+fun interface RequestImageEncoder {
+    suspend fun encode(part: UIMessagePart.Image, withPrefix: Boolean): EncodedImage
 
-fun UIMessagePart.Image.encodeBase64(withPrefix: Boolean = true): Result<EncodedImage> = runCatching {
-    when {
-        this.url.startsWith("file://", ignoreCase = true) -> {
-            val filePath =
-                this.url.toUri().path ?: throw IllegalArgumentException("Invalid file URI: ${this.url}")
-            val file = File(filePath)
-            if (!file.exists()) {
-                throw IllegalArgumentException("File does not exist: ${this.url}")
-            }
-            val mimeType = file.guessMimeType().getOrThrow()
-            val (encoded, outputMimeType) = if (metadataAs<ImageEncodingMetadata>()?.preserveOriginal == true &&
-                mimeType in setOf("image/jpeg", "image/png", "image/webp", "image/gif")) {
-                file.encodeToBase64Streaming() to mimeType
-            } else {
-                compressAndEncode(mimeType, openStream = file::inputStream)
-            }
-            EncodedImage(
-                base64 = if (withPrefix) "data:$outputMimeType;base64,$encoded" else encoded,
-                mimeType = outputMimeType
-            )
-        }
-
-        this.url.startsWith("data:") -> {
-            val mimeType = url.substringAfter("data:").substringBefore(";")
-            val payload = url.substringAfter(',')
-            EncodedImage(
-                base64 = if (withPrefix) url else payload,
-                mimeType = mimeType.ifBlank { "image/png" },
-            )
-        }
-        this.url.startsWith("http") -> {
-            // HTTP URL 无法确定 mime type，默认使用 image/png
-            EncodedImage(base64 = url, mimeType = "image/png")
-        }
-        else -> throw IllegalArgumentException("Unsupported URL format: $url")
+    companion object {
+        val Uncached = RequestImageEncoder { part, withPrefix -> part.encodeNativeImage(withPrefix) }
     }
 }
+
+suspend fun UIMessagePart.Image.encodeNativeImage(withPrefix: Boolean = true): EncodedImage = try {
+    currentCoroutineContext().ensureActive()
+    when {
+        url.startsWith("file://", ignoreCase = true) -> withContext(Dispatchers.IO) {
+            val file = File(requireNotNull(url.toUri().path) { "Invalid image file URI: $url" })
+            val policy = file.nativeImagePolicy(this@encodeNativeImage)
+            if (policy.keepOriginal) file.encodeOriginalNativeImage(policy, withPrefix)
+            else encodeStaticNativeImage(file).asWebpImage(withPrefix)
+        }
+
+        url.startsWith("data:") -> {
+            val mimeType = url.substringAfter("data:").substringBefore(";").ifBlank { "image/png" }
+            EncodedImage(if (withPrefix) url else url.substringAfter(','), mimeType)
+        }
+
+        url.startsWith("http") -> EncodedImage(url, "image/png")
+        else -> throw IllegalArgumentException("Unsupported URL format: $url")
+    }
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (error: Exception) {
+    throw IllegalStateException("native image encoding failed for $url", error)
+}
+
+data class NativeImagePolicy(val sourceMimeType: String, val keepOriginal: Boolean)
+
+fun File.nativeImagePolicy(part: UIMessagePart.Image): NativeImagePolicy {
+    val mimeType = inputStream().use(::guessImageMimeType)
+    val preserveOriginal = part.metadataAs<ImageEncodingMetadata>()?.preserveOriginal == true
+    return NativeImagePolicy(
+        sourceMimeType = mimeType,
+        keepOriginal = mimeType == "image/gif" ||
+            (preserveOriginal && mimeType in setOf("image/jpeg", "image/png", "image/webp")),
+    )
+}
+
+suspend fun File.encodeOriginalNativeImage(policy: NativeImagePolicy, withPrefix: Boolean): EncodedImage {
+    require(policy.keepOriginal)
+    val context = currentCoroutineContext()
+    val encoded = encodeToBase64Streaming(::inputStream, context::ensureActive)
+    context.ensureActive()
+    return encoded.asEncodedImage(policy.sourceMimeType, withPrefix)
+}
+
+suspend fun encodeStaticNativeImage(file: File): ByteArray {
+    val context = currentCoroutineContext()
+    return encodeWebp(file::inputStream, context::ensureActive)
+}
+
+fun ByteArray.asWebpImage(withPrefix: Boolean): EncodedImage =
+    Base64.encodeToString(this, Base64.NO_WRAP).asEncodedImage("image/webp", withPrefix)
+
+private fun String.asEncodedImage(mimeType: String, withPrefix: Boolean): EncodedImage =
+    EncodedImage(if (withPrefix) "data:$mimeType;base64,$this" else this, mimeType)
 
 fun UIMessagePart.Video.encodeBase64(withPrefix: Boolean = true): Result<String> = runCatching {
     when {
@@ -129,45 +151,26 @@ fun UIMessagePart.Audio.encodeBase64(withPrefix: Boolean = true): Result<String>
 
 /** Encodes an owner-validated memory snapshot with the same policy as a native file image. */
 suspend fun encodeImageBytes(bytes: ByteArray, withPrefix: Boolean = true): EncodedImage = withContext(Dispatchers.IO) {
-    val coroutineContext = currentCoroutineContext()
-    coroutineContext.ensureActive()
+    val context = currentCoroutineContext()
+    context.ensureActive()
     val mimeType = bytes.inputStream().use(::guessImageMimeType)
-    val (encoded, outputMimeType) = compressAndEncode(
-        mimeType = mimeType,
-        openStream = bytes::inputStream,
-        checkActive = coroutineContext::ensureActive,
-    )
-    coroutineContext.ensureActive()
-    EncodedImage(
-        base64 = if (withPrefix) "data:$outputMimeType;base64,$encoded" else encoded,
-        mimeType = outputMimeType,
-    )
+    if (mimeType == "image/gif") {
+        encodeToBase64Streaming(bytes::inputStream, context::ensureActive).asEncodedImage(mimeType, withPrefix)
+    } else {
+        encodeWebp(bytes::inputStream, context::ensureActive).asWebpImage(withPrefix)
+    }
 }
 
-private fun compressAndEncode(
-    mimeType: String,
-    openStream: () -> InputStream,
-    checkActive: () -> Unit = {},
-    maxDimension: Int = 2560,
-    maxPixels: Long = 16_000_000L,
-    quality: Int = 90
-): Pair<String, String> {
-    // GIF 保持原样（可能是动图）
-    if (mimeType == "image/gif") {
-        return Pair(encodeToBase64Streaming(openStream, checkActive), mimeType)
-    }
-
-    return withPreparedStaticPixels(openStream, checkActive, maxDimension, maxPixels) { bitmap ->
-        val byteArrayOutputStream = ByteArrayOutputStream()
-        Base64OutputStream(byteArrayOutputStream, Base64.NO_WRAP).use { base64Stream ->
+private fun encodeWebp(openStream: () -> InputStream, checkActive: () -> Unit): ByteArray =
+    withPreparedStaticPixels(openStream, checkActive) { bitmap ->
+        ByteArrayOutputStream().use { output ->
             val format = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Bitmap.CompressFormat.WEBP_LOSSY
                 else @Suppress("DEPRECATION") Bitmap.CompressFormat.WEBP
-            check(bitmap.compress(format, quality, base64Stream)) { "Failed to compress image" }
+            check(bitmap.compress(format, 90, output)) { "Failed to compress image" }
+            checkActive()
+            output.toByteArray()
         }
-        checkActive()
-        Pair(byteArrayOutputStream.toString(Charsets.ISO_8859_1.name()), "image/webp")
     }
-}
 
 /** Borrows normalized pixels for static-image composition; the bitmap is recycled when the callback returns. */
 suspend fun <T> withPreparedStaticImage(bytes: ByteArray, operation: (Bitmap) -> T): T = withContext(Dispatchers.IO) {
@@ -306,10 +309,6 @@ internal fun imageTargetSize(width: Int, height: Int, maxDimension: Int = 2560):
     if (longest <= maxDimension) return width to height
     return maxOf(1, (width.toLong() * maxDimension / longest).toInt()) to
         maxOf(1, (height.toLong() * maxDimension / longest).toInt())
-}
-
-private fun File.guessMimeType(): Result<String> = runCatching {
-    inputStream().use(::guessImageMimeType)
 }
 
 fun detectImageMimeTypeBySignature(bytes: ByteArray): String? = runCatching {

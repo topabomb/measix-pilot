@@ -73,7 +73,7 @@ import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeader
-import me.rerere.ai.util.encodeNativeImage
+import me.rerere.ai.util.RequestImageEncoder
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
@@ -367,7 +367,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
-    private fun buildMessageRequest(
+    internal suspend fun buildMessageRequest(
         providerSetting: ProviderSetting.Claude,
         messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
@@ -398,6 +398,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     providerSetting.promptCaching,
                     providerSetting.promptCacheTtl,
                     params.mediaCapabilities,
+                    params.imageEncoder,
                 )
             )
             put("max_tokens", maxTokens)
@@ -470,19 +471,20 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         promptCacheTtl.apiValue?.let { put("ttl", it) }
     }
 
-    private fun buildMessages(
+    internal suspend fun buildMessages(
         messages: List<ModelRequestMessage>,
         promptCaching: Boolean,
         promptCacheTtl: ClaudePromptCacheTtl,
         mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder = RequestImageEncoder.Uncached,
     ) = buildJsonArray {
         messages
             .filter { it.isValidToUpload() && it.role != MessageRole.SYSTEM }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {
-                    addAssistantMessage(message, mediaCapabilities)
+                    addAssistantMessage(message, mediaCapabilities, imageEncoder)
                 } else {
-                    addUserMessage(message, mediaCapabilities)
+                    addUserMessage(message, mediaCapabilities, imageEncoder)
                 }
             }
     }.let { messagesArray ->
@@ -531,9 +533,10 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         })
     }
 
-    private fun JsonArrayBuilder.addAssistantMessage(
+    private suspend fun JsonArrayBuilder.addAssistantMessage(
         message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder,
     ) {
         val segments = mutableListOf<MutableList<UIMessagePart>>()
         message.parts.forEach { part ->
@@ -547,19 +550,23 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 val tools = parts.filterIsInstance<UIMessagePart.Tool>().filter { it.hasReplayResult }
                 val content = parts.mapNotNull { part ->
                     if (part is UIMessagePart.Tool) part.takeIf { it.hasReplayResult }?.toToolUseBlock()
-                    else part.toContentBlock(mediaCapabilities.assistantImages)
+                    else part.toContentBlock(mediaCapabilities.assistantImages, imageEncoder)
                 }
                 if (content.isNotEmpty()) add(buildJsonObject {
                     put("role", "assistant"); put("content", JsonArray(content))
                 })
                 if (tools.isNotEmpty()) add(buildJsonObject {
-                    put("role", "user"); put("content", JsonArray(tools.map { it.toToolResultBlock(mediaCapabilities) }))
+                    put("role", "user"); put("content", JsonArray(tools.map { it.toToolResultBlock(mediaCapabilities, imageEncoder) }))
                 })
-            } else addLegacyAssistantParts(parts, mediaCapabilities)
+            } else addLegacyAssistantParts(parts, mediaCapabilities, imageEncoder)
         }
     }
 
-    private fun JsonArrayBuilder.addLegacyAssistantParts(parts: List<UIMessagePart>, mediaCapabilities: RequestMediaCapabilities) {
+    private suspend fun JsonArrayBuilder.addLegacyAssistantParts(
+        parts: List<UIMessagePart>,
+        mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder,
+    ) {
         val groups = groupPartsByToolBoundary(parts)
         val contentBuffer = mutableListOf<JsonObject>()
 
@@ -567,7 +574,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             when (group) {
                 is PartGroup.Content -> {
                     group.parts.mapNotNull {
-                        it.toContentBlock(mediaCapabilities.assistantImages)
+                        it.toContentBlock(mediaCapabilities.assistantImages, imageEncoder)
                     }.forEach { contentBuffer.add(it) }
                 }
 
@@ -586,7 +593,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     add(buildJsonObject {
                         put("role", "user")
                         putJsonArray("content") {
-                            group.tools.forEach { add(it.toToolResultBlock(mediaCapabilities)) }
+                            group.tools.forEach { add(it.toToolResultBlock(mediaCapabilities, imageEncoder)) }
                         }
                     })
                 }
@@ -602,21 +609,22 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun JsonArrayBuilder.addUserMessage(
+    private suspend fun JsonArrayBuilder.addUserMessage(
         message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder,
     ) {
         add(buildJsonObject {
             put("role", message.role.name.lowercase())
             putJsonArray("content") {
                 message.parts.mapNotNull {
-                    it.toContentBlock(mediaCapabilities.userImages)
+                    it.toContentBlock(mediaCapabilities.userImages, imageEncoder)
                 }.forEach { add(it) }
             }
         })
     }
 
-    private fun UIMessagePart.toContentBlock(imageSupport: RequestImageSupport): JsonObject? = when (this) {
+    private suspend fun UIMessagePart.toContentBlock(imageSupport: RequestImageSupport, imageEncoder: RequestImageEncoder): JsonObject? = when (this) {
         is UIMessagePart.Text -> buildJsonObject {
             put("type", "text")
             put("text", text)
@@ -629,7 +637,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             check(imageSupport == RequestImageSupport.STRUCTURED) {
                 "Claude received a native image after request projection"
             }
-            val encoded = encodeNativeImage(withPrefix = false)
+            val encoded = imageEncoder.encode(this, withPrefix = false)
             buildJsonObject {
                 put("type", "image")
                 put("source", buildJsonObject {
@@ -666,13 +674,14 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         put("input", inputAsJson())
     }
 
-    private fun UIMessagePart.Tool.toToolResultBlock(
+    private suspend fun UIMessagePart.Tool.toToolResultBlock(
         mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder,
     ) = buildJsonObject {
         put("type", "tool_result")
         put("tool_use_id", providerCallId)
         putJsonArray("content") {
-            output.mapNotNull { it.toContentBlock(mediaCapabilities.toolOutputImages) }.forEach { add(it) }
+            output.mapNotNull { it.toContentBlock(mediaCapabilities.toolOutputImages, imageEncoder) }.forEach { add(it) }
         }
     }
 

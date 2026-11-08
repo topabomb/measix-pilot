@@ -105,7 +105,8 @@ POST 与通知/恢复 GET 都解析有效 `428 managed_snapshot_required`，先�
 
 `McpProtocolClientFactory` 在首次真实 transport 创建时同步且唯一地初始化共享 Ktor client，调用位于现有 server 的 IO 连接任务；
 不在 Application/DI 构造阶段初始化 Ktor，也不为测试 override 初始化真实 transport。初始化返回后复查取消，超时/取消的连接
-不取得新 transport；已创建的共享 HTTP client 继续由工厂持有，单个 server 关闭或重连不能关闭它。
+不取得新 transport。已创建的共享 HTTP client 继续由工厂持有，单个 server 关闭或重连不能关闭它。
+app 使用 Ktor BOM 对齐直接及传递模块，MCP 与 WebDAV 保留各自的连接和关闭协议。
 
 RPC Client 使用固定 fork `com.github.rikkahub.mcp-kotlin-sdk:0.15.0-rikka.4`，源码钉在
 [`7303e3cbb7c19aeaa46712839b5e5bd9d6cbacd5`](https://github.com/rikkahub/mcp-kotlin-sdk/tree/7303e3cbb7c19aeaa46712839b5e5bd9d6cbacd5)。

@@ -3,6 +3,7 @@ package net.weero.measix.pilot.service.turn
 import net.weero.measix.pilot.utils.logDiagnosticFailure
 import me.rerere.ai.ui.UIMessagePart
 
+import net.weero.measix.pilot.data.ai.attachments.ModelRequestImageEncoder
 import android.content.Context
 import android.util.Log
 import kotlin.coroutines.coroutineContext
@@ -79,12 +80,13 @@ class TurnRunner(
     private val toolOutputStore: ToolOutputStore,
     private val artifactStore: net.weero.measix.pilot.data.files.ArtifactStore,
     private val nanoTime: () -> Long = System::nanoTime,
+    imageEncoder: ModelRequestImageEncoder = ModelRequestImageEncoder(),
 ) {
     private val toolCallRuntime = ToolCallRuntime(json)
     private val contextPlanner = RequestContextPlanner()
     private val requestAssembler = RequestAssembler()
     private val compactionPlanner = ToolOutputCompactionPlanner()
-    private val stepRunner = StepRunner(context, providerManager, contextPlanner, requestAssembler, compactionPlanner, toolOutputStore, toolCallRuntime, artifactStore)
+    private val stepRunner = StepRunner(context, providerManager, contextPlanner, requestAssembler, compactionPlanner, toolOutputStore, toolCallRuntime, artifactStore, imageEncoder)
     private val toolBatchRunner = ToolBatchRunner(toolCallRuntime, attachmentResolver, nanoTime)
 
     internal suspend fun run(inputs: TurnRunInputs): TurnRunResult = withContext(Dispatchers.IO) {

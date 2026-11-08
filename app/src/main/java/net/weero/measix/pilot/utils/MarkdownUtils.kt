@@ -4,7 +4,6 @@ import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
-import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.html.GeneratingProvider
 import org.intellij.markdown.html.HtmlGenerator
 import org.intellij.markdown.parser.LinkMap
@@ -30,7 +29,7 @@ internal object InlineHtmlTagProvider : GeneratingProvider {
 /** Parse once for speech. The resulting plain text must never be parsed or entity-decoded again. */
 fun String.stripMarkdown(): String {
     val source = prepareMarkdownSource(this).text
-    val flavour = GFMFlavourDescriptor(makeHttpsAutoLinks = true, useSafeLinks = true)
+    val flavour = PilotMarkdownFlavour(makeHttpsAutoLinks = true, useSafeLinks = true)
     val tree = MarkdownParser(flavour).buildMarkdownTreeFromString(source)
     val silent = object : GeneratingProvider {
         override fun processNode(visitor: HtmlGenerator.HtmlGeneratingVisitor, text: String, node: org.intellij.markdown.ast.ASTNode) = Unit

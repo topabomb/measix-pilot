@@ -208,36 +208,17 @@ class ReleaseRenderingConsumers {
     private fun deleteOwnedChat(marker: String) {
         await(By.text(marker))
         check(device.findObjects(By.text(marker)).size == 1) { "Current user marker is ambiguous" }
-        val navigation = await(By.desc("Open conversation navigation")).visibleBounds
-        val options = await(By.desc("Chat Options")).visibleBounds
-        val top = maxOf(navigation.top, options.top)
-        val bottom = minOf(navigation.bottom, options.bottom)
-        check(top < bottom && navigation.right < options.left) { "Chat header controls do not share a row" }
-        val titles = device.findObjects(By.clazz("android.widget.TextView")).filter {
-            val bounds = it.visibleBounds
-            bounds.left >= navigation.right && bounds.right <= options.left &&
-                bounds.centerY() in top..bottom
+        val overview = await(By.desc("Chat Options")).visibleBounds
+        val menus = device.findObjects(By.desc("More options")).filter { menu ->
+            val bounds = menu.visibleBounds
+            bounds.centerY() in overview.top..overview.bottom && bounds.centerX() > overview.centerX()
         }
-        check(titles.size == 1) { "Expected exactly one chat title, found ${titles.size}" }
-        var titleOwner = titles.single()
-        while (!titleOwner.isClickable) titleOwner = requireNotNull(titleOwner.parent)
-        titleOwner.click()
-        await(By.text("Edit title"))
-        await(By.clazz("android.widget.EditText")).text = marker
-        click(By.text("Save"))
-        assertTrue(device.wait(Until.gone(By.text("Edit title")), 20_000))
-        click(By.desc("Open conversation navigation"))
-        await(By.text(marker))
-        val rows = device.findObjects(By.text(marker)).mapNotNull { label ->
-            var owner: UiObject2? = label
-            while (owner != null && !owner.isLongClickable) owner = owner.parent
-            owner
-        }
-        check(rows.size == 1) { "Expected exactly one owned conversation row, found ${rows.size}" }
-        rows.single().longClick()
+        check(menus.size == 1) { "Expected exactly one conversation menu, found ${menus.size}" }
+        menus.single().click()
         click(By.text("Delete"))
-        // With no queued input the production command deletes immediately, without a second dialog.
-        assertTrue("Owned conversation title remains after deletion", device.wait(Until.gone(By.text(marker)), 20_000))
+        await(By.text("Confirm Delete"))
+        click(By.text("Delete"))
+        assertTrue("Owned conversation remains visible after deletion", device.wait(Until.gone(By.text(marker)), 20_000))
     }
 
     private fun openProviderDeleteAction() {

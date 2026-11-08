@@ -42,9 +42,19 @@ class UserSettingsMigrationAndroidTest {
         val oldPrompt = net.weero.measix.pilot.data.ai.prompts.LEGACY_COMPRESS_PROMPT
         val newPrompt = net.weero.measix.pilot.data.ai.prompts.DEFAULT_COMPRESS_PROMPT
         val enterprise = ConfigurationScope.Enterprise(EnterpriseAuthority("dep_summary"), "usr_one")
-        val original = UserSettingsDocument.empty().withPersonalSettings(Settings(compressPrompt = oldPrompt)).let {
-            it.copy(preferences = it.preferences.copy(scopes = it.preferences.scopes + ScopedUserPreferences(enterprise)))
+        val firstFavorite = ConfigurationReference.random()
+        val secondFavorite = ConfigurationReference.random()
+        val original = UserSettingsDocument.empty().withPersonalSettings(
+            Settings(compressPrompt = oldPrompt, favoriteModels = listOf(firstFavorite, secondFavorite, firstFavorite)),
+        ).let {
+            it.copy(preferences = it.preferences.copy(scopes = it.preferences.scopes +
+                ScopedUserPreferences(enterprise, ResourceSelections(favoriteModels = listOf(secondFavorite, secondFavorite)))))
         }
+        val expected = original.preferences
+            .withSelections(ConfigurationScope.Personal, original.preferences.forScope(ConfigurationScope.Personal)
+                .copy(favoriteModels = listOf(firstFavorite, secondFavorite)))
+            .withSelections(enterprise, original.preferences.forScope(enterprise)
+                .copy(favoriteModels = listOf(secondFavorite)))
         val reject = object : DataMigration<Preferences> {
             override suspend fun shouldMigrate(currentData: Preferences) = true
             override suspend fun migrate(currentData: Preferences): Preferences = error("reject summary upgrade")
@@ -61,7 +71,7 @@ class UserSettingsMigrationAndroidTest {
             withStore(file, true) { store ->
                 val migrated = JsonInstant.decodeFromString<UserSettingsDocument>(store.data.first()[SettingsStore.USER_SETTINGS]!!)
                 assertEquals(newPrompt, migrated.configuration.compressPrompt)
-                assertEquals(original.preferences, migrated.preferences)
+                assertEquals(expected, migrated.preferences)
                 val custom = migrated.withPersonalSettings(migrated.personalSettings().copy(compressPrompt = "Custom {content}"))
                 store.edit { it[SettingsStore.USER_SETTINGS] = JsonInstant.encodeToString(custom) }
             }
@@ -69,7 +79,7 @@ class UserSettingsMigrationAndroidTest {
                 val reopened = JsonInstant.decodeFromString<UserSettingsDocument>(store.data.first()[SettingsStore.USER_SETTINGS]!!)
                 assertEquals("Custom {content}", reopened.configuration.compressPrompt)
                 assertEquals(original.preferences.common, reopened.preferences.common)
-                assertEquals(original.preferences.scopes.associateBy { it.scope }, reopened.preferences.scopes.associateBy { it.scope })
+                assertEquals(expected.scopes.associateBy { it.scope }, reopened.preferences.scopes.associateBy { it.scope })
             }
         } finally { file.delete() }
     }

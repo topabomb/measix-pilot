@@ -11,7 +11,12 @@ data class BalanceOption(
     val enabled: Boolean = false, // 是否开启余额获取功能
     val apiPath: String = "/credits", // 余额获取API路径
     val resultPath: String = "data.total_usage", // 余额获取JSON路径
+    val method: BalanceMethod = BalanceMethod.GET,
+    val body: String = "",
 )
+
+@Serializable
+enum class BalanceMethod { GET, POST }
 
 @Serializable
 enum class ClaudePromptCacheTtl(val apiValue: String?) {

@@ -12,10 +12,13 @@ import androidx.compose.ui.unit.dp
 import dev.chrisbanes.haze.HazeInput
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.blur.HazeBlurStyle
+import dev.chrisbanes.haze.blur.HazeBlurStyleScope
 import dev.chrisbanes.haze.blur.hazeBlur
 import dev.chrisbanes.haze.blur.material3.Material3
 import net.weero.measix.pilot.ui.theme.ChatSurfacePolicy
 import net.weero.measix.pilot.ui.theme.withOverlayAlpha
+
+private val chatOverlayBlur: HazeBlurStyleScope.() -> Unit = { blurRadius(12.dp) }
 
 /** 输入卡片和悬浮播放工具条共用背景材质，不降低内容的不透明度。 */
 @Composable
@@ -29,9 +32,7 @@ fun ChatOverlaySurface(
     content: @Composable () -> Unit,
 ) {
     val tint = MaterialTheme.colorScheme.surfaceContainerLow
-    val blurStyle = HazeBlurStyle.Material3(containerColor = tint) {
-        blurRadius(12.dp)
-    }
+    val blurStyle = HazeBlurStyle.Material3(containerColor = tint, block = chatOverlayBlur)
     val blurEnabled = enableBlurEffect && hazeState != null
     Surface(
         modifier = modifier.clip(shape).then(

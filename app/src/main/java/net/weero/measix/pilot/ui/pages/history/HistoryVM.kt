@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.flowOf
+import kotlin.uuid.Uuid
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
@@ -93,11 +94,39 @@ class HistoryVM internal constructor(
         val preview: net.weero.measix.pilot.service.ConversationDeletionPreview,
         val allowUndo: Boolean,
     )
+    internal data class Selection(val realm: RealmSelection, val ids: Set<Uuid> = emptySet())
+
+    private val _selection = MutableStateFlow<Selection?>(null)
+    internal val selection = _selection.asStateFlow()
+
+    internal fun beginSelection(conversation: ConversationSummary, select: Boolean = false) {
+        if (_running.value || _pendingDeletion.value != null) return
+        _selection.value = Selection(
+            conversation.commandTarget.selection,
+            if (select) setOf(conversation.id) else emptySet(),
+        )
+    }
+
+    internal fun toggleSelection(conversation: ConversationSummary) {
+        if (_running.value || _pendingDeletion.value != null) return
+        val current = _selection.value ?: return
+        if (current.realm != conversation.commandTarget.selection) return
+        val id = conversation.id
+        _selection.value = current.copy(ids = if (id in current.ids) current.ids - id else current.ids + id)
+    }
+
+    internal fun exitSelection() {
+        _selection.value = null
+    }
+
     private val _pendingDeletion = MutableStateFlow<PendingDeletion?>(null)
     internal val pendingDeletion = _pendingDeletion.asStateFlow()
     init {
         viewModelScope.launch {
             conversationQueryService.observeCurrentSelection().collect { selection ->
+                _selection.value?.takeIf { it.realm != selection }?.let {
+                    _selection.compareAndSet(it, null)
+                }
                 _undo.value?.takeIf { it.selection != selection }?.let(::discardRestoreToken)
                 _pendingDeletion.value?.takeIf { it.conversations.first().commandTarget.selection != selection }
                     ?.let { _pendingDeletion.compareAndSet(it, null) }
@@ -128,6 +157,10 @@ class HistoryVM internal constructor(
     }
 
     private suspend fun deleted(receipt: net.weero.measix.pilot.service.ConversationDeletionReceipt) {
+        _selection.value?.takeIf { it.realm == receipt.selection && receipt.conversationId in it.ids }?.let {
+            val remaining = it.ids - receipt.conversationId
+            _selection.value = if (remaining.isEmpty()) null else it.copy(ids = remaining)
+        }
         if (conversationQueryService.observeCurrentSelection().first() != receipt.selection) return
         receipt.maintenanceFailure?.let { _commandFailure.value = CommandFailure(receipt.selection, it.userVisibleDiagnostic()) }
         val continuation = try { conversationApplicationService.deletionContinuation(receipt) }

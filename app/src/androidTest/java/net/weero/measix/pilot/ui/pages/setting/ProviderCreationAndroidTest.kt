@@ -8,7 +8,10 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import net.weero.measix.pilot.ui.components.toast.rememberToasterState
+import me.rerere.ai.provider.BalanceMethod
+import me.rerere.ai.provider.BalanceOption
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.validateBalanceOption
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.ui.context.LocalSettings
@@ -21,6 +24,19 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ProviderCreationAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun openAiBalanceValidationSupportsAndroidPatternSyntax() {
+        val provider = ProviderSetting.OpenAI()
+        provider.validateBalanceOption()
+        provider.copy(
+            balanceOption = BalanceOption(
+                enabled = true,
+                method = BalanceMethod.POST,
+                resultPath = "remaining",
+                body = """{"key":"{{apiKey}}","endpoint":"{{baseUrl}}"}""",
+            ),
+        ).validateBalanceOption()
+    }
 
     @Test fun providerShareRemainsOpenWhenItsHostRecomposes() {
         val revision = mutableStateOf(0)

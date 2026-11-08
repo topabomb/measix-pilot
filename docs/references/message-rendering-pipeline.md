@@ -4,6 +4,10 @@
 页面导航与窗口承载见 [界面架构](ui-architecture.md)，历史输入语义见 [请求上下文](request-context.md)，
 文件登记、授权读取与生命周期见 [多模态与资源持久化](multimodal-context-and-turn-durability.md)。
 
+两条 Markdown 渲染路径使用 `PilotMarkdownFlavour`，原文范围、围栏状态和朗读清洗共享同一解析规则。
+删除线支持单、双波浪定界符，HTML 生成使用保留子节点的 `del`。
+合法行内颜色代码在原前导空格处绘制色块，选择和复制仍得到原空格与代码。
+
 ## 1. 数据流与消息分组
 
 ```text
@@ -25,6 +29,10 @@ ConversationPresentation 的有序消息、阶段和预览能力
 Assistant 消息的 `MessageModelInfo` 在 START 提交时从捕获模型保存，包含配置引用、wire model ID 和显示名称。
 主聊天、子助手、消息详情及导出读取该历史值，不查询当前模型目录重写名称。旧消息缺字段显示未知模型；
 正文编辑和 fork 保留原值，重新生成的新 variant 捕获本次模型。显示信息不是执行或设置访问的授权凭据。
+
+聊天概览仅投影当前展示分支，按用户发言组织卡片，保留每条消息的节点 ID。搜索匹配正文，附件数和收藏标记来自可见投影。
+正常列表和概览复用同一节点定位规则，计入动态前置提示行。打开概览记住原阅读锚点，关闭可返回该位置。
+主聊天更多菜单进入原消息选择态，预选当前分支。
 
 `groupMessageParts` 将连续推理和普通工具合成 `ThinkingBlock`；`assistant_call` 单独形成
 `SubAssistantCallBlock`，正文和媒体使用 `ContentBlock`。普通 `UIMessagePart.Step` 不显示也不切断折叠时间线；
@@ -143,6 +151,10 @@ Markdown 全文预览只提取消息顶层 Text，经 `buildMarkdownPreviewHtml`
 
 聊天截图的离屏树保留来源和预览投影，不安装交互选择器。导出协程直接持有 `BitmapComposer`，
 捕获完成或取消均拆除组合树，未交付 Bitmap 回收，不由独立 Handler 或第二协程作用域延续导出。
+
+会话导出在点击时固定标题、选中消息和推理选项。PNG 渲染完成后立即在服务内编码为私有临时文件，原协程回收位图。
+Markdown 和 PNG 分别提供系统文件保存和分享，PNG 另有相册动作。一次性输出句柄沿原 lease 复验来源，
+页面轮转只保留准备完成的请求，离屏渲染仍随原窗口取消。输出与临时文件责任见 [界面架构](ui-architecture.md)。
 
 单附件的预期缺失或 `ArtifactProjectionException` 关闭其访问能力，不中止整段聊天。
 非预期数据库/payload IO 故障保留日志，并通过 `AttachmentPreview.diagnostic` 显示脱敏诊断；失败投影不提供 URI、ImageSource 或 fileTarget。

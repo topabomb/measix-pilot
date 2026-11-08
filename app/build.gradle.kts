@@ -339,6 +339,7 @@ dependencies {
     implementation(libs.okhttp.sse)
 
     // ktor client
+    implementation(platform(libs.ktor.bom))
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.content.negotiation)

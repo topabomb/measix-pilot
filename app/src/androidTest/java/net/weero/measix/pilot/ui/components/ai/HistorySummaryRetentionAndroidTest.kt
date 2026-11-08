@@ -26,7 +26,7 @@ class HistorySummaryRetentionAndroidTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test fun boundsDoNotUnderflowOrOverflowAndControlsRemainVisible() {
-        val value = mutableStateOf(0)
+        val value = mutableStateOf("0")
         compose.setContent { RetentionTestTheme { Box(Modifier.width(280.dp)) {
             HistorySummaryRetentionStepper(value.value) { value.value = it }
         } } }
@@ -34,12 +34,12 @@ class HistorySummaryRetentionAndroidTest {
         val increase = compose.activity.getString(R.string.history_summary_retention_increase)
         compose.onNodeWithContentDescription(decrease).assertIsDisplayed().assertIsNotEnabled()
         compose.onNodeWithContentDescription(increase).assertIsDisplayed().performClick()
-        compose.runOnIdle { assertEquals(1, value.value); value.value = Int.MAX_VALUE }
+        compose.runOnIdle { assertEquals("1", value.value); value.value = Int.MAX_VALUE.toString() }
         compose.onNodeWithContentDescription(increase).assertIsNotEnabled()
         compose.onNodeWithContentDescription(decrease).performClick()
-        compose.runOnIdle { assertEquals(Int.MAX_VALUE - 1, value.value) }
+        compose.runOnIdle { assertEquals((Int.MAX_VALUE - 1).toString(), value.value) }
         compose.onNodeWithContentDescription(increase).performClick().assertIsNotEnabled()
-        compose.runOnIdle { assertEquals(Int.MAX_VALUE, value.value) }
+        compose.runOnIdle { assertEquals(Int.MAX_VALUE.toString(), value.value) }
     }
 
     @Test fun confirmingKeepsTheLocalDefaultOfThirtyTwo() {
@@ -53,6 +53,24 @@ class HistorySummaryRetentionAndroidTest {
         compose.onNodeWithText("32").assertIsDisplayed()
         compose.onNodeWithText(compose.activity.getString(R.string.confirm)).performClick()
         compose.runOnIdle { assertEquals(32, retained) }
+    }
+
+    @Test fun invalidDraftCannotSubmitThePreviousNumber() {
+        var retained: Int? = null
+        compose.setContent { RetentionTestTheme {
+            CompressContextDialog(onDismiss = {}, onConfirm = { _, _, keep ->
+                retained = keep
+                Job().apply { complete() }
+            })
+        } }
+        val field = compose.onNodeWithText("32")
+        val confirm = compose.onNodeWithText(compose.activity.getString(R.string.confirm))
+        field.performTextReplacement("2147483648")
+        confirm.assertIsNotEnabled()
+        compose.runOnIdle { assertNull(retained) }
+        compose.onNodeWithText("2147483648").performTextReplacement("123456")
+        confirm.performClick()
+        compose.runOnIdle { assertEquals(123456, retained) }
     }
 
     @Test fun cancellingDoesNotSubmitASummary() {

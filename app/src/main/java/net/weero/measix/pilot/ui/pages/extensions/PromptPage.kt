@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -56,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -71,12 +73,14 @@ import net.weero.measix.pilot.ui.components.ui.ConfirmDialog
 import net.weero.measix.pilot.ui.components.ui.longPressReorder
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.export.ModeInjectionSerializer
-import net.weero.measix.pilot.data.export.rememberExporter
 import net.weero.measix.pilot.data.export.rememberImporter
 import net.weero.measix.pilot.data.model.InjectionPosition
 import net.weero.measix.pilot.data.model.PromptInjection
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.ExportDialog
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
+import net.weero.measix.pilot.ui.components.ui.ExportAction
+import net.weero.measix.pilot.ui.components.ui.rememberExportDocumentLauncher
 import net.weero.measix.pilot.ui.components.ui.FormItem
 import net.weero.measix.pilot.ui.components.ui.Select
 import net.weero.measix.pilot.ui.components.ui.Tag
@@ -95,6 +99,25 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
     val toaster = LocalToaster.current
     val lockedMessage = stringResource(R.string.configuration_change_rejected, "{reason}")
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val exports = vm.documentExport
+    val launchDocument = rememberExportDocumentLauncher(exports, "application/json")
+    exports.completedName?.let { name ->
+        val message = stringResource(R.string.chat_page_export_success, name)
+        LaunchedEffect(name) {
+            toaster.show(message, type = ToastType.Success)
+            exports.acknowledgeCompletion()
+        }
+    }
+    exports.failure?.let { detail ->
+        AlertDialog(
+            onDismissRequest = exports::clearFailure,
+            title = { Text(stringResource(R.string.export_title)) },
+            text = { DiagnosticDisclosure(detail) },
+            confirmButton = { TextButton(onClick = exports::clearFailure) { Text(stringResource(R.string.confirm)) } },
+        )
+    }
 
     LaunchedEffect(vm, toaster, lockedMessage) {
         vm.lockedChanges.collect { error ->
@@ -117,6 +140,10 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
         Column(Modifier.padding(innerPadding)) {
             ModeInjectionTab(
                 modeInjections = settings.modeInjections,
+                exportEnabled = !exports.busy,
+                onExport = { snapshot, action ->
+                    scope.launch { exports.execute(context, action, { vm.prepareExport(snapshot) }, launchDocument) }
+                },
                 onUpdate = { transform ->
                     vm.updateSettings { current ->
                         current.copy(modeInjections = transform(current.modeInjections))
@@ -131,6 +158,8 @@ fun PromptPage(vm: PromptVM = koinViewModel()) {
 @Composable
 private fun ModeInjectionTab(
     modeInjections: List<PromptInjection.ModeInjection>,
+    exportEnabled: Boolean,
+    onExport: (PromptInjection.ModeInjection, ExportAction) -> Unit,
     onUpdate: ((List<PromptInjection.ModeInjection>) -> List<PromptInjection.ModeInjection>) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -212,6 +241,7 @@ private fun ModeInjectionTab(
                     ) { isDragging ->
                         ModeInjectionCard(
                             injection = injection,
+                            onExport = if (exportEnabled) { action -> onExport(injection, action) } else null,
                             modifier = longPressReorder(isDragging),
                             onEdit = { editState.open(injection) },
                             onDelete = { onUpdate { current -> current.filterNot { it.id == injection.id } } }
@@ -267,13 +297,13 @@ private fun ModeInjectionTab(
 @Composable
 private fun ModeInjectionCard(
     injection: PromptInjection.ModeInjection,
+    onExport: ((ExportAction) -> Unit)?,
     modifier: Modifier = Modifier,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     var showExportDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
-    val exporter = rememberExporter(injection, ModeInjectionSerializer)
 
     Card(
         onClick = onEdit,
@@ -315,11 +345,12 @@ private fun ModeInjectionCard(
                     }
                 }
             }
-            ItemActionMenu(listOf(
-                ItemAction(stringResource(R.string.export_title), HugeIcons.Share03, onClick = { showExportDialog = true }),
-                ItemAction(stringResource(R.string.prompt_page_delete), HugeIcons.Delete01,
-                    destructive = true, onClick = { showDeleteDialog = true }),
-            ))
+            ItemActionMenu(buildList {
+                if (onExport != null) add(ItemAction(stringResource(R.string.export_title), HugeIcons.Share03,
+                    onClick = { showExportDialog = true }))
+                add(ItemAction(stringResource(R.string.prompt_page_delete), HugeIcons.Delete01,
+                    destructive = true, onClick = { showDeleteDialog = true }))
+            })
         }
     }
 
@@ -333,9 +364,10 @@ private fun ModeInjectionCard(
         text = { Text(stringResource(R.string.common_delete_confirm_message, injection.name)) },
     )
 
-    if (showExportDialog) {
+    if (showExportDialog && onExport != null) {
         ExportDialog(
-            exporter = exporter,
+            onSave = { onExport(ExportAction.SAVE) },
+            onShare = { onExport(ExportAction.SHARE) },
             onDismiss = { showExportDialog = false }
         )
     }

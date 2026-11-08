@@ -57,7 +57,7 @@ class ImageExportTest {
         var deleted = 0
         io.mockk.mockkStatic(android.provider.DocumentsContract::class)
         every { android.provider.DocumentsContract.deleteDocument(resolver, uri) } answers { deleted++; true }
-        val exports = net.weero.measix.pilot.service.MediaExportService(files)
+        val exports = net.weero.measix.pilot.service.MediaExportService(files, backgroundScope)
         try {
             exports.saveTextDocument(context, uri, request)
             org.junit.Assert.assertEquals(request.text, output.toString("UTF-8"))
@@ -81,7 +81,7 @@ class ImageExportTest {
         val files = mockk<net.weero.measix.pilot.service.FileManagementApplicationService>()
         val source = net.weero.measix.pilot.service.RenderedContentSource.UserConfiguration
         io.mockk.coEvery { files.resolveContentAttachment(source, "/upload/known.pdf") } returns null
-        val exports = net.weero.measix.pilot.service.MediaExportService(files)
+        val exports = net.weero.measix.pilot.service.MediaExportService(files, backgroundScope)
         org.junit.Assert.assertTrue(runCatching { exports.openContentLink(context, source, "https://measix.local/upload/known.pdf") }.isFailure)
         io.mockk.coVerify(exactly = 1) { files.resolveContentAttachment(source, "/upload/known.pdf") }
         io.mockk.verify(exactly = 0) { context.startActivity(any()) }
@@ -117,12 +117,13 @@ class ImageExportTest {
         kotlinx.coroutines.Dispatchers.setMain(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
         io.mockk.mockkStatic(androidx.core.content.FileProvider::class)
         var candidate: java.io.File? = null
-        every { androidx.core.content.FileProvider.getUriForFile(context, any(), any()) } answers {
+        every { androidx.core.content.FileProvider.getUriForFile(context, any(), any(), any()) } answers {
             candidate = thirdArg()
+            org.junit.Assert.assertEquals("private.pdf", arg<String>(3))
             Uri.parse("content://test/export-copy")
         }
         try {
-            val exporter = net.weero.measix.pilot.service.MediaExportService(files)
+            val exporter = net.weero.measix.pilot.service.MediaExportService(files, backgroundScope)
             for (failure in listOf("copy_failed", "revoked", "cancelled", "no_handler")) {
                 mode = failure
                 val result = runCatching { exporter.openAttachment(context, preview) }
@@ -152,17 +153,26 @@ class ImageExportTest {
         every { context.packageName } returns "test.app"
         kotlinx.coroutines.Dispatchers.setMain(kotlinx.coroutines.test.StandardTestDispatcher(testScheduler))
         io.mockk.mockkStatic(androidx.core.content.FileProvider::class)
-        every { androidx.core.content.FileProvider.getUriForFile(context, any(), any()) } returns Uri.parse("content://test/image")
+        var uriPublished = false
+        every { androidx.core.content.FileProvider.getUriForFile(context, any(), any(), any()) } answers {
+            uriPublished = true
+            Uri.parse("content://test/image")
+        }
+        every { context.getString(any()) } returns "Share"
         val original = CancellationException("original share cancelled")
         try {
-            var checks = 0
+            val view = net.weero.measix.pilot.service.ConversationViewLease(kotlin.uuid.Uuid.random(),
+                net.weero.measix.pilot.data.enterprise.RealmAccess.Personal, 0) {}
+            val source = net.weero.measix.pilot.service.RenderedContentSource.Conversation(view)
+            val files = mockk<net.weero.measix.pilot.service.FileManagementApplicationService>()
+            io.mockk.coEvery { files.withContentAccess<Unit>(source, any()) } coAnswers { secondArg<suspend () -> Unit>()() }
+            val service = net.weero.measix.pilot.service.MediaExportService(files, backgroundScope)
             var observed: Throwable? = null
             val operation = async {
                 val originalJob = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]!!
                 try {
-                    net.weero.measix.pilot.service.MediaExportService(io.mockk.mockk()).shareText(context, "private", "chat.md") {
-                        checks++
-                        if (checks == 2) {
+                    io.mockk.coEvery { files.requireContentAccess(source) } coAnswers {
+                        if (uriPublished) {
                             val file = java.io.File(root, "temp").listFiles()!!.single()
                             check(file.delete() && file.mkdir())
                             java.io.File(file, "prevent-delete").writeText("test")
@@ -170,6 +180,8 @@ class ImageExportTest {
                             throw original
                         }
                     }
+                    val request = service.prepareConversationMarkdown(view, "private", "chat.md")
+                    service.sharePrepared(context, request)
                 } catch (error: Throwable) { observed = error; throw error }
             }
             runCatching { operation.await() }

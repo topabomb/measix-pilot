@@ -86,7 +86,9 @@ class ChatVM internal constructor(
     private val chatErrorStore: ChatErrorStore,
     private val configurationApplicationService: ConfigurationApplicationService,
     private val remoteWorkspace: net.weero.measix.pilot.service.remoteworkspace.RemoteWorkspaceService,
+    mediaExportService: net.weero.measix.pilot.service.MediaExportService,
 ) : ViewModel() {
+    internal val documentExport = net.weero.measix.pilot.ui.components.ui.DocumentExportActions(mediaExportService, viewModelScope)
     internal val remoteWorkspaceSummary = remoteWorkspace.summary
     internal suspend fun refreshRemoteWorkspace(target: ConversationAssistantTarget) {
         requireConfigurationTarget(target)
@@ -529,6 +531,7 @@ class ChatVM internal constructor(
 
     override fun onCleared() {
         cleared.set(true)
+        documentExport.close()
         (page.value as? PageState.Open)?.close()
         discardInput()
     }
@@ -880,22 +883,28 @@ class ChatVM internal constructor(
     }
 
     internal data class PendingConversationDeletion(
-        val conversation: ConversationSummary,
         val target: ConversationCommandTarget,
         val preview: net.weero.measix.pilot.service.ConversationDeletionPreview,
     )
-    fun deleteConversation(conversation: ConversationSummary) {
+    fun deleteConversation(conversation: ConversationSummary) = prepareConversationDeletion(conversation.commandTarget)
+
+    internal fun deleteCurrentConversation(source: ConversationViewLease) {
+        val current = page.value as? PageState.Open ?: return
+        if (current.lease !== source) return
+        prepareConversationDeletion(source.commandTarget)
+    }
+
+    private fun prepareConversationDeletion(target: ConversationCommandTarget) {
         if (preparingConversationDeletion || pendingConversationDeletion != null || _handoff.value != null) return
         val original = (page.value as? PageState.Open)?.takeIf {
-            it.lease.commandTarget.selection == conversation.commandTarget.selection
+            it.lease.commandTarget.selection == target.selection
         } ?: return
         preparingConversationDeletion = true
-        val target = conversation.commandTarget
         viewModelScope.launch {
             try {
                 val preview = conversationApplicationService.prepareDeletion(listOf(target))
                 if (page.value !== original) return@launch
-                if (preview.pendingInputCount > 0) pendingConversationDeletion = PendingConversationDeletion(conversation, target, preview)
+                if (preview.pendingInputCount > 0) pendingConversationDeletion = PendingConversationDeletion(target, preview)
                 else performConversationDeletion(target, preview)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { reportCommandError(original, error) }

@@ -39,27 +39,21 @@ class RichTextHostAndroidTest {
 
     @Test fun screenshotConsumerRendersWithoutAnInteractiveHostAndCleansItsCancelledTree() = kotlinx.coroutines.runBlocking {
         compose.setContent { androidx.compose.material3.Text("Host") }
-        val exports = mockk<MediaExportService>()
-        var dimensions: Pair<Int, Int>? = null
-        coEvery { exports.saveAndShareBitmap(any(), any(), any(), any()) } coAnswers {
-            val bitmap = secondArg<android.graphics.Bitmap>()
-            dimensions = bitmap.width to bitmap.height
-            arg<suspend () -> Unit>(3)()
-        }
         val work = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
         try {
             val capture = work.async {
-                net.weero.measix.pilot.ui.pages.chat.exportToImage(
+                net.weero.measix.pilot.ui.pages.chat.renderConversationBitmap(
                     context = compose.activity, density = androidx.compose.ui.unit.Density(1f), conversationTitle = "Export",
                     messages = listOf(me.rerere.ai.ui.UIMessage(role = me.rerere.ai.core.MessageRole.ASSISTANT,
                         parts = listOf(me.rerere.ai.ui.UIMessagePart.Text("Original text\n\n```kotlin\nval original = 1\n```")))),
-                    settings = Settings.dummy(), mediaExportService = exports, attachmentPreview = { null }, imageResolver = { null },
-                    contentSource = RenderedContentSource.Static, verifyAccess = {},
+                    settings = Settings.dummy(), attachmentPreview = { null }, imageResolver = { null },
+                    contentSource = RenderedContentSource.Static,
                 )
             }
             compose.waitUntil(15_000) { capture.isCompleted }
-            capture.await()
-            assertTrue(requireNotNull(dimensions).first > 0 && requireNotNull(dimensions).second > 0)
+            val bitmap = capture.await()
+            try { assertTrue(bitmap.width > 0 && bitmap.height > 0) }
+            finally { bitmap.recycle() }
             var disposed = false
             var mounted = false
             var childrenBefore = 0

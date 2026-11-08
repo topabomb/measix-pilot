@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers.openai
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -36,12 +37,14 @@ class ChatCompletionsAPIMoonshotTest {
             ),
             reasoningLevel = reasoningLevel,
         )
-        return api.buildChatCompletionRequest(
-            messages = listOf(UIMessage.user("hi")).toModelRequests(),
-            params = params,
-            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.moonshot.cn/v1"),
-            stream = true,
-        )
+        return runBlocking {
+            api.buildChatCompletionRequest(
+                messages = listOf(UIMessage.user("hi")).toModelRequests(),
+                params = params,
+                providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.moonshot.cn/v1"),
+                stream = true,
+            )
+        }
     }
 
     @Test

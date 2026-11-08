@@ -181,14 +181,6 @@ fun ChatDrawerContent(
     val conversationActivities by drawerVm.conversationActivities.collectAsStateWithLifecycle(
         initialValue = emptyMap(),
     )
-    vm.pendingConversationDeletion?.let { pending ->
-        PendingInputDeletionDialog(
-            count = pending.preview.pendingInputCount,
-            onConfirm = { vm.confirmConversationDeletion(pending) },
-            onDismiss = vm::dismissConversationDeletion,
-        )
-    }
-
     // 昵称编辑状态
     val nicknameEditState = useEditState<String> { newNickname ->
         vm.updateSettings { current ->

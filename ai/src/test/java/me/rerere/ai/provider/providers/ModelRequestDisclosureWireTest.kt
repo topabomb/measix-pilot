@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -135,15 +136,17 @@ class DisclosureContextChatCompletionsTest {
 
     @Test
     fun `one user message carries context as first text block and originals as suffix`() {
-        val wire = api.buildMessages(
-            messages = turnWithAnswer,
-            replayPolicy = replayPolicy(),
-            mediaCapabilities = RequestMediaCapabilities(
-                userImages = RequestImageSupport.STRUCTURED,
-                assistantImages = RequestImageSupport.NONE,
-                toolOutputImages = RequestImageSupport.STRUCTURED,
-            ),
-        )
+        val wire = runBlocking {
+            api.buildMessages(
+                messages = turnWithAnswer,
+                replayPolicy = replayPolicy(),
+                mediaCapabilities = RequestMediaCapabilities(
+                    userImages = RequestImageSupport.STRUCTURED,
+                    assistantImages = RequestImageSupport.NONE,
+                    toolOutputImages = RequestImageSupport.STRUCTURED,
+                ),
+            )
+        }
         wire.assertSingleUserTurnWithLeadingContext("text")
         val blocks = wire.entriesWithRole("user").single().getValue("content").let { it as JsonArray }
             .map { it.jsonObject }
@@ -160,8 +163,10 @@ class DisclosureContextChatCompletionsTest {
     @Test
     fun `format3 external state follows the entire tool batch while own writes add no user message`() {
         listOf(false, true).forEach { external ->
-            val wire = api.buildMessages(completedWriteBatch(external), replayPolicy = replayPolicy(),
-                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED))
+            val wire = runBlocking {
+                api.buildMessages(completedWriteBatch(external), replayPolicy = replayPolicy(),
+                    mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED))
+            }
             wire.assertOriginalPartOrder()
             val items = wire.map { it.jsonObject }
             val tools = items.filter { it.field("role")?.content == "tool" }
@@ -180,12 +185,14 @@ class DisclosureContextChatCompletionsTest {
 
     @Test
     fun `developer role system also excludes the disclosure snapshot`() {
-        val wire = api.buildMessages(
-            messages = turnWithAnswer,
-            replayPolicy = replayPolicy(),
-            useDeveloperRoleForSystemMessages = true,
-            mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
-        )
+        val wire = runBlocking {
+            api.buildMessages(
+                messages = turnWithAnswer,
+                replayPolicy = replayPolicy(),
+                useDeveloperRoleForSystemMessages = true,
+                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
+            )
+        }
         val developers = wire.entriesWithRole("developer")
         assertEquals(1, developers.size)
         assertFalse(developers.single().toString().contains(SNAPSHOT))
@@ -198,8 +205,10 @@ class DisclosureContextResponsesTest {
     @Test
     fun `format3 follows all call outputs and own success requires no extra input item`() {
         listOf(false, true).forEach { external ->
-            val wire = api.buildMessages(completedWriteBatch(external),
-                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED))
+            val wire = runBlocking {
+                api.buildMessages(completedWriteBatch(external),
+                    mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED))
+            }
             wire.assertOriginalPartOrder()
             val items = wire.map { it.jsonObject }
             assertEquals(CALL_IDS, items.filter { it.field("type")?.content == "function_call" }.map { it.field("call_id")?.content })
@@ -216,10 +225,12 @@ class DisclosureContextResponsesTest {
 
     @Test
     fun `one user input item carries context as first input_text block`() {
-        val wire = api.buildMessages(
-            turnWithAnswer,
-            mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
-        )
+        val wire = runBlocking {
+            api.buildMessages(
+                turnWithAnswer,
+                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
+            )
+        }
         val users = wire.map { it.jsonObject }.filter { it.field("role")?.content == "user" }
         assertEquals(1, users.size)
         val blocks = users.single().getValue("content").let { it as JsonArray }.map { it.jsonObject }
@@ -239,22 +250,13 @@ class DisclosureContextResponsesTest {
 class DisclosureContextClaudeTest {
     private val provider = ClaudeProvider(OkHttpClient())
 
-    private fun invokeBuildMessages(messages: List<ModelRequestMessage>): JsonArray {
-        val method = ClaudeProvider::class.java.getDeclaredMethod(
-            "buildMessages",
-            List::class.java,
-            Boolean::class.javaPrimitiveType,
-            ClaudePromptCacheTtl::class.java,
-            RequestMediaCapabilities::class.java,
-        )
-        method.isAccessible = true
-        return method.invoke(
-            provider,
+    private fun invokeBuildMessages(messages: List<ModelRequestMessage>): JsonArray = runBlocking {
+        provider.buildMessages(
             messages,
             false,
             ClaudePromptCacheTtl.FIVE_MINUTES,
             RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
-        ) as JsonArray
+        )
     }
 
     @Test
@@ -301,9 +303,11 @@ class DisclosureContextGeminiTest {
     @Test
     fun `format3 stays after complete function responses when adjacent user contents merge`() {
         listOf(false, true).forEach { external ->
-            val wire = provider.buildContents(completedWriteBatch(external),
-                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
-                modelId = "gemini-test", sourceProfile = "google:developer:test.example.com")
+            val wire = runBlocking {
+                provider.buildContents(completedWriteBatch(external),
+                    mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
+                    modelId = "gemini-test", sourceProfile = "google:developer:test.example.com")
+            }
             wire.assertOriginalPartOrder("parts")
             assertEquals(listOf("user", "model", "user", "model"), wire.map { it.jsonObject.field("role")?.content })
             val tail = (wire.entriesWithRole("user").last().getValue("parts") as JsonArray).map { it.jsonObject }
@@ -320,12 +324,14 @@ class DisclosureContextGeminiTest {
 
     @Test
     fun `one user content carries context as first part and keeps alternation`() {
-        val wire = provider.buildContents(
-            messages = turnWithAnswer,
-            mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
-            modelId = "gemini-test",
-            sourceProfile = "google:developer:test.example.com",
-        )
+        val wire = runBlocking {
+            provider.buildContents(
+                messages = turnWithAnswer,
+                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
+                modelId = "gemini-test",
+                sourceProfile = "google:developer:test.example.com",
+            )
+        }
         wire.assertSingleUserTurnWithLeadingContext(textField = "text", contentField = "parts")
         // System 走 systemInstruction，不进入 contents；user/model 必须交替。
         assertEquals(
@@ -337,17 +343,19 @@ class DisclosureContextGeminiTest {
 
     @Test
     fun `adjacent synthetic user merges with snapshot-bearing user and stays alternating`() {
-        val wire = provider.buildContents(
-            messages = listOf(
-                UIMessage.system("Stable system prompt"),
-                UIMessage.user("time reminder"),
-                injectedUserTurn(),
-                UIMessage.assistant("answer"),
-            ).toModelRequests(),
-            mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
-            modelId = "gemini-test",
-            sourceProfile = "google:developer:test.example.com",
-        )
+        val wire = runBlocking {
+            provider.buildContents(
+                messages = listOf(
+                    UIMessage.system("Stable system prompt"),
+                    UIMessage.user("time reminder"),
+                    injectedUserTurn(),
+                    UIMessage.assistant("answer"),
+                ).toModelRequests(),
+                mediaCapabilities = RequestMediaCapabilities(userImages = RequestImageSupport.STRUCTURED),
+                modelId = "gemini-test",
+                sourceProfile = "google:developer:test.example.com",
+            )
+        }
         assertEquals(
             listOf("user", "model"),
             wire.map { it.jsonObject.field("role")?.content },

@@ -10,7 +10,9 @@ import net.weero.measix.pilot.utils.InlineHtmlTagProvider
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.getTextInNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
-import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import net.weero.measix.pilot.utils.PilotMarkdownFlavour
+import org.intellij.markdown.flavours.gfm.GFMTokenTypes
+import org.intellij.markdown.html.EqualDelimiterTrimmingInlineTagProvider
 import org.intellij.markdown.html.GeneratingProvider
 import org.intellij.markdown.html.HtmlGenerator
 import org.intellij.markdown.parser.LinkMap
@@ -26,7 +28,7 @@ internal val LocalMarkdownHtmlFences = staticCompositionLocalOf<Map<Element, Mar
 
 internal fun generateMarkdownDocument(content: String): MarkdownHtmlDocument {
     val source = prepareMarkdownSource(content)
-    val flavour = GFMFlavourDescriptor(makeHttpsAutoLinks = true, useSafeLinks = true)
+    val flavour = PilotMarkdownFlavour(makeHttpsAutoLinks = true, useSafeLinks = true)
     val tree = MarkdownParser(flavour).buildMarkdownTreeFromString(source.text)
     // Generated markers are private to this parse, never a closure flag supplied by model HTML.
     val marker = "pilot-fence-" + UUID.randomUUID().toString()
@@ -45,6 +47,7 @@ internal fun generateMarkdownDocument(content: String): MarkdownHtmlDocument {
                 visitor.consumeTagClose("pre")
             }
         },
+        GFMElementTypes.STRIKETHROUGH to EqualDelimiterTrimmingInlineTagProvider("del", GFMTokenTypes.TILDE),
         GFMElementTypes.INLINE_MATH to EscapedMathProvider(true),
         GFMElementTypes.BLOCK_MATH to EscapedMathProvider(false),
     )

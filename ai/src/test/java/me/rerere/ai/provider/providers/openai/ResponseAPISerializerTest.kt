@@ -1,4 +1,5 @@
 package me.rerere.ai.provider.providers.openai
+import kotlinx.coroutines.runBlocking
 import me.rerere.ai.testsupport.executedTool
 import me.rerere.ai.testsupport.canonicalMultiRoundToolTurn
 import kotlin.uuid.Uuid
@@ -63,8 +64,10 @@ class ResponseAPISerializerTest {
             val restored = Json.decodeFromString(Model.serializer(), Json.encodeToString(Model.serializer(), selected))
             assertEquals(selected, restored)
             for (stream in listOf(false, true)) {
-                val body = api.buildRequestBody(ProviderSetting.OpenAI(useResponseApi = true),
-                    listOf(UIMessage.user("draw")).toModelRequests(), TextGenerationParams(model = restored), stream)
+                val body = runBlocking {
+                    api.buildRequestBody(ProviderSetting.OpenAI(useResponseApi = true),
+                        listOf(UIMessage.user("draw")).toModelRequests(), TextGenerationParams(model = restored), stream)
+                }
                 assertEquals(id, body["tools"]!!.jsonArray.single().jsonObject["model"]!!.jsonPrimitive.content)
             }
             val disabled = invokeBuildRequestBody(ProviderSetting.OpenAI(useResponseApi = true),
@@ -140,7 +143,7 @@ class ResponseAPISerializerTest {
         messages: List<UIMessage>,
         host: String = "api.openai.com"
     ): JsonArray {
-        return api.buildMessages(messages.toModelRequests(), resolveResponseEndpointProfile(host))
+        return runBlocking { api.buildMessages(messages.toModelRequests(), resolveResponseEndpointProfile(host)) }
     }
 
     private fun invokeBuildRequestBody(
@@ -148,7 +151,7 @@ class ResponseAPISerializerTest {
         params: TextGenerationParams,
         stream: Boolean = false
     ): JsonObject {
-        return api.buildRequestBody(providerSetting, listOf(UIMessage.user("hello")).toModelRequests(), params, stream)
+        return runBlocking { api.buildRequestBody(providerSetting, listOf(UIMessage.user("hello")).toModelRequests(), params, stream) }
     }
 
     private fun createReasoningParams(
@@ -600,11 +603,13 @@ class ResponseAPISerializerTest {
             toolOutputImages = RequestImageSupport.STRUCTURED,
         )
 
-        val output = api.buildMessages(
-            messages = listOf(assistant.toModelRequest()),
-            endpointProfile = resolveResponseEndpointProfile("proxy.example.com"),
-            mediaCapabilities = capabilities,
-        ).single { it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output" }.jsonObject
+        val output = runBlocking {
+            api.buildMessages(
+                messages = listOf(assistant.toModelRequest()),
+                endpointProfile = resolveResponseEndpointProfile("proxy.example.com"),
+                mediaCapabilities = capabilities,
+            )
+        }.single { it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output" }.jsonObject
         val content = output["output"]!!.jsonArray
 
         assertEquals(listOf("input_text", "input_image"), content.map { it.jsonObject["type"]!!.jsonPrimitive.content })
@@ -781,6 +786,7 @@ class ResponseAPISerializerTest {
             role = MessageRole.ASSISTANT,
             parts = listOf(
                 UIMessagePart.Text("visible response already represented by raw output"),
+                UIMessagePart.Image("file:///raw-replayed-image-must-not-be-read.png"),
                 UIMessagePart.Tool(
                     localCallId = Uuid.random(), stepId = Uuid.random(), providerCallId = "call_1",
                     toolName = "generate_image",
@@ -797,7 +803,12 @@ class ResponseAPISerializerTest {
             ).toMetadata(),
         )
 
-        val replay = invokeBuildMessages(listOf(message)).map { it.jsonObject }
+        val replay = runBlocking {
+            api.buildMessages(
+                messages = listOf(message.toModelRequest()),
+                imageEncoder = me.rerere.ai.util.RequestImageEncoder { _, _ -> error("opaque replay tried to encode an image") },
+            )
+        }.map { it.jsonObject }
 
         assertEquals(
             listOf("image_generation_call", "function_call", "function_call_output", "message"),
@@ -1203,7 +1214,7 @@ class ResponseAPISerializerTest {
             customBody = listOf(CustomBody("instructions", JsonPrimitive("override"))))
         val messages = listOf(UIMessage.system("fixed enterprise prompt"), UIMessage.user("hello")).toModelRequests()
         val error = org.junit.Assert.assertThrows(CustomBodyReservedKeyException::class.java) {
-            api.buildRequestBody(ProviderSetting.OpenAI(useResponseApi = true), messages, params, false)
+            runBlocking { api.buildRequestBody(ProviderSetting.OpenAI(useResponseApi = true), messages, params, false) }
         }
         assertEquals(listOf("instructions"), error.conflictingKeys)
     }
@@ -1226,7 +1237,7 @@ class ResponseAPISerializerTest {
             models = listOf(model),
         )
         val messages = listOf(UIMessage.user("hello")).toModelRequests()
-        return api.buildRequestBody(providerSetting, messages, params, false)
+        return runBlocking { api.buildRequestBody(providerSetting, messages, params, false) }
     }
 
     @Test

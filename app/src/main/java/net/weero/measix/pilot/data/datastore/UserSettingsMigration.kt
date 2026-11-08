@@ -67,7 +67,8 @@ internal class UserSettingsMigration : DataMigration<Preferences> {
         val encoded = currentData[SettingsStore.USER_SETTINGS] ?: return true
         if (userSettingsSchemaVersion(encoded) < UserSettingsDocument.SCHEMA_VERSION) return true
         val document = JsonInstant.decodeFromString<UserSettingsDocument>(encoded)
-        return migrateLegacyCompressPrompt(document.configuration.compressPrompt) != document.configuration.compressPrompt
+        return migrateLegacyCompressPrompt(document.configuration.compressPrompt) != document.configuration.compressPrompt ||
+            document.preferences.scopes.any { it.selections.favoriteModels.hasDuplicates() }
     }
 
     override suspend fun migrate(currentData: Preferences): Preferences {
@@ -91,17 +92,14 @@ internal class UserSettingsMigration : DataMigration<Preferences> {
                     "schemaVersion" to JsonPrimitive(UserSettingsDocument.SCHEMA_VERSION),
                     "configuration" to configuration,
                     "preferences" to if (scopes == null) preferences else JsonObject(preferences + ("scopes" to JsonArray(scopes))),
-                )).toString()
-            } else encoded
-            val upgradedRoot = JsonInstant.parseToJsonElement(upgraded).jsonObject
-            val configuration = upgradedRoot["configuration"]?.jsonObject
-            val migratedConfiguration = configuration?.migrateDefaultCompressPrompt()
-            val migrated = if (configuration != migratedConfiguration) {
-                JsonObject(upgradedRoot + ("configuration" to requireNotNull(migratedConfiguration))).toString()
-            } else upgraded
-            JsonInstant.decodeFromString<UserSettingsDocument>(migrated)
+                ))
+            } else root
+            val configuration = upgraded.getValue("configuration").jsonObject
+            val migrated = JsonObject(upgraded + ("configuration" to configuration.migrateDefaultCompressPrompt()))
+            val document = migrated.withDistinctScopedFavorites()
+            JsonInstant.decodeFromJsonElement<UserSettingsDocument>(document)
             return currentData.toMutablePreferences().apply {
-                this[SettingsStore.USER_SETTINGS] = migrated
+                this[SettingsStore.USER_SETTINGS] = if (document == root) encoded else document.toString()
             }.toPreferences()
         }
         val old = readLegacySettings(currentData)
@@ -178,7 +176,7 @@ internal class UserSettingsMigration : DataMigration<Preferences> {
 private fun readLegacySettings(preferences: Preferences): Settings {
     val webDav = preferences[WEBDAV_CONFIG]?.let(::migrateLegacyWebDavConfiguration)
     return Settings(
-        favoriteModels = preferences.json(FAVORITE_MODELS, emptyList()),
+        favoriteModels = preferences.json<List<ConfigurationReference>>(FAVORITE_MODELS, emptyList()).distinct(),
         chatModelId = preferences[SELECT_MODEL]?.let { ConfigurationReference.parse(it) }
             ?: DEFAULT_AUTO_MODEL_ID,
         fastModelId = preferences[FAST_MODEL]?.let { ConfigurationReference.parse(it) }
@@ -253,8 +251,31 @@ internal fun migrateSettingsFormat(source: String): String {
     val value = root["settingsFormatVersion"]
     val version = if (value == null) 1 else (value as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
     require(version != null && version in 1..SETTINGS_FORMAT_VERSION) { "unsupported_settings_format: $value" }
-    if (version == SETTINGS_FORMAT_VERSION) return source
-    return JsonObject(root.migrateLegacyAssistantLimits() + ("settingsFormatVersion" to JsonPrimitive(SETTINGS_FORMAT_VERSION))).toString()
+    val upgraded = if (version == SETTINGS_FORMAT_VERSION) root else
+        JsonObject(root.migrateLegacyAssistantLimits() + ("settingsFormatVersion" to JsonPrimitive(SETTINGS_FORMAT_VERSION)))
+    val normalized = upgraded.withDistinctFavorites()
+    return if (normalized == root) source else normalized.toString()
+}
+
+private fun List<ConfigurationReference>.hasDuplicates(): Boolean = toSet().size != size
+
+private fun JsonObject.withDistinctFavorites(): JsonObject {
+    val original = get("favoriteModels")?.jsonArray ?: return this
+    val distinct = original.distinctBy { JsonInstant.decodeFromJsonElement<ConfigurationReference>(it) }
+    return if (distinct.size == original.size) this else JsonObject(this + ("favoriteModels" to JsonArray(distinct)))
+}
+
+private fun JsonObject.withDistinctScopedFavorites(): JsonObject {
+    val preferences = getValue("preferences").jsonObject
+    val scopes = preferences["scopes"]?.jsonArray ?: return this
+    val normalized = scopes.map { scope ->
+        val fields = scope.jsonObject
+        val selections = fields["selections"]?.jsonObject ?: return@map scope
+        val distinct = selections.withDistinctFavorites()
+        if (distinct == selections) scope else JsonObject(fields + ("selections" to distinct))
+    }
+    return if (normalized == scopes) this else
+        JsonObject(this + ("preferences" to JsonObject(preferences + ("scopes" to JsonArray(normalized)))))
 }
 
 internal const val SETTINGS_FORMAT_VERSION = 2

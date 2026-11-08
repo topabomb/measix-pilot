@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers.openai
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -61,12 +62,14 @@ class MiMoEndpointContractTest {
             topP = 0.9f,
             maxTokens = 4096,
         )
-        return api.buildChatCompletionRequest(
-            messages = listOf(UIMessage.user("hi")).toModelRequests(),
-            params = params,
-            providerSetting = provider,
-            stream = stream,
-        )
+        return runBlocking {
+            api.buildChatCompletionRequest(
+                messages = listOf(UIMessage.user("hi")).toModelRequests(),
+                params = params,
+                providerSetting = provider,
+                stream = stream,
+            )
+        }
     }
 
     private fun buildResponsesRequest(
@@ -82,12 +85,14 @@ class MiMoEndpointContractTest {
             topP = 0.9f,
             maxTokens = 4096,
         )
-        return responseApi.buildRequestBody(
-            provider,
-            listOf(UIMessage.user("hi")).toModelRequests(),
-            params,
-            stream,
-        )
+        return runBlocking {
+            responseApi.buildRequestBody(
+                provider,
+                listOf(UIMessage.user("hi")).toModelRequests(),
+                params,
+                stream,
+            )
+        }
     }
 
     // --- Chat Completions ---

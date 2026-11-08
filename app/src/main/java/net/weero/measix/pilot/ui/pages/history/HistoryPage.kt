@@ -1,5 +1,10 @@
 package net.weero.measix.pilot.ui.pages.history
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import net.weero.measix.pilot.utils.plus
@@ -64,6 +69,7 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     val chatNavigation = rememberChatNavigation(navController)
     val snackbarHostState = remember { SnackbarHostState() }
     var deletionCandidates by remember { mutableStateOf<List<ConversationSummary>?>(null) }
+    val selection by vm.selection.collectAsStateWithLifecycle()
     val operationRunning by vm.running.collectAsStateWithLifecycle()
     val commandFailure by vm.commandFailure.collectAsStateWithLifecycle()
     val deletedNavigation by vm.deletedNavigation.collectAsStateWithLifecycle()
@@ -103,33 +109,57 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
     val assistantCatalog = vm.assistantCatalog.collectAsStateWithLifecycle().value
     val readFailure = vm.readFailure.collectAsStateWithLifecycle().value
 
+    val selectedConversations = selection?.let { selected ->
+        conversations.filter { it.id in selected.ids && it.selection == selected.realm }
+    }.orEmpty()
+    val listRealm = conversations.firstOrNull()?.selection
+    LaunchedEffect(listRealm, selection?.realm) {
+        deletionCandidates = deletionCandidates?.takeIf { candidates ->
+            candidates.isNotEmpty() && candidates.all { it.selection == listRealm }
+        }
+    }
+    BackHandler(selection != null) {
+        if (deletionCandidates != null) deletionCandidates = null else vm.exitSelection()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(stringResource(R.string.history_page_current_space))
+                    Text(
+                        if (selection != null) stringResource(R.string.history_page_selected_count, selectedConversations.size)
+                        else stringResource(R.string.history_page_current_space),
+                    )
                 },
                 navigationIcon = {
-                    BackButton()
+                    if (selection != null) {
+                        TextButton(onClick = vm::exitSelection) { Text(stringResource(R.string.cancel)) }
+                    } else {
+                        BackButton()
+                    }
                 },
                 actions = {
-                    IconButton(
-                        onClick = {
-                            navController.navigate(Screen.MessageSearch)
+                    if (selection != null) {
+                        IconButton(
+                            onClick = { deletionCandidates = selectedConversations },
+                            enabled = !operationRunning && selectedConversations.isNotEmpty(),
+                        ) {
+                            Icon(HugeIcons.Delete01, stringResource(R.string.history_page_delete))
                         }
-                    ) {
-                        Icon(
-                            HugeIcons.GlobalSearch,
-                            contentDescription = stringResource(R.string.history_page_search_messages)
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            deletionCandidates = conversations
-                        },
-                        enabled = !operationRunning,
-                    ) {
-                        Icon(HugeIcons.Delete01, contentDescription = stringResource(R.string.history_page_delete_all))
+                    } else {
+                        TextButton(
+                            onClick = { conversations.firstOrNull()?.let { vm.beginSelection(it) } },
+                            enabled = !operationRunning && conversations.isNotEmpty(),
+                        ) { Text(stringResource(R.string.history_page_select)) }
+                        IconButton(onClick = { navController.navigate(Screen.MessageSearch) }) {
+                            Icon(HugeIcons.GlobalSearch, stringResource(R.string.history_page_search_messages))
+                        }
+                        IconButton(
+                            onClick = { deletionCandidates = conversations },
+                            enabled = !operationRunning,
+                        ) {
+                            Icon(HugeIcons.Delete01, stringResource(R.string.history_page_delete_all))
+                        }
                     }
                 }
             )
@@ -165,28 +195,42 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                 }
             }
             items(conversations, key = { it.id }) { conversation ->
-                SwipeableConversationItem(
-                    conversation = conversation,
-                    onClick = {
-                        chatNavigation.existingChat(conversation.id)
-                    },
-                    onDelete = {
-                        vm.deleteForUndo(conversation)
-                    },
-                    onTogglePin = { vm.togglePinStatus(conversation) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .animateItem()
-                )
+                val modifier = Modifier.fillMaxWidth().animateItem()
+                val currentSelection = selection
+                if (currentSelection != null) {
+                    ConversationItem(
+                        conversation = conversation,
+                        selected = conversation.id in currentSelection.ids,
+                        onClick = { vm.toggleSelection(conversation) },
+                        modifier = modifier,
+                    )
+                } else {
+                    SwipeableConversationItem(
+                        conversation = conversation,
+                        onClick = { chatNavigation.existingChat(conversation.id) },
+                        onLongClick = { vm.beginSelection(conversation, select = true) },
+                        onDelete = { vm.deleteForUndo(conversation) },
+                        onTogglePin = { vm.togglePinStatus(conversation) },
+                        modifier = modifier,
+                    )
+                }
             }
         }
     }
 
     deletionCandidates?.let { candidates ->
+        val bulkSelection = selection != null
         AlertDialog(
             onDismissRequest = { deletionCandidates = null },
-            title = { Text(stringResource(R.string.history_page_delete_all_conversations)) },
-            text = { Text(stringResource(R.string.history_page_delete_all_confirmation)) },
+            title = {
+                Text(stringResource(if (bulkSelection) R.string.history_page_delete else R.string.history_page_delete_all_conversations))
+            },
+            text = {
+                Text(
+                    if (bulkSelection) stringResource(R.string.history_page_delete_selected_confirmation, candidates.size)
+                    else stringResource(R.string.history_page_delete_all_confirmation),
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -214,6 +258,7 @@ private fun SwipeableConversationItem(
     conversation: ConversationSummary,
     modifier: Modifier = Modifier,
     onDelete: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
     onTogglePin: () -> Unit = {},
     onClick: () -> Unit = {},
 ) {
@@ -262,6 +307,7 @@ private fun SwipeableConversationItem(
         ConversationItem(
             conversation = conversation,
             onTogglePin = onTogglePin,
+            onLongClick = onLongClick,
             onClick = onClick
         )
     }
@@ -273,19 +319,27 @@ private fun ConversationItem(
     modifier: Modifier = Modifier,
     onTogglePin: () -> Unit = {},
     onClick: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
+    selected: Boolean? = null,
 ) {
+    val interaction = if (selected != null) {
+        Modifier.toggleable(value = selected, role = Role.Checkbox, onValueChange = { onClick() })
+    } else {
+        Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    }
     Surface(
-        onClick = onClick,
         tonalElevation = 2.dp,
         shape = RoundedCornerShape(25),
-        modifier = modifier
+        modifier = modifier.then(interaction),
     ) {
         ListItem(
             supportingContent = {
                 Text(conversation.sortTime.toLocalDateTime())
             },
             trailingContent = {
-                IconButton(
+                if (selected != null) {
+                    Checkbox(checked = selected, onCheckedChange = null)
+                } else IconButton(
                     onClick = onTogglePin
                 ) {
                     Icon(

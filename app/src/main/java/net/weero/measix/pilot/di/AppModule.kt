@@ -83,7 +83,7 @@ val appModule = module {
     single { ArtifactUseCase(get(), get(), get()) }
     single { FileManagementApplicationService(get(), get(), get(), get(), get(), remoteMediaFetcher = get()) }
     single { FileManagementQueryService(get(), get(), get(), get()) }
-    single { MediaExportService(get()) }
+    single { MediaExportService(get(), get<AppScope>()) }
     single { StatsQueryService(get(), get(), get(), get(), get()) }
     single { ChatErrorStore() }
     single { net.weero.measix.pilot.service.webdav.WebDavBackupService(get(), get(), get(), get()) }

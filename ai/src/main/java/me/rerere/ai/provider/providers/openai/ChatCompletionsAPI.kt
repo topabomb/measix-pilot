@@ -63,7 +63,7 @@ import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeader
-import me.rerere.ai.util.encodeNativeImage
+import me.rerere.ai.util.RequestImageEncoder
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
@@ -281,7 +281,7 @@ class ChatCompletionsAPI(
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
 
-    internal fun buildChatCompletionRequest(
+    internal suspend fun buildChatCompletionRequest(
         messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
         providerSetting: ProviderSetting.OpenAI,
@@ -314,6 +314,7 @@ class ChatCompletionsAPI(
                     messages = messages,
                     replayPolicy = replayPolicy,
                     mediaCapabilities = params.mediaCapabilities,
+                    imageEncoder = params.imageEncoder,
                     useDeveloperRoleForSystemMessages = isOfficialOpenAI &&
                             (ModelRegistry.OPENAI_O_MODELS.match(params.model.modelId) ||
                                     ModelRegistry.OPENAI_GPT_5_SERIES.match(params.model.modelId) || isGpt6),
@@ -564,11 +565,12 @@ class ChatCompletionsAPI(
                !mimoThinkingEnabled
     }
 
-    internal fun buildMessages(
+    internal suspend fun buildMessages(
         messages: List<ModelRequestMessage>,
         replayPolicy: ChatReasoningReplayPolicy,
         mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
         useDeveloperRoleForSystemMessages: Boolean = false,
+        imageEncoder: RequestImageEncoder = RequestImageEncoder.Uncached,
     ) = buildJsonArray {
         val filteredMessages = messages.filter { it.isValidToUpload() }
 
@@ -578,17 +580,19 @@ class ChatCompletionsAPI(
                     message = message,
                     replayPolicy = replayPolicy,
                     mediaCapabilities = mediaCapabilities,
+                    imageEncoder = imageEncoder,
                 )
             } else {
-                addNonAssistantMessage(message, useDeveloperRoleForSystemMessages, mediaCapabilities)
+                addNonAssistantMessage(message, useDeveloperRoleForSystemMessages, mediaCapabilities, imageEncoder)
             }
         }
     }
 
-    private fun JsonArrayBuilder.addAssistantMessages(
+    private suspend fun JsonArrayBuilder.addAssistantMessages(
         message: ModelRequestMessage,
         replayPolicy: ChatReasoningReplayPolicy,
         mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder,
     ) {
         val includeVisible = replayPolicy.visible == VisibleReasoningReplay.ALL_ASSISTANT_ENVELOPES
         val includeToolVisible =
@@ -625,6 +629,7 @@ class ChatCompletionsAPI(
                         contentParts = contentBuffer,
                         tools = group.tools,
                         mediaCapabilities = mediaCapabilities,
+                        imageEncoder = imageEncoder,
                         reasoningContent = reasoningParts
                             .takeIf { replayReasoning }
                             ?.joinToString(separator = "") { it.reasoning },
@@ -642,7 +647,7 @@ class ChatCompletionsAPI(
                         add(buildJsonObject {
                             put("role", "tool")
                             put("tool_call_id", tool.providerCallId)
-                            put("content", tool.toToolResultContent(mediaCapabilities))
+                            put("content", tool.toToolResultContent(mediaCapabilities, imageEncoder))
                         })
                     }
                 }
@@ -661,6 +666,7 @@ class ChatCompletionsAPI(
                 contentParts = contentBuffer,
                 tools = emptyList(),
                 mediaCapabilities = mediaCapabilities,
+                imageEncoder = imageEncoder,
                 reasoningContent = reasoningParts
                     .takeIf { includeVisible }
                     ?.joinToString(separator = "") { it.reasoning },
@@ -682,12 +688,13 @@ class ChatCompletionsAPI(
         return items.takeIf { it.isNotEmpty() }?.let(::JsonArray)
     }
 
-    private fun buildAssistantMessageJson(
+    private suspend fun buildAssistantMessageJson(
         contentParts: List<UIMessagePart>,
         tools: List<UIMessagePart.Tool>,
         mediaCapabilities: RequestMediaCapabilities,
         reasoningContent: String?,
         reasoningDetails: JsonArray? = null,
+        imageEncoder: RequestImageEncoder,
     ): JsonObject? {
         val hasUsableContent = contentParts.any { part ->
             when (part) {
@@ -728,7 +735,7 @@ class ChatCompletionsAPI(
                             }
 
                             is UIMessagePart.Image -> {
-                                add(encodeChatImage(part, mediaCapabilities.assistantImages))
+                                add(encodeChatImage(part, mediaCapabilities.assistantImages, imageEncoder))
                             }
 
                             else -> {}
@@ -756,10 +763,11 @@ class ChatCompletionsAPI(
         }
     }
 
-    private fun JsonArrayBuilder.addNonAssistantMessage(
+    private suspend fun JsonArrayBuilder.addNonAssistantMessage(
         message: ModelRequestMessage,
         useDeveloperRoleForSystemMessages: Boolean,
         mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder,
     ) {
         add(buildJsonObject {
             val role = if (message.role == MessageRole.SYSTEM && useDeveloperRoleForSystemMessages) {
@@ -786,7 +794,7 @@ class ChatCompletionsAPI(
                             }
 
                             is UIMessagePart.Image -> {
-                                add(encodeChatImage(part, mediaCapabilities.userImages))
+                                add(encodeChatImage(part, mediaCapabilities.userImages, imageEncoder))
                             }
 
                             else -> {}
@@ -797,8 +805,9 @@ class ChatCompletionsAPI(
         })
     }
 
-    private fun UIMessagePart.Tool.toToolResultContent(
+    private suspend fun UIMessagePart.Tool.toToolResultContent(
         mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder,
     ): JsonElement {
         val images = output.filterIsInstance<UIMessagePart.Image>()
         if (images.isEmpty()) {
@@ -819,7 +828,7 @@ class ChatCompletionsAPI(
                         }
                     }
 
-                    is UIMessagePart.Image -> add(encodeChatImage(part, RequestImageSupport.STRUCTURED))
+                    is UIMessagePart.Image -> add(encodeChatImage(part, RequestImageSupport.STRUCTURED, imageEncoder))
 
                     else -> {}
                 }
@@ -827,14 +836,15 @@ class ChatCompletionsAPI(
         }
     }
 
-    private fun encodeChatImage(
+    private suspend fun encodeChatImage(
         part: UIMessagePart.Image,
         support: RequestImageSupport,
+        imageEncoder: RequestImageEncoder,
     ) = buildJsonObject {
         check(support == RequestImageSupport.STRUCTURED) {
             "Chat Completions received a native image after request projection"
         }
-        val encoded = part.encodeNativeImage()
+        val encoded = imageEncoder.encode(part, withPrefix = true)
         put("type", "image_url")
         put("image_url", buildJsonObject {
             put("url", encoded.base64)
@@ -889,9 +899,14 @@ class ChatCompletionsAPI(
         jsonObject: JsonObject,
         streamState: ChatCompletionsStreamState? = null,
     ): UIMessage {
-        val role = MessageRole.valueOf(
-            jsonObject["role"]?.jsonPrimitive?.contentOrNull?.uppercase() ?: "ASSISTANT"
-        )
+        val rawRole = jsonObject["role"]
+        val role = when {
+            rawRole == null || rawRole == JsonNull -> MessageRole.ASSISTANT
+            rawRole is JsonPrimitive && rawRole.isString ->
+                MessageRole.entries.firstOrNull { it.name.equals(rawRole.content.trim(), ignoreCase = true) }
+                    ?: MessageRole.ASSISTANT
+            else -> error("chat_completions_invalid_role_type: Response role must be a string or null.")
+        }
 
         // 也许支持其他模态的输出content?
         val content = when (val contentElement = jsonObject["content"]) {

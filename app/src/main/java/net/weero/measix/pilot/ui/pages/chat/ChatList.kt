@@ -7,7 +7,6 @@ import me.rerere.hugeicons.stroke.ArrowUp01
 import me.rerere.hugeicons.stroke.ArrowDownDouble
 import me.rerere.hugeicons.stroke.ArrowUpDouble
 import me.rerere.hugeicons.stroke.CursorPointer01
-import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Cancel01
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -51,7 +50,6 @@ import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,7 +62,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -76,17 +76,11 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalScrollCaptureInProgress
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastCoerceAtLeast
 import androidx.compose.ui.zIndex
@@ -100,7 +94,6 @@ import me.rerere.ai.ui.UIMessage
 import net.weero.measix.pilot.R
 import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import net.weero.measix.pilot.data.datastore.Settings
-import net.weero.measix.pilot.data.datastore.getAssistantById
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.data.model.MessageNode
 import net.weero.measix.pilot.service.ChatError
@@ -119,6 +112,7 @@ import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewActions
 import net.weero.measix.pilot.ui.components.ui.LocalImagePreviewOverlay
 import net.weero.measix.pilot.ui.components.ui.rememberImageBackgroundHost
 import net.weero.measix.pilot.ui.theme.asChatChrome
+import net.weero.measix.pilot.ui.components.ui.DocumentExportActions
 import net.weero.measix.pilot.ui.components.ui.ErrorCardsDisplay
 import net.weero.measix.pilot.ui.components.ui.ListSelectableItem
 import net.weero.measix.pilot.ui.components.ui.ModelIconFallback
@@ -154,6 +148,11 @@ internal fun ChatList(
     turnPresentation: ConversationPresentation,
     attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
     previewMode: Boolean,
+    overviewNodeId: Uuid?,
+    exportActions: DocumentExportActions,
+    launchExportDocument: (Boolean, String) -> Unit,
+    requestExportSelection: Boolean,
+    onExportSelectionOpened: () -> Unit,
     settings: Settings,
     readiness: ConversationReadiness,
     assistant: Assistant?,
@@ -170,7 +169,7 @@ internal fun ChatList(
     onShowTerminalError: (UIMessage) -> Unit = {},
     onUpdateMessage: (MessageNode) -> Unit = {},
     onClickSuggestion: (String) -> Unit = {},
-    onJumpToMessage: (Int) -> Unit = {},
+    onJumpToMessage: (Uuid) -> Unit = {},
     onProviderConfigClick: () -> Unit,
     onReadinessModelClick: () -> Unit,
     onReadinessMcpClick: () -> Unit,
@@ -194,13 +193,13 @@ internal fun ChatList(
         }
     ) { target ->
         if (target) {
-            ChatListPreview(
+            ChatOverview(
                 innerPadding = innerPadding,
                 snapshot = snapshot,
-                settings = settings,
+                favoriteNodeIds = favoriteNodeIds,
+                currentNodeId = overviewNodeId,
                 hazeState = hazeState,
                 onJumpToMessage = onJumpToMessage,
-                animatedVisibilityScope = this@AnimatedContent,
             )
         } else {
             ChatListNormal(
@@ -215,6 +214,10 @@ internal fun ChatList(
                 onReadHistory = onReadHistory,
                 turnPresentation = turnPresentation,
                 attachmentPreviews = attachmentPreviews,
+                exportActions = exportActions,
+                launchExportDocument = launchExportDocument,
+                requestExportSelection = requestExportSelection,
+                onExportSelectionOpened = onExportSelectionOpened,
                 settings = settings,
                 readiness = readiness,
                 assistant = assistant,
@@ -263,6 +266,10 @@ private fun ChatListNormal(
     onReadHistory: () -> Unit,
     turnPresentation: ConversationPresentation,
     attachmentPreviews: Map<String, net.weero.measix.pilot.service.AttachmentPreview>,
+    exportActions: DocumentExportActions,
+    launchExportDocument: (Boolean, String) -> Unit,
+    requestExportSelection: Boolean,
+    onExportSelectionOpened: () -> Unit,
     settings: Settings,
     readiness: ConversationReadiness,
     assistant: Assistant?,
@@ -356,10 +363,20 @@ private fun ChatListNormal(
         }
     }
 
-    // 聊天选择
-    val selectedItems = remember { mutableStateListOf<Uuid>() }
-    var selecting by remember { mutableStateOf(false) }
-    var showExportSheet by remember { mutableStateOf(false) }
+    val selectedItems = rememberSaveable(snapshot.conversationId.toString(), saver = listSaver(
+        save = { ids: SnapshotStateList<Uuid> -> ids.map(Uuid::toString) },
+        restore = { ids -> mutableStateListOf<Uuid>().apply { addAll(ids.map(Uuid::parse)) } },
+    )) { mutableStateListOf<Uuid>() }
+    var selecting by rememberSaveable(snapshot.conversationId.toString()) { mutableStateOf(false) }
+    var showExportSheet by rememberSaveable(snapshot.conversationId.toString()) { mutableStateOf(false) }
+    LaunchedEffect(requestExportSelection) {
+        if (requestExportSelection) {
+            selectedItems.clear()
+            selectedItems.addAll(snapshot.nodes.map { it.id })
+            selecting = selectedItems.isNotEmpty()
+            onExportSelectionOpened()
+        }
+    }
 
     // 自动跟随键盘滚动
     ImeLazyListAutoScroller(lazyListState = state)
@@ -468,7 +485,8 @@ private fun ChatListNormal(
                     .hazeSource(state = hazeState)
                     .padding(top = innerPadding.calculateTopPadding()),
                 ) {
-                    if (isEmptyConversation) {
+                    val prefix = chatListPrefix(snapshot, readiness)
+                    if (prefix == ChatListPrefix.SETUP) {
                         item(key = "ConversationSetup") {
                             Column(
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -494,11 +512,11 @@ private fun ChatListNormal(
                                 )
                             }
                         }
-                    } else if (readiness.requiresProviderConfiguration && snapshot.header.scope is net.weero.measix.pilot.data.configuration.ConfigurationScope.Personal) {
+                    } else if (prefix == ChatListPrefix.PROVIDER) {
                         item(key = "ProviderConfigWarning") {
                             ProviderConfigWarningCard(onClick = onProviderConfigClick)
                         }
-                    } else if (!readiness.canSend) {
+                    } else if (prefix == ChatListPrefix.MODEL) {
                         item(key = "ConversationModelReadiness") {
                             ConversationReadinessCard(
                                 readiness = readiness,
@@ -666,7 +684,7 @@ private fun ChatListNormal(
                 ) {
                     Tooltip(
                         tooltip = {
-                            Text("Clear selection")
+                            Text(stringResource(R.string.cancel))
                         }
                     ) {
                         IconButton(
@@ -680,14 +698,15 @@ private fun ChatListNormal(
                     }
                     Tooltip(
                         tooltip = {
-                            Text("Select all")
+                            Text(stringResource(R.string.setting_provider_page_select_all, snapshotNodes.size))
                         }
                     ) {
                         IconButton(
                             onClick = {
-                                if (selectedItems.isNotEmpty()) {
+                                if (snapshotNodes.all { it.id in selectedItems }) {
                                     selectedItems.clear()
                                 } else {
+                                    selectedItems.clear()
                                     selectedItems.addAll(snapshotNodes.map { it.id })
                                 }
                             }
@@ -697,7 +716,7 @@ private fun ChatListNormal(
                     }
                     Tooltip(
                         tooltip = {
-                            Text("Confirm")
+                            Text(stringResource(R.string.confirm))
                         }
                     ) {
                         FilledIconButton(
@@ -718,6 +737,8 @@ private fun ChatListNormal(
             // 导出对话框
             ChatExportSheet(
                 source = detailSource,
+                actions = exportActions,
+                launchDocument = launchExportDocument,
                 modelIconFallback = modelIconFallback,
                 visible = showExportSheet,
                 onDismissRequest = {
@@ -749,207 +770,6 @@ private fun ChatListNormal(
                     onClickSuggestion = onClickSuggestion,
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
-            }
-        }
-    }
-}
-
-/**
- * 提取包含搜索词的文本片段，确保匹配词在开头可见
- */
-private fun extractMatchingSnippet(
-    text: String,
-    query: String
-): String {
-    if (query.isBlank()) {
-        return text
-    }
-
-    val matchIndex = text.indexOf(query, ignoreCase = true)
-    if (matchIndex == -1) {
-        return text
-    }
-
-    // 直接从匹配词开始显示，确保匹配词在最前面
-    val snippet = text.substring(matchIndex)
-
-    // 只在前面有内容时添加省略号
-    return if (matchIndex > 0) {
-        "...$snippet"
-    } else {
-        snippet
-    }
-}
-
-private fun buildHighlightedText(
-    text: String,
-    query: String,
-    highlightColor: Color,
-    highlightContentColor: Color,
-): AnnotatedString {
-    if (query.isBlank()) {
-        return AnnotatedString(text)
-    }
-
-    return buildAnnotatedString {
-        var startIndex = 0
-        var index = text.indexOf(query, startIndex, ignoreCase = true)
-
-        while (index >= 0) {
-            // 添加高亮前的文本
-            append(text.substring(startIndex, index))
-
-            // 添加高亮文本
-            withStyle(
-                style = SpanStyle(
-                    background = highlightColor,
-                    color = highlightContentColor
-                )
-            ) {
-                append(text.substring(index, index + query.length))
-            }
-
-            startIndex = index + query.length
-            index = text.indexOf(query, startIndex, ignoreCase = true)
-        }
-
-        // 添加剩余文本
-        if (startIndex < text.length) {
-            append(text.substring(startIndex))
-        }
-    }
-}
-
-@Composable
-private fun ChatListPreview(
-    innerPadding: PaddingValues,
-    snapshot: ConversationPresentationSnapshot,
-    settings: Settings,
-    hazeState: HazeState,
-    animatedVisibilityScope: AnimatedVisibilityScope,
-    onJumpToMessage: (Int) -> Unit
-) {
-    var searchQuery by remember { mutableStateOf("") }
-
-    // 过滤消息，同时保留原始 index 避免后续 O(n) indexOf 查找
-    val renderNodes = snapshot.nodes
-    val filteredMessages = remember(renderNodes, searchQuery) {
-        val nodes = renderNodes
-        if (searchQuery.isBlank()) {
-            nodes.mapIndexed { index, node -> index to node }
-        } else {
-            nodes.mapIndexed { index, node -> index to node }
-                .filter { (_, node) -> node.currentMessage.toText().contains(searchQuery, ignoreCase = true) }
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .padding(top = innerPadding.calculateTopPadding())
-            .widthIn(max = AdaptiveLayoutDefaults.ReadableContentMaxWidth)
-            .fillMaxWidth()
-            .fillMaxHeight()
-            .hazeSource(state = hazeState),
-    ) {
-        // 搜索框
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            placeholder = { Text(stringResource(R.string.history_page_search)) },
-            leadingIcon = {
-                Icon(
-                    imageVector = HugeIcons.Search01,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp)
-                )
-            },
-            trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(
-                            imageVector = HugeIcons.Cancel01,
-                            contentDescription = "Clear",
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-            },
-            singleLine = true,
-            shape = CircleShape,
-            maxLines = 1,
-        )
-
-        // 消息预览
-        LazyColumn(
-            contentPadding = PaddingValues(
-                start = 16.dp,
-                top = 8.dp,
-                end = 16.dp,
-                bottom = 24.dp + innerPadding.calculateBottomPadding(),
-            ),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-        ) {
-            itemsIndexed(
-                items = filteredMessages,
-                key = { index, item -> item.second.id },
-            ) { _, (originalIndex, node) ->
-                val message = node.currentMessage
-                val isUser = message.role == me.rerere.ai.core.MessageRole.USER
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(
-                            if (!isUser) Modifier.padding(end = 24.dp) else Modifier
-                        ),
-                    horizontalAlignment = if (isUser) Alignment.End else Alignment.Start,
-                ) {
-                    Surface(
-                        shape = MaterialTheme.shapes.medium,
-                        color = if (isUser) {
-                            MaterialTheme.colorScheme.primaryContainer.asChatChrome()
-                        } else {
-                            MaterialTheme.colorScheme.secondaryContainer.asChatChrome()
-                        },
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .clickable {
-                                    onJumpToMessage(originalIndex)
-                                }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val highlightColor = MaterialTheme.colorScheme.tertiaryContainer
-                            val highlightContentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                            val highlightedText = remember(searchQuery, message, highlightColor, highlightContentColor) {
-                                val fullText = message.toText().trim().ifBlank { "[...]" }
-                                val messageText = extractMatchingSnippet(
-                                    text = fullText,
-                                    query = searchQuery
-                                )
-                                buildHighlightedText(
-                                    text = messageText,
-                                    query = searchQuery,
-                                    highlightColor = highlightColor,
-                                    highlightContentColor = highlightContentColor,
-                                )
-                            }
-                            Text(
-                                text = highlightedText,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
             }
         }
     }

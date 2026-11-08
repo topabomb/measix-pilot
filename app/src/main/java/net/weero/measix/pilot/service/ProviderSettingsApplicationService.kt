@@ -17,6 +17,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.provider.validateBalanceOption
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -48,6 +49,7 @@ class ProviderSettingsApplicationService(
     suspend fun createProvider(draft: ProviderSetting): ConfigurationReference.User {
         val reference = requireNotNull(draft.id as? ConfigurationReference.User) { "provider_creation_requires_user_identity" }
         require(draft.name.isNotBlank()) { "provider_name_required" }
+        (draft as? ProviderSetting.OpenAI)?.validateBalanceOption()
         require(draft.models.all { it.id is ConfigurationReference.User }) { "provider_models_require_user_identity" }
         require(draft.models.map { it.id }.distinct().size == draft.models.size) { "duplicate_provider_model_identity" }
         settingsStore.updateLocal { current ->
@@ -66,6 +68,7 @@ class ProviderSettingsApplicationService(
 
     suspend fun saveConfiguration(id: ConfigurationReference, edited: ProviderSetting) = updateProvider(id) { latest ->
         if (edited.id != id) return@updateProvider latest
+        (edited as? ProviderSetting.OpenAI)?.validateBalanceOption()
         edited.copyProvider(
             name = edited.name.trim(),
             models = latest.models,
@@ -251,6 +254,8 @@ internal fun ProviderSetting.OpenAI.balanceRequestFingerprint(): String {
         apiKey,
         balanceOption.apiPath,
         balanceOption.resultPath,
+        balanceOption.method.name,
+        balanceOption.body,
         customHeaders.toHeaders().let { headers ->
             headers.names().sorted().joinToString("\u0000") { name -> "${name.lowercase(java.util.Locale.ROOT)}=${headers[name]}" }
         },

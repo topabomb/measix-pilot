@@ -863,9 +863,7 @@ private fun AnnotatedString.Builder.appendHtmlInlineElement(
                 color = colorScheme.primary,
             ).merge(cssStyle ?: SpanStyle())
         ) {
-            append(' ')
-            append(element.text())
-            append(' ')
+            appendInlineCode(element.text(), inlineContents, colorScheme.outline)
         }
 
         "a" -> {

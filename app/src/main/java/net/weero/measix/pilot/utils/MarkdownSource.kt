@@ -3,7 +3,6 @@ package net.weero.measix.pilot.utils
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
-import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.parser.MarkdownParser
 
 /** Parsing changes are a view; offsets still address the unmodified message for copy/export. */
@@ -24,7 +23,7 @@ internal fun prepareMarkdownSource(original: String): MarkdownSource {
     positions += original.length
     val input = normalized.toString()
     // Use the parser's ranges: four-backtick, indented, inline and unclosed code all stay literal.
-    val tree = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(input)
+    val tree = MarkdownParser(PilotMarkdownFlavour()).buildMarkdownTreeFromString(input)
     val protected = ArrayList<IntRange>()
     fun collect(node: ASTNode) {
         if (node.type in setOf(MarkdownElementTypes.CODE_FENCE, MarkdownElementTypes.CODE_SPAN,

@@ -6,12 +6,22 @@ import net.weero.measix.pilot.data.configuration.ConfigurationScope
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
+import android.os.Debug
+import android.os.Process
+import android.os.SystemClock
+import android.util.Log
+import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
+import net.weero.measix.pilot.data.ai.attachments.ModelRequestImageEncoder
+import net.weero.measix.pilot.data.enterprise.RealmAccess
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -342,6 +352,81 @@ class ArtifactUploadImageReadIntegrationTest {
         }
         assertTrue(store.deleteUserRequested(enterprise, resource.id) is ArtifactDeleteResult.Completed)
         assertTrue(File(root, personal.relativePath).isFile)
+    }
+
+    @Test
+    fun retainedImageReusesRealWebpAcrossRequests(): Unit = runBlocking {
+        val bitmap = Bitmap.createBitmap(1600, 900, Bitmap.Config.ARGB_8888)
+        val png = try {
+            val pixels = IntArray(bitmap.width * bitmap.height) { index ->
+                0xff000000.toInt() or ((index * 7919 xor (index / bitmap.width * 1327)) and 0xffffff)
+            }
+            bitmap.setPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            ByteArrayOutputStream().use { output ->
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+                output.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
+        }
+        val entity = register("cache-measurement.png", png)
+        val image = UIMessagePart.Image(android.net.Uri.fromFile(store.file(entity)).toString())
+        val messages = listOf(UIMessage(role = me.rerere.ai.core.MessageRole.USER, parts = listOf(image)))
+        val cache = ModelRequestImageEncoder()
+        suspend fun encode() = store.retainForRequest(ConfigurationScope.Personal, messages).use { reads ->
+            cache.open(RealmAccess.Personal, reads).use { it.encode(image, true) }
+        }
+        encode() // Warm the platform decoder and JIT before collecting cold-cache samples.
+        data class Sample(val wallNs: Long, val cpuMs: Long, val allocatedBytes: Long?, val sampledHeapPeak: Long)
+        fun allocated() = Debug.getRuntimeStat("art.gc.bytes-allocated")?.toLongOrNull()
+        fun usedHeap() = Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() } + Debug.getNativeHeapAllocatedSize()
+        suspend fun measure(): Pair<me.rerere.ai.util.EncodedImage, Sample> {
+            val sampling = AtomicBoolean(true)
+            var heapPeak = usedHeap()
+            val sampler = thread(name = "image-encoding-heap-sample", isDaemon = true) {
+                while (sampling.get()) {
+                    heapPeak = maxOf(heapPeak, usedHeap())
+                    Thread.sleep(5)
+                }
+            }
+            val start = SystemClock.elapsedRealtimeNanos()
+            val cpu = Process.getElapsedCpuTime()
+            val before = allocated()
+            val elapsed: Long
+            val processCpu: Long
+            val after: Long?
+            val result = try {
+                encode().also {
+                    elapsed = SystemClock.elapsedRealtimeNanos() - start
+                    processCpu = Process.getElapsedCpuTime() - cpu
+                    after = allocated()
+                }
+            } finally {
+                sampling.set(false)
+                sampler.join()
+            }
+            val allocation = if (before != null && after != null) after - before else null
+            return result to Sample(elapsed, processCpu, allocation, heapPeak)
+        }
+        val cold = mutableListOf<Sample>()
+        val warm = mutableListOf<Sample>()
+        repeat(5) {
+            cache.clear()
+            val (first, coldSample) = measure()
+            val (second, warmSample) = measure()
+            cold += coldSample
+            warm += warmSample
+            assertEquals(first, second)
+            assertEquals("image/webp", second.mimeType)
+        }
+        assertTrue(store.deleteUserRequested(ConfigurationScope.Personal, entity.id) is ArtifactDeleteResult.Completed)
+        try {
+            encode()
+            throw AssertionError("Deleted source was served from the derived cache")
+        } catch (error: IllegalStateException) {
+            assertEquals("model_image_not_retained", error.message)
+        }
+        Log.i("PilotImageEncoding", "1600x900 PNG=${png.size} bytes; process-level samples cold=$cold warm=$warm")
     }
 
     private suspend fun register(name: String, bytes: ByteArray = png, scope: ConfigurationScope = ConfigurationScope.Personal): ArtifactEntity {

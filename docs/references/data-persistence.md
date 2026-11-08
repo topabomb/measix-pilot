@@ -4,6 +4,9 @@
 
 `AppDatabase` 是业务 Room 数据库；`APP_DATABASE_VERSION`、实体注解、导出 schema 与显式 migration 必须一致。索引只服务既有 DAO 查询，不改变 durable owner 或写协议。完整列、索引及约束以实体和 `app/schemas/` 为准；本文只解释影响查询、归属与恢复的结构。
 
+配置备份的模型收藏去重沿 [用户配置迁移](android-configuration-architecture.md#23-用户配置结构与默认语义)，恢复仅合并个人域数据。
+主动导出准备的临时文件由 MediaExportService 释放或随原临时目录退役，个人备份不包含这些临时输出。
+
 ## 数据归属与查询
 
 Conversation、Memory、Artifact、生成媒体、会话文件夹和收藏根记录保存完整 `scope`；消息、Turn、Tool 与上下文

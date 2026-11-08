@@ -2163,4 +2163,16 @@
   <string name="webdav_credentials_help">匿名アクセスでは空欄にできます。認証が必要な場合は、サービスから提供された WebDAV の認証情報を入力してください。</string>
   <string name="enterprise_assistant_required">企業は、利用可能なチャットモデルを持つ有効なアシスタントを1つ以上公開する必要があります。管理者に設定の公開を依頼し、再度同期してください。</string>
   <string name="permission_local_network_denied">ローカルネットワークへのアクセスが制限される場合があります。アプリ設定で許可できます。</string>
+  <string name="provider_balance_method">リクエストメソッド</string>
+  <string name="provider_balance_json_body">JSON リクエスト本文</string>
+  <string name="provider_balance_template_hint">JSON の文字列値に {{apiKey}} または {{baseUrl}} を使用できます。</string>
+  <string name="chat_overview_matches">一致 %1$d 件</string>
+  <string name="chat_overview_reading_position">現在の閲覧位置</string>
+  <string name="chat_overview_message_without_text">本文のないメッセージ</string>
+  <string name="permission_local_network_allow">ローカルネットワークへのアクセスを許可</string>
+  <string name="history_summary_retention_invalid">0 から 2,147,483,647 までの整数を入力してください。</string>
+  <string name="history_page_select">選択</string>
+  <string name="history_page_selected_count">選択済み %1$d 件</string>
+  <string name="history_page_delete_selected_confirmation">選択した会話（%1$d 件）を削除しますか？ この操作は元に戻せません。</string>
+  <string name="chat_page_export_save_gallery">ギャラリーに保存</string>
 </resources>

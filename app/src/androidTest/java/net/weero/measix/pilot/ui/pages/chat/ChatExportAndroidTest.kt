@@ -7,6 +7,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyAncestor
@@ -16,6 +18,7 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import net.weero.measix.pilot.ui.components.toast.rememberToasterState
@@ -35,6 +38,7 @@ import net.weero.measix.pilot.service.ConversationQueryService
 import net.weero.measix.pilot.service.ConversationViewLease
 import net.weero.measix.pilot.service.FileManagementApplicationService
 import net.weero.measix.pilot.service.MediaExportService
+import net.weero.measix.pilot.ui.components.ui.DocumentExportActions
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.context.LocalSettings
@@ -44,8 +48,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.koin.compose.KoinApplication
-import org.koin.dsl.module
 import kotlin.uuid.Uuid
 
 @RunWith(AndroidJUnit4::class)
@@ -73,8 +75,10 @@ class ChatExportAndroidTest {
         var dismissals = 0
         val clipboard = compose.activity.getSystemService(ClipboardManager::class.java)
         compose.setContent {
-            ExportHost {
-                ChatExportSheet(source = view, visible = visible, onDismissRequest = {
+            ExportHost { actions, files, service ->
+                ChatExportFailure(actions)
+                ChatExportSheet(source = view, actions = actions, launchDocument = rememberChatExportLauncher(actions),
+                    contentFiles = files, mediaExports = service, visible = visible, onDismissRequest = {
                     dismissals++
                     selected = emptyList()
                     visible = false
@@ -82,7 +86,7 @@ class ChatExportAndroidTest {
             }
         }
         try {
-            compose.onNodeWithText(compose.activity.getString(R.string.chat_page_export_markdown)).performClick()
+            compose.onAllNodesWithText(compose.activity.getString(R.string.export_share))[0].performClick()
             compose.onNode(hasText(diagnostic) and hasAnyAncestor(isDialog())).assertIsDisplayed()
             compose.onNode(hasContentDescription(compose.activity.getString(R.string.chat_page_copy_error)) and
                 hasAnyAncestor(isDialog())).performClick()
@@ -121,14 +125,16 @@ class ChatExportAndroidTest {
         var selected by mutableStateOf(original)
         var dismissals = 0
         compose.setContent {
-            ExportHost {
-                ChatExportSheet(source = view, visible = true,
+            ExportHost { actions, files, service ->
+                ChatExportFailure(actions)
+                ChatExportSheet(source = view, actions = actions, launchDocument = rememberChatExportLauncher(actions),
+                    contentFiles = files, mediaExports = service, visible = true,
                     onDismissRequest = { dismissals++; selected = emptyList() },
                     conversationTitle = "Original export selection", selectedMessages = selected, queries = queries)
             }
         }
         try {
-            compose.onNodeWithText(compose.activity.getString(R.string.chat_page_export_markdown)).performClick()
+            compose.onAllNodesWithText(compose.activity.getString(R.string.export_share))[0].performClick()
             compose.waitUntil(5_000) { attempts.get() == 1 }
             compose.mainClock.advanceTimeBy(1_000)
             compose.onNodeWithContentDescription(compose.activity.getString(R.string.chat_page_copy_error))
@@ -145,18 +151,17 @@ class ChatExportAndroidTest {
     }
 
     @Composable
-    private fun ExportHost(content: @Composable () -> Unit) {
-        KoinApplication(application = { modules(module {
-            single { mockk<FileManagementApplicationService>() }
-            single { MediaExportService(get()) }
-        }) }) {
-            MaterialTheme {
-                CompositionLocalProvider(
-                    LocalSettings provides Settings.dummy(),
-                    LocalToaster provides rememberToasterState(),
-                    LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(),
-                ) { content() }
-            }
+    private fun ExportHost(content: @Composable (DocumentExportActions, FileManagementApplicationService, MediaExportService) -> Unit) {
+        val scope = rememberCoroutineScope()
+        val files = remember { mockk<FileManagementApplicationService>() }
+        val service = remember(files, scope) { MediaExportService(files, scope) }
+        val actions = remember(service, scope) { DocumentExportActions(service, scope) }
+        MaterialTheme {
+            CompositionLocalProvider(
+                LocalSettings provides Settings.dummy(),
+                LocalToaster provides rememberToasterState(),
+                LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo(),
+            ) { content(actions, files, service) }
         }
     }
 }

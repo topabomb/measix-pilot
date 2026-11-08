@@ -204,8 +204,14 @@ class HistoryVMTest {
             }
             val vm = commandVm(selected, application)
             store.put("history", vm)
-            vm.deleteConversations(listOf(row, historyRow(selection, assistant)))
+            val failed = historyRow(selection, assistant)
+            val unattempted = historyRow(selection, assistant)
+            vm.beginSelection(row, select = true)
+            vm.toggleSelection(failed)
+            vm.toggleSelection(unattempted)
+            vm.deleteConversations(listOf(row, failed, unattempted))
             runCurrent()
+            assertEquals(setOf(failed.id, unattempted.id), vm.selection.value?.ids)
             assertEquals(1, vm.deletedNavigation.value.size)
             org.junit.Assert.assertTrue(vm.commandFailure.value!!.contains("second deletion failed"))
             var navigations = 0

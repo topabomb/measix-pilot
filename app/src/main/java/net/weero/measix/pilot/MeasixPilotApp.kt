@@ -157,7 +157,7 @@ class AppScope(
 /** Detach old temporary files before any application owner can create new exports. */
 internal fun retireApplicationTempFiles(cacheDir: java.io.File): List<java.io.File> {
     val retired = cacheDir.listFiles().orEmpty().filter { it.isDirectory && it.name.startsWith("retired-temp-") }.toMutableList()
-    for (name in listOf("temp", "webview_content")) {
+    for (name in listOf("temp", "webview_content", "export")) {
         val current = java.io.File(cacheDir, name)
         if (!current.exists()) continue
         val destination = java.io.File(cacheDir, "retired-temp-${java.util.UUID.randomUUID()}")

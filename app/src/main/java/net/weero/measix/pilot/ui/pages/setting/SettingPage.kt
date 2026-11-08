@@ -2,8 +2,10 @@ package net.weero.measix.pilot.ui.pages.setting
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -14,6 +16,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -59,6 +62,9 @@ import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
 import net.weero.measix.pilot.ui.components.ui.Select
+import net.weero.measix.pilot.ui.components.ui.permission.PermissionLocalNetwork
+import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
+import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.hooks.AppLanguage
 import net.weero.measix.pilot.ui.hooks.rememberAppLanguage
@@ -94,6 +100,9 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
         }
     }
 
+    val localNetwork = if (Build.VERSION.SDK_INT >= 37) rememberPermissionState(PermissionLocalNetwork) else null
+    if (localNetwork != null) PermissionManager(localNetwork)
+
     Scaffold(
         topBar = {
             LargeFlexibleTopAppBar(
@@ -127,6 +136,29 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         onClick = { navController.navigate(Screen.SettingProvider) },
                         modifier = Modifier.padding(horizontal = 8.dp),
                     )
+                }
+            }
+
+            if (localNetwork != null && !localNetwork.allPermissionsGranted) {
+                item("localNetworkPermission") {
+                    CardGroup(
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        title = { Text(stringResource(R.string.permission_local_network)) },
+                    ) {
+                        item(
+                            headlineContent = {
+                                Column {
+                                    Text(stringResource(R.string.permission_local_network_desc))
+                                    TextButton(onClick = localNetwork::requestPermissions) {
+                                        Text(stringResource(R.string.permission_local_network_allow))
+                                    }
+                                    TextButton(onClick = localNetwork::openAppSettings) {
+                                        Text(stringResource(R.string.permission_go_to_settings))
+                                    }
+                                }
+                            },
+                        )
+                    }
                 }
             }
 

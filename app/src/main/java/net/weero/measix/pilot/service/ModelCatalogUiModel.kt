@@ -96,7 +96,7 @@ internal data class ModelCatalogUiModel(
     }
 
     fun favorites(references: List<ConfigurationReference>, type: ModelType): List<ModelFavoriteUiModel> =
-        references.mapNotNull { reference ->
+        references.distinct().mapNotNull { reference ->
             val group = groups.firstOrNull { it.models.any { model -> model.model.id == reference } }
             val choice = group?.models?.firstOrNull { it.model.id == reference }
             if (choice != null && choice.model.type != type) null

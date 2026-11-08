@@ -59,6 +59,19 @@ class ProviderResponseCancellationTest {
         }
     }
 
+    @Test fun `post balance cancellation closes the real response body`() = runBlocking {
+        for (status in listOf(200, 429)) {
+            assertCancelledDuringBody(status) { client, endpoint ->
+                OpenAIProvider(client).getBalance(ProviderSetting.OpenAI(
+                    baseUrl = endpoint,
+                    balanceOption = me.rerere.ai.provider.BalanceOption(
+                        enabled = true, method = me.rerere.ai.provider.BalanceMethod.POST,
+                    ),
+                ))
+            }
+        }
+    }
+
     @Test fun `image generation edits and result downloads cancel success and error response bodies`() = runBlocking {
         val image = temporary.newFile("input.png").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         for (edit in listOf(false, true)) for (download in listOf(false, true)) {

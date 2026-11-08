@@ -11,6 +11,7 @@ class SettingsLockedException(
 internal fun Settings.canonicalizeForDataStore(): Settings {
     val persistedSearchServices = searchServices.ifEmpty { listOf(SearchServiceOptions.DEFAULT) }
     return copy(
+        favoriteModels = favoriteModels.distinct(),
         searchServices = persistedSearchServices,
         selectedSearchServiceId = selectedSearchServiceId
             ?.takeIf { selected -> persistedSearchServices.any { it.id == selected } }

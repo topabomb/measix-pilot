@@ -14,13 +14,18 @@ import net.weero.measix.pilot.service.turn.TurnRunner
 import net.weero.measix.pilot.data.ai.transformers.TemplateTransformer
 import net.weero.measix.pilot.data.datastore.SettingsStore
 import net.weero.measix.pilot.data.enterprise.EnterpriseAppliedStore
-import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
 import net.weero.measix.pilot.data.enterprise.EnterpriseExitReason
 import net.weero.measix.pilot.data.enterprise.PlatformControlClient
 import net.weero.measix.pilot.service.PlatformEnterpriseService
 import net.weero.measix.pilot.service.EnterpriseExitService
 import net.weero.measix.pilot.service.EnterpriseSynchronizationService
 import net.weero.measix.pilot.AppScope
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
+import net.weero.measix.pilot.data.ai.attachments.ModelRequestImageEncoder
+import net.weero.measix.pilot.data.enterprise.EnterpriseSessionController
+import net.weero.measix.pilot.data.enterprise.EnterpriseState
 import java.io.File
 import net.weero.measix.pilot.data.db.AppDatabase
 import net.weero.measix.pilot.data.db.fts.MessageFtsManager
@@ -162,6 +167,18 @@ val dataSourceModule = module {
     single { McpQueryService(settingsStore = get(), coordinator = get(), configurationQueries = get(), sessions = get(), scope = get()) }
 
     single {
+        val sessions = get<EnterpriseSessionController>()
+        val files = get<net.weero.measix.pilot.data.files.ArtifactStore>()
+        val sessionChanges = sessions.state.map { state ->
+            val manifest = (state as? EnterpriseState.Available)?.manifest
+            manifest?.let { it.session?.id to it.phase }
+        }.distinctUntilChanged().map { Unit }
+        ModelRequestImageEncoder(requireAccess = { sessions.withRealmAccess(it) {} }).also {
+            it.observeInvalidations(get<AppScope>(), merge(files.lifecycleChanges(), sessionChanges))
+        }
+    }
+
+    single {
         TurnRunner(
             context = get(),
             providerManager = get(),
@@ -169,6 +186,7 @@ val dataSourceModule = module {
             attachmentResolver = get(),
             toolOutputStore = get(),
             artifactStore = get(),
+            imageEncoder = get(),
         )
     }
 

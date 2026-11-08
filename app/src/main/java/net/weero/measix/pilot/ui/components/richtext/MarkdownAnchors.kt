@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.components.richtext
 
+import net.weero.measix.pilot.utils.PilotMarkdownFlavour
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -8,7 +9,7 @@ import androidx.compose.foundation.relocation.bringIntoViewRequester
 internal val LocalMarkdownAnchors = compositionLocalOf<MutableMap<String, MutableList<BringIntoViewRequester>>?> { null }
 
 internal fun markdownHeadingText(source: String): String {
-    val flavour = org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor()
+    val flavour = PilotMarkdownFlavour()
     val tree = org.intellij.markdown.parser.MarkdownParser(flavour).buildMarkdownTreeFromString(source)
     fun imageLabel(node: org.intellij.markdown.ast.ASTNode): org.intellij.markdown.ast.ASTNode? =
         if (node.type == org.intellij.markdown.MarkdownElementTypes.LINK_TEXT) node

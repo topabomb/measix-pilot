@@ -2171,4 +2171,16 @@
   <string name="webdav_credentials_help">Leave credentials blank for anonymous access. Otherwise, use the WebDAV credentials from your service.</string>
   <string name="enterprise_assistant_required">The enterprise must publish at least one enabled assistant with an available chat model. Ask your administrator to publish the configuration, then sync again.</string>
   <string name="permission_local_network_denied">Local network access may be limited. Allow it in app settings.</string>
+  <string name="provider_balance_method">Request method</string>
+  <string name="provider_balance_json_body">JSON request body</string>
+  <string name="provider_balance_template_hint">Use {{apiKey}} or {{baseUrl}} in JSON string values.</string>
+  <string name="chat_overview_matches">%1$d matches</string>
+  <string name="chat_overview_reading_position">Reading position</string>
+  <string name="chat_overview_message_without_text">Message without text</string>
+  <string name="permission_local_network_allow">Allow local network access</string>
+  <string name="history_summary_retention_invalid">Enter a whole number from 0 to 2,147,483,647.</string>
+  <string name="history_page_select">Select</string>
+  <string name="history_page_selected_count">Selected: %1$d</string>
+  <string name="history_page_delete_selected_confirmation">Delete the selected conversations (%1$d)? This cannot be undone.</string>
+  <string name="chat_page_export_save_gallery">Save to gallery</string>
 </resources>

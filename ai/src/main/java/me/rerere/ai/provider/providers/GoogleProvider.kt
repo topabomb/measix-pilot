@@ -68,7 +68,7 @@ import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.RequestBodyOwnership
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.configureSessionHeader
-import me.rerere.ai.util.encodeNativeImage
+import me.rerere.ai.util.RequestImageEncoder
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.removeElements
@@ -442,7 +442,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
     }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
-    internal fun buildCompletionRequestBody(
+    internal suspend fun buildCompletionRequestBody(
         messages: List<ModelRequestMessage>,
         params: TextGenerationParams,
         sourceProfile: String,
@@ -526,7 +526,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         // Contents (user messages)
         put(
             "contents",
-            buildContents(messages, params.mediaCapabilities, params.model.modelId, sourceProfile)
+            buildContents(messages, params.mediaCapabilities, params.model.modelId, sourceProfile, params.imageEncoder)
         )
 
         // Function declarations and model built-in tools share one tools array. Writing this key
@@ -795,31 +795,33 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    internal fun buildContents(
+    internal suspend fun buildContents(
         messages: List<ModelRequestMessage>,
         mediaCapabilities: RequestMediaCapabilities,
         modelId: String,
         sourceProfile: String,
+        imageEncoder: RequestImageEncoder = RequestImageEncoder.Uncached,
     ): JsonArray {
         val contents = buildJsonArray {
             messages
                 .filter { it.role != MessageRole.SYSTEM && it.isValidToUpload() }
                 .forEach { message ->
                     if (message.role == MessageRole.ASSISTANT) {
-                        addModelMessage(message, mediaCapabilities, modelId, sourceProfile)
+                        addModelMessage(message, mediaCapabilities, modelId, sourceProfile, imageEncoder)
                     } else {
-                        addUserMessage(message, mediaCapabilities)
+                        addUserMessage(message, mediaCapabilities, imageEncoder)
                     }
                 }
         }
         return mergeAdjacentSameRoleContents(contents)
     }
 
-    private fun JsonArrayBuilder.addModelMessage(
+    private suspend fun JsonArrayBuilder.addModelMessage(
         message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
         modelId: String,
         sourceProfile: String,
+        imageEncoder: RequestImageEncoder,
     ) {
         if (message.samplingPartCounts.isNotEmpty()) {
             var offset = 0
@@ -828,7 +830,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 offset += count
                 val parts = sampling.mapNotNull {
                     if (it is UIMessagePart.Tool && it.hasReplayResult) it.toFunctionCallPart(modelId, sourceProfile)
-                    else it.toGooglePart(mediaCapabilities.assistantImages, modelId, sourceProfile)
+                    else it.toGooglePart(mediaCapabilities.assistantImages, modelId, sourceProfile, imageEncoder)
                 }
                 if (parts.isNotEmpty()) add(buildJsonObject {
                     put("role", "model")
@@ -837,7 +839,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 val tools = sampling.filterIsInstance<UIMessagePart.Tool>().filter { it.hasReplayResult }
                 if (tools.isNotEmpty()) add(buildJsonObject {
                     put("role", "user")
-                    put("parts", JsonArray(tools.map { it.toFunctionResponsePart(mediaCapabilities, modelId, sourceProfile) }))
+                    put("parts", JsonArray(tools.map { it.toFunctionResponsePart(mediaCapabilities, modelId, sourceProfile, imageEncoder) }))
                 })
             }
             return
@@ -849,7 +851,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             when (group) {
                 is PartGroup.Content -> {
                     group.parts.mapNotNull {
-                        it.toGooglePart(mediaCapabilities.assistantImages, modelId, sourceProfile)
+                        it.toGooglePart(mediaCapabilities.assistantImages, modelId, sourceProfile, imageEncoder)
                     }.forEach { partsBuffer.add(it) }
                 }
 
@@ -869,7 +871,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         put("role", "user")
                         putJsonArray("parts") {
                             group.tools.forEach {
-                                add(it.toFunctionResponsePart(mediaCapabilities, modelId, sourceProfile))
+                                add(it.toFunctionResponsePart(mediaCapabilities, modelId, sourceProfile, imageEncoder))
                             }
                         }
                     })
@@ -915,9 +917,10 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun JsonArrayBuilder.addUserMessage(
+    private suspend fun JsonArrayBuilder.addUserMessage(
         message: ModelRequestMessage,
         mediaCapabilities: RequestMediaCapabilities,
+        imageEncoder: RequestImageEncoder,
     ) {
         add(buildJsonObject {
             put("role", commonRoleToGoogleRole(message.role))
@@ -927,16 +930,18 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         mediaCapabilities.userImages,
                         modelId = "",
                         sourceProfile = "",
+                        imageEncoder = imageEncoder,
                     )
                 }.forEach { add(it) }
             }
         })
     }
 
-    private fun UIMessagePart.toGooglePart(
+    private suspend fun UIMessagePart.toGooglePart(
         imageSupport: RequestImageSupport,
         modelId: String,
         sourceProfile: String,
+        imageEncoder: RequestImageEncoder,
     ): JsonObject? = when (this) {
         is UIMessagePart.ServerTool -> block.takeIf {
             complete && source == ServerToolSource(ServerToolProtocol.GOOGLE_GENERATE_CONTENT, sourceProfile) &&
@@ -955,7 +960,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             check(imageSupport == RequestImageSupport.STRUCTURED) {
                 "Gemini received a native image after request projection"
             }
-            val encoded = encodeNativeImage(false)
+            val encoded = imageEncoder.encode(this, withPrefix = false)
             buildJsonObject {
                 put("inlineData", buildJsonObject {
                     put("mimeType", encoded.mimeType)
@@ -1013,10 +1018,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun UIMessagePart.Tool.toFunctionResponsePart(
+    private suspend fun UIMessagePart.Tool.toFunctionResponsePart(
         mediaCapabilities: RequestMediaCapabilities,
         modelId: String,
         sourceProfile: String,
+        imageEncoder: RequestImageEncoder,
     ) = buildJsonObject {
         val thoughtMetadata = metadataAs<GoogleThoughtMetadata>()
         put("functionResponse", buildJsonObject {
@@ -1031,7 +1037,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             val mediaGoogleParts = output
                 .filter { it !is UIMessagePart.Text }
                 .mapNotNull {
-                    it.toGooglePart(mediaCapabilities.toolOutputImages, modelId, sourceProfile)
+                    it.toGooglePart(mediaCapabilities.toolOutputImages, modelId, sourceProfile, imageEncoder)
                 }
                 .filter { it.containsKey("inlineData") }
 

@@ -1,4 +1,5 @@
 package me.rerere.ai.provider.providers
+import kotlinx.coroutines.runBlocking
 import me.rerere.ai.testsupport.executedTool
 import me.rerere.ai.testsupport.canonicalMultiRoundToolTurn
 import kotlin.uuid.Uuid
@@ -74,31 +75,37 @@ class GoogleProviderMessageTest {
     private fun invokeBuildContents(
         messages: List<UIMessage>,
         mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities.NONE,
-    ): JsonArray = provider.buildContents(
-        messages = messages.toModelRequests(),
-        mediaCapabilities = mediaCapabilities,
-        modelId = testModelId,
-        sourceProfile = testSourceProfile,
-    )
+    ): JsonArray = runBlocking {
+        provider.buildContents(
+            messages = messages.toModelRequests(),
+            mediaCapabilities = mediaCapabilities,
+            modelId = testModelId,
+            sourceProfile = testSourceProfile,
+        )
+    }
 
     private fun invokeBuildRequest(
         messages: List<UIMessage>,
         params: TextGenerationParams,
-    ): JsonObject = provider.buildCompletionRequestBody(
-        messages = messages.toModelRequests(),
-        params = params,
-        sourceProfile = testSourceProfile,
-    )
+    ): JsonObject = runBlocking {
+        provider.buildCompletionRequestBody(
+            messages = messages.toModelRequests(),
+            params = params,
+            sourceProfile = testSourceProfile,
+        )
+    }
 
     private fun invokeBuildRequestWithSource(
         messages: List<UIMessage>,
         params: TextGenerationParams,
         sourceProfile: String,
-    ): JsonObject = provider.buildCompletionRequestBody(
-        messages = messages.toModelRequests(),
-        params = params,
-        sourceProfile = sourceProfile,
-    )
+    ): JsonObject = runBlocking {
+        provider.buildCompletionRequestBody(
+            messages = messages.toModelRequests(),
+            params = params,
+            sourceProfile = sourceProfile,
+        )
+    }
 
     private fun invokeParsePart(part: JsonObject): UIMessagePart = provider.parseMessagePart(
         jsonObject = part,
@@ -875,11 +882,13 @@ class GoogleProviderMessageTest {
             customBody = customBody,
         )
         val messages = listOf(UIMessage.user("hello"))
-        return provider.buildCompletionRequestBody(
-            messages = messages.toModelRequests(),
-            params = params,
-            sourceProfile = testSourceProfile,
-        )
+        return runBlocking {
+            provider.buildCompletionRequestBody(
+                messages = messages.toModelRequests(),
+                params = params,
+                sourceProfile = testSourceProfile,
+            )
+        }
     }
 
     @Test

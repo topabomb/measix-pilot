@@ -1,4 +1,5 @@
 package me.rerere.ai.provider.providers.openai
+import kotlinx.coroutines.runBlocking
 import me.rerere.ai.testsupport.executedTool
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -61,9 +62,11 @@ class ChatCompletionsAPISerializerTest {
         for (host in listOf("open.bigmodel.cn", "proxy.example.com")) {
             for (stream in listOf(false, true)) {
                 for (level in listOf(ReasoningLevel.AUTO, ReasoningLevel.LOW, ReasoningLevel.HIGH, ReasoningLevel.MAX)) {
-                    val body = api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(),
-                        TextGenerationParams(model = model, reasoningLevel = level),
-                        ProviderSetting.OpenAI(baseUrl = "https://$host/v1"), stream)
+                    val body = runBlocking {
+                        api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(),
+                            TextGenerationParams(model = model, reasoningLevel = level),
+                            ProviderSetting.OpenAI(baseUrl = "https://$host/v1"), stream)
+                    }
                     if (host == "open.bigmodel.cn") assertEquals("enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
                     else assertFalse(body.containsKey("thinking"))
                     if (level == ReasoningLevel.AUTO) assertFalse(body.containsKey("reasoning_effort"))
@@ -80,8 +83,10 @@ class ChatCompletionsAPISerializerTest {
         for (host in listOf("open.bigmodel.cn", "proxy.example.com")) {
             fun reject(params: TextGenerationParams, reason: String) {
                 val error = assertThrows(IllegalArgumentException::class.java) {
-                    api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(), params,
-                        ProviderSetting.OpenAI(baseUrl = "https://$host/v1"))
+                    runBlocking {
+                        api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(), params,
+                            ProviderSetting.OpenAI(baseUrl = "https://$host/v1"))
+                    }
                 }
                 assertTrue(error.message.orEmpty(), error.message.orEmpty().contains(reason))
             }
@@ -102,9 +107,11 @@ class ChatCompletionsAPISerializerTest {
     @Test
     fun `glm53 rules do not change previous or unregistered variants`() {
         for (id in listOf("glm-5.2", "glm-5.3-flash", "glm-5.30")) {
-            val body = api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(),
-                TextGenerationParams(model = Model(modelId = id, abilities = listOf(ModelAbility.REASONING)), reasoningLevel = ReasoningLevel.OFF),
-                ProviderSetting.OpenAI(baseUrl = "https://open.bigmodel.cn/api/paas/v4"))
+            val body = runBlocking {
+                api.buildChatCompletionRequest(listOf(UIMessage.user("hello")).toModelRequests(),
+                    TextGenerationParams(model = Model(modelId = id, abilities = listOf(ModelAbility.REASONING)), reasoningLevel = ReasoningLevel.OFF),
+                    ProviderSetting.OpenAI(baseUrl = "https://open.bigmodel.cn/api/paas/v4"))
+            }
             assertEquals("disabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
             assertFalse(body.containsKey("reasoning_effort"))
         }
@@ -152,22 +159,26 @@ class ChatCompletionsAPISerializerTest {
         } else {
             replayPolicy.copy(opaque = OpaqueReasoningReplay.NONE)
         }
-        return api.buildMessages(
-            messages = messages.toModelRequests(),
-            replayPolicy = adjustedPolicy,
-            mediaCapabilities = RequestMediaCapabilities.NONE,
-        )
+        return runBlocking {
+            api.buildMessages(
+                messages = messages.toModelRequests(),
+                replayPolicy = adjustedPolicy,
+                mediaCapabilities = RequestMediaCapabilities.NONE,
+            )
+        }
     }
 
     private fun invokeBuildRequest(
         messages: List<UIMessage>,
         params: TextGenerationParams,
         providerSetting: ProviderSetting.OpenAI,
-    ) = api.buildChatCompletionRequest(
-        messages = messages.toModelRequests(),
-        params = params,
-        providerSetting = providerSetting,
-    )
+    ) = runBlocking {
+        api.buildChatCompletionRequest(
+            messages = messages.toModelRequests(),
+            params = params,
+            providerSetting = providerSetting,
+        )
+    }
 
     @Test
     fun `attachment facts retain user assistant and tool protocol roles`() {

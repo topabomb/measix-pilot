@@ -1,4 +1,4 @@
-﻿package net.weero.measix.pilot.ui.components.ui
+package net.weero.measix.pilot.ui.components.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,11 +19,11 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File01
 import me.rerere.hugeicons.stroke.Share01
 import net.weero.measix.pilot.R
-import net.weero.measix.pilot.data.export.ExporterState
 
 @Composable
-fun <T> ExportDialog(
-    exporter: ExporterState<T>,
+fun ExportDialog(
+    onSave: () -> Unit,
+    onShare: () -> Unit,
     title: String? = null,
     onDismiss: () -> Unit
 ) {
@@ -34,7 +34,7 @@ fun <T> ExportDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedCard(
                     onClick = {
-                        exporter.exportToFile()
+                        onSave()
                         onDismiss()
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -62,7 +62,7 @@ fun <T> ExportDialog(
                 }
                 OutlinedCard(
                     onClick = {
-                        exporter.exportAndShare()
+                        onShare()
                         onDismiss()
                     },
                     modifier = Modifier.fillMaxWidth()

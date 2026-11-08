@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers
 
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -36,16 +37,8 @@ class ClaudeProviderPromptCacheTest {
         messages: List<UIMessage>,
         params: TextGenerationParams,
         stream: Boolean = false
-    ): JsonObject {
-        val method = ClaudeProvider::class.java.getDeclaredMethod(
-            "buildMessageRequest",
-            ProviderSetting.Claude::class.java,
-            List::class.java,
-            TextGenerationParams::class.java,
-            Boolean::class.javaPrimitiveType!!
-        )
-        method.isAccessible = true
-        return (method.invoke(provider, providerSetting, messages.toModelRequests(), params, stream) as ClaudePreparedRequest).body
+    ): JsonObject = runBlocking {
+        provider.buildMessageRequest(providerSetting, messages.toModelRequests(), params, stream).body
     }
 
     private fun dummyTool(): FrozenToolDefinition = FrozenToolDefinition(

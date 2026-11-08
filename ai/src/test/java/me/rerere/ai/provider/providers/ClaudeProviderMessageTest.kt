@@ -1,5 +1,6 @@
 package me.rerere.ai.provider.providers
 
+import kotlinx.coroutines.runBlocking
 import me.rerere.common.configuration.ConfigurationReference
 import me.rerere.ai.testsupport.executedTool
 import me.rerere.ai.testsupport.canonicalMultiRoundToolTurn
@@ -61,7 +62,6 @@ class ClaudeProviderMessageTest {
         provider = ClaudeProvider(OkHttpClient())
     }
 
-    // Helper to invoke private buildMessages method via reflection
     private fun invokeBuildMessages(
         messages: List<UIMessage>,
         mediaCapabilities: RequestMediaCapabilities = RequestMediaCapabilities(
@@ -69,22 +69,8 @@ class ClaudeProviderMessageTest {
             assistantImages = RequestImageSupport.NONE,
             toolOutputImages = RequestImageSupport.STRUCTURED,
         ),
-    ): JsonArray {
-        val method = ClaudeProvider::class.java.getDeclaredMethod(
-            "buildMessages",
-            List::class.java,
-            Boolean::class.javaPrimitiveType,
-            ClaudePromptCacheTtl::class.java,
-            RequestMediaCapabilities::class.java,
-        )
-        method.isAccessible = true
-        return method.invoke(
-            provider,
-            messages.toModelRequests(),
-            false,
-            ClaudePromptCacheTtl.FIVE_MINUTES,
-            mediaCapabilities,
-        ) as JsonArray
+    ): JsonArray = runBlocking {
+        provider.buildMessages(messages.toModelRequests(), false, ClaudePromptCacheTtl.FIVE_MINUTES, mediaCapabilities)
     }
 
     private fun invokeParseMessage(content: JsonArray): UIMessage {
@@ -470,15 +456,9 @@ class ClaudeProviderMessageTest {
             models = listOf(model),
         )
         val messages = listOf(UIMessage.user("hello"))
-        val method = ClaudeProvider::class.java.getDeclaredMethod(
-            "buildMessageRequest",
-            me.rerere.ai.provider.ProviderSetting.Claude::class.java,
-            List::class.java,
-            me.rerere.ai.provider.TextGenerationParams::class.java,
-            Boolean::class.javaPrimitiveType,
-        )
-        method.isAccessible = true
-        return (method.invoke(provider, providerSetting, messages.toModelRequests(), params, false) as ClaudePreparedRequest).body
+        return runBlocking {
+            provider.buildMessageRequest(providerSetting, messages.toModelRequests(), params).body
+        }
     }
 
     @org.junit.Test
@@ -488,8 +468,6 @@ class ClaudeProviderMessageTest {
             invokeBuildMessageRequestWithCustomBody(
                 listOf(me.rerere.ai.provider.CustomBody("messages", JsonPrimitive("[]"))),
             )
-        } catch (e: java.lang.reflect.InvocationTargetException) {
-            caught = e.cause
         } catch (e: Throwable) {
             caught = e
         }
@@ -509,8 +487,6 @@ class ClaudeProviderMessageTest {
             invokeBuildMessageRequestWithCustomBody(
                 listOf(me.rerere.ai.provider.CustomBody("system", JsonPrimitive("[]"))),
             )
-        } catch (e: java.lang.reflect.InvocationTargetException) {
-            caught = e.cause
         } catch (e: Throwable) {
             caught = e
         }

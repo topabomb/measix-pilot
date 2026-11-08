@@ -218,6 +218,24 @@ class ProviderSettingsApplicationServiceTest {
     }
 
     @Test
+    fun `balance request method and body each invalidate the prior cached value`() = runTest {
+        val original = ProviderSetting.OpenAI(balanceOption = me.rerere.ai.provider.BalanceOption(enabled = true))
+        val post = original.copy(balanceOption = original.balanceOption.copy(method = me.rerere.ai.provider.BalanceMethod.POST))
+        val editedBody = post.copy(balanceOption = post.balanceOption.copy(body = """{"scope":"mine"}"""))
+        val manager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        val service = ProviderSettingsApplicationService(manager, mockk())
+        val requests = listOf(original, post, editedBody)
+        requests.forEachIndexed { index, request ->
+            every { manager.getProviderByType(request) } returns provider
+            coEvery { provider.getBalance(request) } returns index.toString()
+            assertEquals(ProviderBalanceUiState.Available(index.toString()), service.previewBalance(request))
+        }
+        assertEquals(ProviderBalanceUiState.Available("1"), service.previewBalance(post))
+        coVerify(exactly = 1) { provider.getBalance(post) }
+    }
+
+    @Test
     fun `balance follows current user settings and cancelling collection stops the original request`() = runTest {
         val original = ProviderSetting.OpenAI(baseUrl = "https://old.example/v1",
             balanceOption = me.rerere.ai.provider.BalanceOption(enabled = true))

@@ -1204,7 +1204,8 @@ class ChatPageLifecycleTest {
                         "Recent chat preference could not be saved; reopen to retry.\n\n" + secondArg<Array<Any>>().single()
                     }
                 }, settings, turns, application,
-                query, updater, artifacts, favorites, errors, configuration, mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null) },
+                query, updater, artifacts, favorites, errors, configuration,
+                mockk { every { summary } returns kotlinx.coroutines.flow.MutableStateFlow(null) }, mockk(),
             ) as T
         })[ChatVM::class.java]
     }

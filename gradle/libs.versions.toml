@@ -48,12 +48,12 @@ webkit = "1.16.0"
 appcompat = "1.8.0"
 material = "1.14.0"
 ucrop = "2.2.11-native"
-haze = "2.0.1"
+haze = "2.1.0"
 uiautomator = "2.4.0"
 benchmarkMacroJunit4 = "1.4.1"
 baselineprofile = "1.5.0-rc01"
 profileinstaller = "1.4.1"
-ktor = "3.5.2"
+ktor = "3.6.1"
 slf4j = "2.0.18"
 sqlite-android = "-SNAPSHOT"
 diffutils = "4.17"
@@ -154,6 +154,7 @@ haze-blur-material3 = { module = "dev.chrisbanes.haze:haze-blur-material3", vers
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmarkMacroJunit4" }
 androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
+ktor-bom = { module = "io.ktor:ktor-bom", version.ref = "ktor" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }

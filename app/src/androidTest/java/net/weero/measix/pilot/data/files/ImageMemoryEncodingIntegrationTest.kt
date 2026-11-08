@@ -18,7 +18,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.runBlocking
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.util.EncodedImage
-import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.encodeImageBytes
 import me.rerere.ai.util.encodeNativeImage
 import me.rerere.ai.util.withPreparedStaticImage
@@ -161,7 +160,12 @@ class ImageMemoryEncodingIntegrationTest {
         } catch (_: IllegalArgumentException) {
             // A recognized container without decodable pixels is never usable input.
         }
-        assertTrue(UIMessagePart.Image(android.net.Uri.fromFile(file).toString()).encodeBase64().isFailure)
+        try {
+            UIMessagePart.Image(android.net.Uri.fromFile(file).toString()).encodeNativeImage()
+            org.junit.Assert.fail("Expected undecodable image to be rejected")
+        } catch (_: IllegalStateException) {
+            // The MIME signature alone cannot authorize sending undecodable original bytes.
+        }
     }
 
     @Test

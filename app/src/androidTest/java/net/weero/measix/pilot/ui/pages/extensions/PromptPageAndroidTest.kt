@@ -9,9 +9,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.lifecycleScope
 import androidx.test.espresso.Espresso.closeSoftKeyboard
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import net.weero.measix.pilot.ui.components.toast.rememberToasterState
+import net.weero.measix.pilot.ui.components.ui.DocumentExportActions
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -45,6 +47,7 @@ class PromptPageAndroidTest {
         val updates = mutableListOf<Settings>()
         val vm = mockk<PromptVM>()
         every { vm.settings } returns settings
+        every { vm.documentExport } returns DocumentExportActions(mockk(), compose.activity.lifecycleScope)
         every { vm.lockedChanges } returns MutableSharedFlow()
         every { vm.updateSettings(any()) } answers {
             val updated = firstArg<(Settings) -> Settings>()(settings.value)

@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -39,7 +41,8 @@ fun CompressContextDialog(
 ) {
     var additionalPrompt by remember { mutableStateOf("") }
     var selectedTokens by remember { mutableIntStateOf(2000) }
-    var keepRecentMessages by remember { mutableIntStateOf(32) }
+    var retentionDraft by remember { mutableStateOf("32") }
+    val retained = parseHistorySummaryRetention(retentionDraft)
     val tokenOptions = listOf(500, 1000, 2000, 4000)
     var currentJob by remember { mutableStateOf<Job?>(null) }
     val isLoading = currentJob != null
@@ -107,8 +110,8 @@ fun CompressContextDialog(
 
                     // Keep recent messages input
                     HistorySummaryRetentionStepper(
-                        value = keepRecentMessages,
-                        onValueChange = { keepRecentMessages = it },
+                        draft = retentionDraft,
+                        onDraftChange = { retentionDraft = it },
                     )
 
                     // Additional context input
@@ -142,9 +145,10 @@ fun CompressContextDialog(
                     Text(stringResource(R.string.cancel))
                 }
             } else {
-                TextButton(onClick = {
-                    currentJob = onConfirm(additionalPrompt, selectedTokens, keepRecentMessages)
-                }) {
+                TextButton(
+                    onClick = { retained?.let { currentJob = onConfirm(additionalPrompt, selectedTokens, it) } },
+                    enabled = retained != null,
+                ) {
                     Text(stringResource(R.string.confirm))
                 }
             }
@@ -159,24 +163,43 @@ fun CompressContextDialog(
     )
 }
 
+private fun parseHistorySummaryRetention(draft: String): Int? =
+    draft.takeIf { it.all(Char::isDigit) }?.toIntOrNull()
+
 @Composable
-internal fun HistorySummaryRetentionStepper(value: Int, onValueChange: (Int) -> Unit) {
+internal fun HistorySummaryRetentionStepper(draft: String, onDraftChange: (String) -> Unit) {
+    val value = parseHistorySummaryRetention(draft)
     val decrease = stringResource(R.string.history_summary_retention_decrease)
     val increase = stringResource(R.string.history_summary_retention_increase)
+    val label = stringResource(R.string.chat_page_compress_keep_recent)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(stringResource(R.string.chat_page_compress_keep_recent), style = MaterialTheme.typography.labelMedium)
+        Text(label, style = MaterialTheme.typography.labelMedium)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             androidx.compose.material3.FilledTonalIconButton(
-                enabled = value > 0,
-                onClick = { if (value > 0) onValueChange(value - 1) },
+                enabled = value != null && value > 0,
+                onClick = { if (value != null && value > 0) onDraftChange((value - 1).toString()) },
                 modifier = Modifier.semantics { contentDescription = decrease },
             ) { Text("\u2212") }
-            Text(value.toString(), style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = draft,
+                onValueChange = onDraftChange,
+                modifier = Modifier.weight(1f).semantics { contentDescription = label },
+                singleLine = true,
+                isError = value == null,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
             androidx.compose.material3.FilledTonalIconButton(
-                enabled = value < Int.MAX_VALUE,
-                onClick = { if (value < Int.MAX_VALUE) onValueChange(value + 1) },
+                enabled = value != null && value < Int.MAX_VALUE,
+                onClick = { if (value != null && value < Int.MAX_VALUE) onDraftChange((value + 1).toString()) },
                 modifier = Modifier.semantics { contentDescription = increase },
             ) { Text("+") }
+        }
+        if (value == null) {
+            Text(
+                stringResource(R.string.history_summary_retention_invalid),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
         }
     }
 }

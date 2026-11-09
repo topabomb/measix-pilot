@@ -46,6 +46,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.koin.compose.KoinIsolatedContext
+import org.koin.dsl.koinApplication
+import org.koin.dsl.module
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.uuid.Uuid
 
@@ -159,17 +162,23 @@ class ConversationContextAndroidTest {
         val view = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}
         val step = me.rerere.ai.ui.UIMessagePart.Step(Uuid.random(), 0, kotlin.time.Instant.fromEpochMilliseconds(0))
         val node = MessageNode.of(UIMessage.assistant("Visible answer").copy(parts = listOf(step, me.rerere.ai.ui.UIMessagePart.Text("Visible answer"))))
+        val query = mockk<ConversationQueryService>()
+        coEvery { query.messageResourceSource(view, view.conversationId, node.currentMessage.id) } returns
+            ConversationMessageResourceSource(view, workspace = null) {}
+        val isolated = koinApplication { modules(module {
+            single { query }
+            single { mockk<FileManagementApplicationService>() }
+            single { mockk<MediaExportService>() }
+        }) }
         var summary by mutableStateOf<MessageContextSummary?>(null)
         var assistantBubble by mutableStateOf(false)
-        var imeSettled = false
-        compose.setContent {
+        var imeVisible = false
+        compose.setContent { KoinIsolatedContext(isolated) {
             val density = LocalDensity.current
             val keyboard = LocalSoftwareKeyboardController.current
             var draft by remember { mutableStateOf("input") }
-            val imeBottom = WindowInsets.ime.getBottom(density)
-            val settled = WindowInsets.isImeVisible && imeBottom > 0 &&
-                imeBottom == WindowInsets.imeAnimationTarget.getBottom(density)
-            SideEffect { imeSettled = settled }
+            val ime = WindowInsets.isImeVisible && WindowInsets.ime.getBottom(density) > 0
+            SideEffect { imeVisible = ime }
             MaterialTheme { CompositionLocalProvider(
                 LocalDensity provides Density(density.density, 1.8f),
                 LocalSettings provides Settings.dummy().let { it.copy(displaySetting = it.displaySetting.copy(showAssistantBubble = assistantBubble)) },
@@ -189,12 +198,12 @@ class ConversationContextAndroidTest {
                     }
                 }
             } }
-        }
+        } }
         try {
             compose.onNodeWithTag("layout-input").performClick()
             compose.onNodeWithText("Show keyboard").performClick()
             val answer = compose.onNodeWithText("Visible answer", useUnmergedTree = true)
-            compose.waitUntil(10_000) { imeSettled && answer.isDisplayed() }
+            compose.waitUntil(10_000) { imeVisible && answer.isDisplayed() }
             val baseline = compose.onNodeWithTag("message").getUnclippedBoundsInRoot()
             val answerLeft = answer.assertIsDisplayed().getUnclippedBoundsInRoot().left
             val description = context.getString(R.string.context_updated_accessibility)
@@ -218,7 +227,10 @@ class ConversationContextAndroidTest {
             compose.onNodeWithTag("message").getUnclippedBoundsInRoot().let {
                 assertEquals(baseline.bottom - baseline.top, it.bottom - it.top)
             }
-        } finally { view.close() }
+        } finally {
+            view.close()
+            isolated.close()
+        }
     }
 
     @Test fun laterRequestsDoNotReplaceOrReloadTheSelectedUpdate() {

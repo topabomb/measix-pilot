@@ -484,7 +484,15 @@ class ChatContextFlowAndroidTest {
         val historyMatcher = hasScrollToIndexAction() and SemanticsMatcher("visible chat history") {
             it.boundsInRoot.left >= 0f && it.boundsInRoot.right > 0f
         }
-        compose.onNode(historyMatcher).performScrollToKey(nodeId)
+        val history = compose.onNode(historyMatcher)
+        val historyTop = history.fetchSemanticsNode().boundsInRoot.top
+        val composerTopBeforeScroll = compose.onNodeWithTag("chat_input").fetchSemanticsNode().boundsInRoot.top
+        val visibleHeight = composerTopBeforeScroll - historyTop
+        // A touch scroll leaves tail-following before the test positions the target row.
+        history.performTouchInput {
+            swipeDown(startY = visibleHeight * 0.2f, endY = visibleHeight * 0.8f, durationMillis = 450)
+        }
+        history.performScrollToKey(nodeId)
         fun flatten(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::flatten)
         val nodes = flatten(compose.onNode(historyMatcher, useUnmergedTree = true).fetchSemanticsNode())
         val textNode = nodes.single { hasText(messageText).matches(it) }

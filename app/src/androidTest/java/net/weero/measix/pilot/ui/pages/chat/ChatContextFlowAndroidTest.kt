@@ -56,6 +56,7 @@ import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import kotlin.uuid.Uuid
 
 /** Real ChatPage, configuration/turn owners, Room and OpenAI adapter; only HTTP is a local mock. */
 @RunWith(AndroidJUnit4::class)
@@ -342,7 +343,7 @@ class ChatContextFlowAndroidTest {
             val removedMessageIds = removedNodes.flatMap { it.messages }.map { it.id }.toSet()
             val oldTexts = beforeRegenerate.currentMessages().map { it.toText() }.toSet()
             val warning = uiContext.getString(R.string.regenerate_confirm_message)
-            clickMessageRegenerate(uiContext, targetText, oldTexts)
+            clickMessageRegenerate(uiContext, retainedNodes.last().id, targetText, oldTexts)
             compose.onNodeWithText(warning).assertIsDisplayed()
             capture(context, "09-user-regenerate-confirmation.png")
             compose.onNode(hasText(uiContext.getString(R.string.cancel)) and hasClickAction() and hasAnyAncestor(isDialog()))
@@ -352,7 +353,7 @@ class ChatContextFlowAndroidTest {
             assertEquals(beforeRegenerateRoom, awaitUi(30_000) { repository.getConversationSnapshotById(row.id) })
             assertEquals(4, server.mainRequests.size)
 
-            clickMessageRegenerate(uiContext, targetText, oldTexts)
+            clickMessageRegenerate(uiContext, retainedNodes.last().id, targetText, oldTexts)
             compose.onNodeWithText(warning).assertIsDisplayed()
             compose.onNode(hasText(uiContext.getString(R.string.confirm)) and hasClickAction() and hasAnyAncestor(isDialog()))
                 .performClick()
@@ -400,7 +401,8 @@ class ChatContextFlowAndroidTest {
             capture(context, "10-user-regenerated-history-pruned.png")
 
             // ASSISTANT regeneration starts immediately and retains the previous answer as a variant.
-            clickMessageRegenerate(uiContext, "Context user regenerated answer", regenerated.currentMessages().map { it.toText() }.toSet())
+            clickMessageRegenerate(uiContext, regenerated.nodes.last().id, "Context user regenerated answer",
+                regenerated.currentMessages().map { it.toText() }.toSet())
             compose.onNodeWithText(warning).assertDoesNotExist()
             compose.waitUntil(60_000) { server.mainRequests.size == 6 }
             awaitUi(30_000) { query.conversationUiModel(lease).first {
@@ -478,11 +480,11 @@ class ChatContextFlowAndroidTest {
         }
     }
 
-    private fun clickMessageRegenerate(context: Context, messageText: String, transcriptTexts: Set<String>) {
+    private fun clickMessageRegenerate(context: Context, nodeId: Uuid, messageText: String, transcriptTexts: Set<String>) {
         val historyMatcher = hasScrollToIndexAction() and SemanticsMatcher("visible chat history") {
             it.boundsInRoot.left >= 0f && it.boundsInRoot.right > 0f
         }
-        compose.onNode(historyMatcher).performScrollToNode(hasText(messageText))
+        compose.onNode(historyMatcher).performScrollToKey(nodeId)
         fun flatten(node: SemanticsNode): List<SemanticsNode> = listOf(node) + node.children.flatMap(::flatten)
         val nodes = flatten(compose.onNode(historyMatcher, useUnmergedTree = true).fetchSemanticsNode())
         val textNode = nodes.single { hasText(messageText).matches(it) }

@@ -161,13 +161,15 @@ class ConversationContextAndroidTest {
         val node = MessageNode.of(UIMessage.assistant("Visible answer").copy(parts = listOf(step, me.rerere.ai.ui.UIMessagePart.Text("Visible answer"))))
         var summary by mutableStateOf<MessageContextSummary?>(null)
         var assistantBubble by mutableStateOf(false)
-        var imeVisible = false
+        var imeSettled = false
         compose.setContent {
             val density = LocalDensity.current
             val keyboard = LocalSoftwareKeyboardController.current
             var draft by remember { mutableStateOf("input") }
-            val ime = WindowInsets.isImeVisible && WindowInsets.ime.getBottom(density) > 0
-            SideEffect { imeVisible = ime }
+            val imeBottom = WindowInsets.ime.getBottom(density)
+            val settled = WindowInsets.isImeVisible && imeBottom > 0 &&
+                imeBottom == WindowInsets.imeAnimationTarget.getBottom(density)
+            SideEffect { imeSettled = settled }
             MaterialTheme { CompositionLocalProvider(
                 LocalDensity provides Density(density.density, 1.8f),
                 LocalSettings provides Settings.dummy().let { it.copy(displaySetting = it.displaySetting.copy(showAssistantBubble = assistantBubble)) },
@@ -191,9 +193,9 @@ class ConversationContextAndroidTest {
         try {
             compose.onNodeWithTag("layout-input").performClick()
             compose.onNodeWithText("Show keyboard").performClick()
-            compose.waitUntil(10_000) { imeVisible }
-            val baseline = compose.onNodeWithTag("message").getUnclippedBoundsInRoot()
             val answer = compose.onNodeWithText("Visible answer", useUnmergedTree = true)
+            compose.waitUntil(10_000) { imeSettled && answer.isDisplayed() }
+            val baseline = compose.onNodeWithTag("message").getUnclippedBoundsInRoot()
             val answerLeft = answer.assertIsDisplayed().getUnclippedBoundsInRoot().left
             val description = context.getString(R.string.context_updated_accessibility)
             compose.runOnIdle { summary = MessageContextSummary() }

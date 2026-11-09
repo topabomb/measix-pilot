@@ -6,6 +6,7 @@ import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.spyk
 import io.mockk.mockk
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.*
@@ -366,15 +367,15 @@ class AuxiliaryGenerationOwnershipTest {
             val nodes = (0 until 258).map { UIMessage.user("request $it").toMessageNode() }
             f.coordinator.executeOrThrow(f.runtime.id, ReplaceMessageTree(nodes))
             val before = f.runtime.durable
-            var calls = 0
+            val calls = AtomicInteger()
             coEvery { f.provider.generateText(any(), any(), any()) } coAnswers {
-                val text = if (calls++ == 0) "valid first chunk" else "  "
+                val text = if (calls.getAndIncrement() == 0) "valid first chunk" else "  "
                 MessageChunk("reply", "test", listOf(UIMessageChoice(0, null, UIMessage.assistant(text), "stop")))
             }
             val result = f.application.compress(f.page.commandTarget, "", 100, 0)
             assertTrue(result.isFailure)
             assertEquals("empty_history_summary_chunk", result.exceptionOrNull()?.message)
-            assertEquals(2, calls)
+            assertEquals(2, calls.get())
             assertEquals(before, f.runtime.durable)
         }
     }

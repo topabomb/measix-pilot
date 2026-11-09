@@ -2,6 +2,8 @@ package net.weero.measix.pilot.ui.components.files
 
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
@@ -195,16 +197,35 @@ class FileDocumentPreviewAndroidTest {
     @Test fun cssImageSetCannotBypassInlineResourceValidation() {
         val file = RenderedFileSource("index.html", MutableStateFlow(Unit), {}, { it }, { _, _ -> error("unexpected read") })
         show(file, "<div id='target' style='width:100px;height:100px'></div>", "index.html")
-        awaitScript("""(() => {
-            if (!document.getElementById('target')) return false;
-            window.inlineBlocked = false;
-            document.addEventListener('securitypolicyviolation', e => {
-                if (e.violatedDirective === 'img-src' && e.blockedURI === 'data') window.inlineBlocked = true;
-            });
-            document.getElementById('target').style.backgroundImage = 'image-set("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22/%3E" 1x)';
-            return true;
-        })().toString()""") { it.contains("true") }
-        awaitScript("window.inlineBlocked.toString()") { it.contains("true") }
+        awaitScript("document.readyState === 'complete' && !!document.getElementById('target')") { it == "true" }
+        val inlineImage = "data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22/%3E"
+        val blocked = java.util.concurrent.atomic.AtomicBoolean()
+        val (view, originalClient) = compose.runOnIdle {
+            val current = requireNotNull(webView(compose.activity.window.decorView))
+            val original = current.webChromeClient
+            // Chromium reports the enforced block even when the DOM listener misses the event.
+            current.webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                    val text = message.message()
+                    if (text.startsWith("Refused to load the image") && text.contains(inlineImage) &&
+                        text.contains("Content Security Policy") && text.contains("img-src")) {
+                        blocked.set(true)
+                    }
+                    return original?.onConsoleMessage(message) ?: super.onConsoleMessage(message)
+                }
+            }
+            current to original
+        }
+        try {
+            awaitScript("""(() => {
+                const target = document.getElementById('target');
+                target.style.backgroundImage = 'image-set("$inlineImage" 1x)';
+                return getComputedStyle(target).backgroundImage;
+            })()""") { it.contains("image-set") }
+            compose.waitUntil(15_000) { blocked.get() }
+        } finally {
+            compose.runOnUiThread { view.webChromeClient = originalClient }
+        }
     }
 
     @Test fun longGalleryRendersPastOldCountAndCumulativePixelLimits() {

@@ -1462,7 +1462,8 @@ class ConversationCommandAccessTest {
             f.enableGeneration()
             f.cancelDuringStart = true
             val receipt = requireNotNull(f.turns.sendMessage(f.page.commandTarget, listOf(UIMessagePart.Text("start"))))
-            requireNotNull(f.runtime.currentWorker()).join()
+            // The cancelled worker may have committed and removed itself before sendMessage returns.
+            f.runtime.currentWorker()?.join()
             assertEquals(net.weero.measix.pilot.data.db.entity.TurnExecutionStatus.CANCELLED,
                 f.executions[receipt.turnId.toString()]?.status)
             assertEquals(1, f.terminalCommits)

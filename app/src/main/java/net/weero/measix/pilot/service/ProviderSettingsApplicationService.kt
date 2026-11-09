@@ -13,6 +13,7 @@ import me.rerere.ai.core.ModelRequestMessage
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.freeze
+import me.rerere.ai.provider.BalanceMethod
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
@@ -136,10 +137,12 @@ class ProviderSettingsApplicationService(
                 }
             }
 
-    /** An explicit editor preview may query unsaved user credentials without writing them. */
+    /** Previews use unsaved credentials. An explicit POST test always checks the endpoint again. */
     suspend fun previewBalance(draft: ProviderSetting): ProviderBalanceUiState {
         if (draft !is ProviderSetting.OpenAI || !draft.balanceOption.enabled) return ProviderBalanceUiState.Hidden
-        return try { ProviderBalanceUiState.Available(getBalance(draft)) }
+        return try {
+            ProviderBalanceUiState.Available(getBalance(draft, refresh = draft.balanceOption.method == BalanceMethod.POST))
+        }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) {
             logDiagnosticFailure("ProviderSettings", "Balance preview failed", error)
@@ -147,12 +150,12 @@ class ProviderSettingsApplicationService(
         }
     }
 
-    private suspend fun getBalance(setting: ProviderSetting.OpenAI): String {
+    private suspend fun getBalance(setting: ProviderSetting.OpenAI, refresh: Boolean = false): String {
         val key = ProviderBalanceCacheKey(
             providerId = setting.id,
             requestFingerprint = setting.balanceRequestFingerprint(),
         )
-        balanceCache.getIfPresent(key)?.let { return it }
+        if (!refresh) balanceCache.getIfPresent(key)?.let { return it }
         return providerManager.getProviderByType(setting)
             .getBalance(setting)
             .also { currentCoroutineContext().ensureActive(); balanceCache.put(key, it) }

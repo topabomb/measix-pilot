@@ -17,6 +17,8 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
+import me.rerere.ai.provider.BalanceMethod
+import me.rerere.ai.provider.BalanceOption
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Provider
@@ -219,20 +221,51 @@ class ProviderSettingsApplicationServiceTest {
 
     @Test
     fun `balance request method and body each invalidate the prior cached value`() = runTest {
-        val original = ProviderSetting.OpenAI(balanceOption = me.rerere.ai.provider.BalanceOption(enabled = true))
-        val post = original.copy(balanceOption = original.balanceOption.copy(method = me.rerere.ai.provider.BalanceMethod.POST))
+        val original = ProviderSetting.OpenAI(balanceOption = BalanceOption(enabled = true))
+        val post = original.copy(balanceOption = original.balanceOption.copy(method = BalanceMethod.POST))
         val editedBody = post.copy(balanceOption = post.balanceOption.copy(body = """{"scope":"mine"}"""))
         val manager = mockk<ProviderManager>()
         val provider = mockk<Provider<ProviderSetting.OpenAI>>()
-        val service = ProviderSettingsApplicationService(manager, mockk())
+        val settings = MutableStateFlow(Settings())
+        val store = mockk<SettingsStore>()
+        every { store.userSettings } returns settings
+        val service = ProviderSettingsApplicationService(manager, store)
+        val id = original.id as ConfigurationReference.User
+        suspend fun available() = service.observeBalance(id).first { it is ProviderBalanceUiState.Available }
+
         val requests = listOf(original, post, editedBody)
         requests.forEachIndexed { index, request ->
             every { manager.getProviderByType(request) } returns provider
             coEvery { provider.getBalance(request) } returns index.toString()
-            assertEquals(ProviderBalanceUiState.Available(index.toString()), service.previewBalance(request))
+            settings.value = settings.value.copy(providers = listOf(request))
+            assertEquals(ProviderBalanceUiState.Available(index.toString()), available())
         }
-        assertEquals(ProviderBalanceUiState.Available("1"), service.previewBalance(post))
+        settings.value = settings.value.copy(providers = listOf(post))
+        assertEquals(ProviderBalanceUiState.Available("1"), available())
         coVerify(exactly = 1) { provider.getBalance(post) }
+    }
+
+    @Test
+    fun `manual POST balance test reports endpoint failure despite a cached balance and can retry`() = runTest {
+        val setting = ProviderSetting.OpenAI(balanceOption = BalanceOption(enabled = true, method = BalanceMethod.POST))
+        val store = mockk<SettingsStore>()
+        every { store.userSettings } returns MutableStateFlow(Settings(providers = listOf(setting)))
+        val manager = mockk<ProviderManager>()
+        val provider = mockk<Provider<ProviderSetting.OpenAI>>()
+        every { manager.getProviderByType(setting) } returns provider
+        val service = ProviderSettingsApplicationService(manager, store)
+        val id = setting.id as ConfigurationReference.User
+        suspend fun displayedBalance() = service.observeBalance(id).first { it is ProviderBalanceUiState.Available }
+
+        coEvery { provider.getBalance(setting) } returns "12"
+        assertEquals(ProviderBalanceUiState.Available("12"), displayedBalance())
+        coEvery { provider.getBalance(setting) } throws java.io.IOException("balance endpoint unavailable") andThen "8"
+
+        val failure = service.previewBalance(setting) as ProviderBalanceUiState.Unavailable
+        assertTrue(failure.detail.orEmpty().contains("balance endpoint unavailable"))
+        assertEquals(ProviderBalanceUiState.Available("8"), service.previewBalance(setting))
+        assertEquals(ProviderBalanceUiState.Available("8"), displayedBalance())
+        coVerify(exactly = 3) { provider.getBalance(setting) }
     }
 
     @Test

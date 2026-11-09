@@ -331,7 +331,8 @@ Conversation、Memory、Artifact、GeneratedMedia、收藏、分页与统计中�
 Provider `customHeaders` 缺字段解码为空列表；复制、类型转换与 Model providerOverwrite 保留该字段。
 Provider 编辑复用原 typed contract，目录、余额及生成请求共用各自 Adapter 合并入口，详情默认折叠显示请求头编辑器。
 用户自有 OpenAI 余额查询沿 `BalanceOption` 配置 GET 或 POST。旧配置缺 method 时沿 GET，POST 可在 JSON 字符串值中引用本次轮换的 key 和 base URL。
-编辑、预览与 Adapter 共用请求校验，缓存身份包含 method 和有效请求体。查询结果用于余额显示，企业额度由 Core 发布。
+编辑、预览与 Adapter 共用请求校验，缓存身份包含 method 和有效请求体。常规余额显示和 GET 草稿预览复用缓存。
+POST 草稿的每次手动试查直接请求接口，成功后刷新对应缓存。企业额度由 Core 发布。
 余额订阅与草稿预览失败由 `ProviderBalanceUiState.Unavailable.detail` 保留脱敏诊断，取消向上传播；失败不进入余额缓存，重新订阅仍可重试。
 `providerOverwrite`、custom headers/body、URL 和 API key 只属于用户定义，可能含凭据；
 企业公开 Model 与私有 execution binding 独立，不以这些覆盖字段作为受管执行来源。

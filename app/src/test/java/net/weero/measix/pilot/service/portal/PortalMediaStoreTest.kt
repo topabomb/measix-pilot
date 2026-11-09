@@ -246,14 +246,14 @@ class PortalMediaStoreTest {
     fun `dispatcher return cancellation compensates unreceived sessions captures and publications`() = runBlocking<Unit> {
         val root = temporary.newFolder()
         val store = PortalMediaStore(root, { now }).also { it.recover() }
-        cancelAtReturn { store.open("document") }
+        cancelAtReturn(store) { store.open("document") }
         assertTrue(root.listFiles()!!.isEmpty())
         val session = store.open("document")
         try {
-            cancelAtReturn { session.reserve(PortalMediaStore.JPEG) }
+            cancelAtReturn(store) { session.reserve(PortalMediaStore.JPEG) }
             assertFalse(root.walkTopDown().any { it.isFile })
             val capture = session.reserve(PortalMediaStore.JPEG).apply { file.writeBytes(portalTestJpeg()) }
-            cancelAtReturn { session.publish(capture) }
+            cancelAtReturn(store) { session.publish(capture) }
             assertFalse(root.walkTopDown().any { it.isFile })
             session.reserve(PortalMediaStore.JPEG)
             session.reserve(PortalMediaStore.AUDIO_MP4)
@@ -295,7 +295,7 @@ class PortalMediaStoreTest {
         }
         store.recover()
         failDirectories = true
-        val cancelledOpen = cancelAtReturn { store.open("document") }
+        val cancelledOpen = cancelAtReturn(store) { store.open("document") }
         assertTrue(cancelledOpen is CancellationException)
         assertTrue(cancelledOpen.suppressed.any { it is IOException || it.cause is IOException })
         assertEquals(1, root.listFiles()!!.size)
@@ -303,7 +303,7 @@ class PortalMediaStoreTest {
         val session = store.open("document")
         try {
             failCaptures = true
-            val cancelledReserve = cancelAtReturn { session.reserve(PortalMediaStore.JPEG) }
+            val cancelledReserve = cancelAtReturn(store) { session.reserve(PortalMediaStore.JPEG) }
             assertTrue(cancelledReserve is CancellationException)
             assertTrue(cancelledReserve.suppressed.any { it is IOException || it.cause is IOException })
             assertEquals(1, root.walkTopDown().count { it.extension == "capture" })
@@ -348,7 +348,16 @@ class PortalMediaStoreTest {
         return failure as T
     }
 
-    private suspend fun cancelAtReturn(operation: suspend () -> Unit) = coroutineScope {
+    private suspend fun cancelAtReturn(store: PortalMediaStore, operation: suspend () -> Unit) = coroutineScope {
+        val lockAcquired = CompletableDeferred<Unit>()
+        val releaseLock = CompletableDeferred<Unit>()
+        launch {
+            store.locked {
+                lockAcquired.complete(Unit)
+                releaseLock.await()
+            }
+        }
+        lockAcquired.await()
         val returning = CompletableDeferred<Runnable>()
         val intercept = AtomicBoolean(true)
         val dispatcher = object : CoroutineDispatcher() {
@@ -362,6 +371,8 @@ class PortalMediaStoreTest {
             try { operation(); delivered = true }
             catch (failure: Exception) { observedFailure = failure; throw failure }
         }
+        // Force withContext to suspend before IO can complete and dispatch its result.
+        releaseLock.complete(Unit)
         try {
             val resume = withTimeout(5_000) { returning.await() }
             intercept.set(false)

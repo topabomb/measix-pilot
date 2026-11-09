@@ -21,6 +21,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -181,16 +182,13 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                 val valid = fixture.tools
                 fixture.tools = valid + valid.first()
                 fixture.now += 5 * 60_000
-                fixture.prepare()
-                fixture.awaitOperations()
-                assertNotNull(fixture.diagnostics.last())
+                assertNotNull(fixture.prepareAndAwaitRefresh().second)
                 fixture.now += 29_999
                 fixture.prepare()
                 fixture.awaitOperations()
                 assertEquals(2, fixture.lists.get())
                 fixture.now++
-                fixture.prepare()
-                fixture.awaitOperations()
+                assertNotNull(fixture.prepareAndAwaitRefresh().second)
                 assertEquals(3, fixture.lists.get())
                 fixture.tools = tools(9, "recovered", "new_parameter")
                 fixture.now += 59_999
@@ -198,10 +196,8 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                 fixture.awaitOperations()
                 assertEquals(3, fixture.lists.get())
                 fixture.now++
-                fixture.prepare()
-                fixture.awaitOperations()
+                assertNull(fixture.prepareAndAwaitRefresh().second)
                 assertEquals(4, fixture.lists.get())
-                assertNull(fixture.diagnostics.last())
                 assertEquals(9, fixture.prepare().tools.size)
             }
         }
@@ -216,7 +212,7 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                 assertEquals(8, fixture.prepare().tools.size)
                 fixture.awaitOperations()
                 assertTrue(manager.runtimeCapabilities.value.values.any { it.status is McpStatus.Error })
-                assertTrue(fixture.diagnostics.all { it == null })
+                assertTrue(fixture.diagnostics.value.all { it == null })
                 assertEquals(1, fixture.lists.get())
             }
         }
@@ -275,10 +271,9 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
                 val previous = catalogs.value.values.single()
                 fixture.tools = fixture.tools + fixture.tools.first()
                 fixture.now += 5 * 60_000
-                val fallback = fixture.prepare()
+                val (fallback, diagnostic) = fixture.prepareAndAwaitRefresh()
                 assertEquals(8, fallback.tools.size)
-                fixture.awaitOperations()
-                assertTrue(requireNotNull(fixture.diagnostics.last()).detail.orEmpty().contains("duplicate tool"))
+                assertTrue(requireNotNull(diagnostic).detail.orEmpty().contains("duplicate tool"))
                 val attempts = fixture.lists.get()
                 fixture.prepare()
                 fixture.awaitOperations()
@@ -533,7 +528,7 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
         val scope = AppScope(Dispatchers.IO)
         val leases = mutableListOf<McpExecutionLease>()
         @Volatile var now = 0L
-        val diagnostics = java.util.concurrent.CopyOnWriteArrayList<McpStatus.Error?>()
+        val diagnostics = MutableStateFlow<List<McpStatus.Error?>>(emptyList())
 
         init {
             val state = appliedConfiguration(packet).let { it.copy(manifest = it.manifest.copy(applied = version)) }
@@ -615,7 +610,15 @@ internal class McpManagedCatalogRefreshTest : McpRuntimeCoordinatorTestBase() {
             val captured = CapturedModelConfiguration(Settings(), configuration, assistant,
                 mockk { every { enterpriseVersion } returns version }, 0, Uuid.random())
             return manager.prepareTurnCapabilities(access, captured, owner, Uuid.random(), Job(),
-                onCatalogRefresh = { _, _, error -> diagnostics += error }) {}
+                onCatalogRefresh = { _, _, error -> diagnostics.update { it + error } }) {}
+        }
+
+        suspend fun prepareAndAwaitRefresh(): Pair<TurnMcpCapabilitySnapshot, McpStatus.Error?> {
+            val previousCount = diagnostics.value.size
+            val snapshot = prepare()
+            // A retained catalog replays the previous diagnostic before publishing this attempt.
+            val receipt = diagnostics.first { it.size >= previousCount + 2 }[previousCount + 1]
+            return snapshot to receipt
         }
 
         suspend fun awaitOperations() {

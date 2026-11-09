@@ -110,7 +110,8 @@ fun ConversationList(
             val previous = previouslyPinned
             previouslyPinned = pinHeader
             if (previous != null && previous != pinHeader && layoutAnchor != null) {
-                listState.scrollToItem(layoutAnchor.index, maxOf(0, -layoutAnchor.offset))
+                // BoxWithConstraints can start this effect during measurement.
+                listState.requestScrollToItem(layoutAnchor.index, maxOf(0, -layoutAnchor.offset))
             }
         }
         LaunchedEffect(currentConversationId, conversations.itemSnapshotList, headerHeight, footerHeight) {
@@ -127,7 +128,7 @@ fun ConversationList(
                     it.index == currentIndex && it.offset >= 0 &&
                         it.offset + it.size <= listState.layoutInfo.viewportEndOffset
                 }
-                if (!isVisible) listState.scrollToItem(currentIndex)
+                if (!isVisible) listState.requestScrollToItem(currentIndex)
                 hasScrolledToCurrent = true
             }
         }

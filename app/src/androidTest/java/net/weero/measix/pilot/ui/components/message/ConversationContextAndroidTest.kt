@@ -1,6 +1,9 @@
 package net.weero.measix.pilot.ui.components.message
 
 import android.content.Context
+import android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.rememberScrollState
@@ -24,7 +27,7 @@ import net.weero.measix.pilot.ui.context.Navigator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
@@ -48,7 +51,7 @@ import kotlin.uuid.Uuid
 
 @RunWith(AndroidJUnit4::class)
 class ConversationContextAndroidTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val item = ConversationContextItemUiModel("request/item", Uuid.random(),
         listOf(ConversationContextCategory.MEMORY), null, "USER", "BeforeStep(saved-step)")
@@ -149,6 +152,10 @@ class ConversationContextAndroidTest {
 
     @OptIn(ExperimentalLayoutApi::class)
     @Test fun narrowLargeFontWithImeAddsNoRowForUnchangedContextAndOnlyOneForExternalUpdate() {
+        compose.runOnUiThread {
+            compose.activity.enableEdgeToEdge()
+            compose.activity.window.setSoftInputMode(SOFT_INPUT_ADJUST_RESIZE)
+        }
         val view = ConversationViewLease(Uuid.random(), RealmAccess.Personal, 0L) {}
         val step = me.rerere.ai.ui.UIMessagePart.Step(Uuid.random(), 0, kotlin.time.Instant.fromEpochMilliseconds(0))
         val node = MessageNode.of(UIMessage.assistant("Visible answer").copy(parts = listOf(step, me.rerere.ai.ui.UIMessagePart.Text("Visible answer"))))
@@ -159,7 +166,7 @@ class ConversationContextAndroidTest {
             val density = LocalDensity.current
             val keyboard = LocalSoftwareKeyboardController.current
             var draft by remember { mutableStateOf("input") }
-            val ime = WindowInsets.isImeVisible
+            val ime = WindowInsets.isImeVisible && WindowInsets.ime.getBottom(density) > 0
             SideEffect { imeVisible = ime }
             MaterialTheme { CompositionLocalProvider(
                 LocalDensity provides Density(density.density, 1.8f),
@@ -167,11 +174,12 @@ class ConversationContextAndroidTest {
                 LocalToaster provides rememberToasterState(),
                 LocalNavController provides Navigator(rememberNavBackStack()),
             ) {
-                Column(Modifier.width(320.dp).fillMaxHeight().imePadding()) {
-                    ChatMessage(node = node, detailSource = view, modifier = Modifier.testTag("message"),
-                        readOnly = true, contextSummary = summary, onFork = {}, onRegenerate = {}, onEdit = {},
-                        onShare = {}, onDelete = {}, onUpdate = {})
-                    Spacer(Modifier.weight(1f))
+                Column(Modifier.width(320.dp).fillMaxHeight().systemBarsPadding().imePadding()) {
+                    Box(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
+                        ChatMessage(node = node, detailSource = view, modifier = Modifier.testTag("message"),
+                            readOnly = true, contextSummary = summary, onFork = {}, onRegenerate = {}, onEdit = {},
+                            onShare = {}, onDelete = {}, onUpdate = {})
+                    }
                     BasicTextField(draft, onValueChange = { draft = it },
                         modifier = Modifier.testTag("layout-input").fillMaxWidth())
                     androidx.compose.material3.TextButton(onClick = { keyboard?.show() }) {
@@ -185,7 +193,8 @@ class ConversationContextAndroidTest {
             compose.onNodeWithText("Show keyboard").performClick()
             compose.waitUntil(10_000) { imeVisible }
             val baseline = compose.onNodeWithTag("message").getUnclippedBoundsInRoot()
-            val answer = compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot()
+            val answer = compose.onNodeWithText("Visible answer", useUnmergedTree = true)
+            val answerLeft = answer.assertIsDisplayed().getUnclippedBoundsInRoot().left
             val description = context.getString(R.string.context_updated_accessibility)
             compose.runOnIdle { summary = MessageContextSummary() }
             compose.onAllNodesWithContentDescription(description).assertCountEquals(0)
@@ -196,12 +205,12 @@ class ConversationContextAndroidTest {
             compose.onAllNodesWithContentDescription(description).assertCountEquals(1)
             compose.onNodeWithContentDescription(description).assertIsDisplayed()
             org.junit.Assert.assertTrue(compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().bottom <=
-                compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot().top)
+                answer.assertIsDisplayed().getUnclippedBoundsInRoot().top)
             val label = compose.onNodeWithText("${context.getString(R.string.context_updated)} ›", useUnmergedTree = true)
                 .getUnclippedBoundsInRoot()
-            assertEquals(answer.left, label.left)
+            assertEquals(answerLeft, label.left)
             compose.runOnIdle { assistantBubble = true }
-            assertEquals(compose.onNodeWithText("Visible answer").getUnclippedBoundsInRoot().left,
+            assertEquals(answer.assertIsDisplayed().getUnclippedBoundsInRoot().left,
                 compose.onNodeWithText("${context.getString(R.string.context_updated)} ›", useUnmergedTree = true).getUnclippedBoundsInRoot().left)
             compose.runOnIdle { summary = MessageContextSummary(); assistantBubble = false }
             compose.onNodeWithTag("message").getUnclippedBoundsInRoot().let {

@@ -53,6 +53,12 @@ Artifact、GeneratedMedia、备份、MCP、Workspace 与 Speech 的行为测试�
 单项清理失败时关闭其余连接及清理重试；
 不代替真实 Core/上游验收。
 
+`McpToolResultProjectionTest` 通过真实 executor、工具 Runtime、历史序列化和请求装配验证成功与失败结果的 JSON 等价边界，
+并以本机 HTTP 捕获 Chat Completions / Responses 实际请求正文；`McpToolResultImageTest` 在 Robolectric 中核对图片顺序、
+原始 PNG 编码、Artifact 所有权交接及错误图片省略。MCP 调用和 Artifact Store 使用受控替身，不代表真实 MCP 服务、
+设备页面或远端模型验收。
+`StrictJsonValueTest` 核对字符串及对象键拒绝未转义控制字符、合法转义保全和 JSON 空白边界。
+
 Portal 的 JVM/本机 HTTP 测试观察文档及 Session 绑定、迟到请求、一次性兑换和媒体额度；WebView detach、
 媒体采集释放、AndroidKeyStore 与正式权限/后台路径仍需 Android 或显式 live 场景。
 配置提交失败注入不能冒充设备磁盘故障，返回空集合的替身不能掩盖退出、清理或恢复错误。

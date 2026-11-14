@@ -122,7 +122,7 @@ RPC Client 使用固定 fork `com.github.rikkahub.mcp-kotlin-sdk:0.15.0-rikka.4`
 调用携带短期 capture，发送时关联 SDK 生成的 request ID，响应在交给 SDK handler 前保留完整结果。
 SDK 继续拥有请求、超时和取消；capture 在调用结束的 `finally` 中释放，不能缺失时回退 typed Tool、
 另发请求或维护第二份目录。重复响应以首个匹配结果为准，原始 ID 必须匹配，不能借 SSE 的 replay ID
-重写认领其他响应。JSON 解码拒绝重复键并限制帧字节数与嵌套深度。
+重写认领其他响应。JSON 解码拒绝重复键及字符串内未转义控制字符，并限制帧字节数与嵌套深度。
 POST 使用 Ktor streaming `execute` 作用域，在预读整个 body 之前执行边界检查；收到原请求的终态响应
 后即可结束 POST SSE，不等待远端关闭流。GET SSE 保留持续接收和断线重连，只有指定 resumption
 请求的匹配响应才结束该恢复。多行 `data` 按 SSE 换行规则还原，不拼接为不同 JSON。
@@ -382,8 +382,27 @@ ALLOWLIST 只复验原服务与名称许可，不比较目录或发布的工具�
 server/tool 身份、generation、transport 阶段、`retryable`、`request_sent` 和恢复动作只属于内部诊断，
 不进入模型上下文；本地异常的脱敏类型、消息和 cause 可进入有界 `detail`。
 
-成功结果保留 text/image content 和 `structuredContent`。Image 先取得 Artifact lease，checkpoint 成功后发布；本地失败或未知
-结果会精确回滚未发布 Artifact。取消始终向上传播，客户端不自动重放工具调用。
+### 结果内容投影
+
+服务端可以同时返回 `content` 中的 JSON 文本和 `structuredContent`；这是
+[MCP 结构化内容规范](https://modelcontextprotocol.io/specification/2025-06-18/server/tools#structured-content)
+建议的旧客户端兼容方式。客户端通过 `McpToolCallExecutor` 和 `McpToolFailureProjector` 生成唯一的工具结果，
+界面与后续 Provider 请求共用该投影，不在 UI 或单个 Provider 再建立去重入口。
+
+原始 `content` 的文本、图片与其他块保留原有顺序；仅当某个完整 `TextContent` 是无重复键的合法 JSON，
+且其值与 `structuredContent` 等价时，省略额外的结构化文本副本。`isRepresentedByMcpText` 复用有界严格解析，
+递归忽略对象键顺序、排版和字符串转义差异，保留数组顺序及 JSON 类型；数字用精确十进制比较，
+不因浮点精度丢失而合并不同值。不拼接多个文本块、不提取正文或代码围栏中的 JSON，也不删除服务端原有的重复块。
+
+不存在等价文本时，仍以客户端的 `{"structured_content": ...}` 包装保留结构化内容；只有结构化内容时同样生成文本。
+`structuredContent` 是 MCP 标准字段，`structured_content` 只是本地模型文本包装。
+SDK 已保留的数组和标量适用同一规则，顶层 null 的缺失语义不变。
+远端 `isError` 仍返回 `ToolExecutionFailure` 并提交 FAILED；`failed/remote_error` 信封始终保留，
+仅在原始错误文本已完整表示结构化数据时省略信封中的结构化副本，独有字段和原始诊断继续保留。
+错误图片及其他非文本仍标记省略，不创建 Artifact。
+
+Image 先取得 Artifact lease，checkpoint 成功后发布；本地失败或未知结果会精确回滚未发布 Artifact。
+取消始终向上传播，客户端不自动重放工具调用。内容去重只发生在新接收结果的投影边界，不改写已保存的历史结果。
 
 ## 8. UI 投影
 

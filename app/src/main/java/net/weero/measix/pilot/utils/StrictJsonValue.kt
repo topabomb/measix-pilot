@@ -55,7 +55,9 @@ internal class StrictJsonValue private constructor(private val input: String) {
         if (take('"')) {
             var closed = false
             while (position < input.length) {
-                when (input[position++]) {
+                val char = input[position++]
+                check(char >= ' ') { "Unescaped control character in JSON string" }
+                when (char) {
                     '\\' -> position++
                     '"' -> { closed = true; break }
                 }

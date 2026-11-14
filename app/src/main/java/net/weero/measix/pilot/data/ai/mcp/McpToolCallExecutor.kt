@@ -126,7 +126,11 @@ internal class McpToolCallExecutor(
             McpInvocationOutcome.Succeeded(
                 buildList {
                     addAll(projected)
-                    result.structuredContent?.let { structured ->
+                    result.structuredContent?.takeUnless { structured ->
+                        structured.isRepresentedByMcpText(
+                            result.content.asSequence().filterIsInstance<TextContent>().map { it.text },
+                        )
+                    }?.let { structured ->
                         add(
                             UIMessagePart.Text(
                                 buildJsonObject { put("structured_content", structured) }.toString()

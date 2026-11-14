@@ -78,7 +78,11 @@ internal object McpToolFailureProjector {
         }
         val envelope = buildJsonObject {
             ToolErrorProtocol.envelope(kind.status, kind.reason, detail).forEach { (key, value) -> put(key, value) }
-            structuredContent?.let { put("structured_content", it) }
+            structuredContent?.takeUnless { structured ->
+                structured.isRepresentedByMcpText(
+                    remoteContent.asSequence().filterIsInstance<UIMessagePart.Text>().map { it.text },
+                )
+            }?.let { put("structured_content", it) }
         }
         return ToolExecutionFailure(
             output = listOf(UIMessagePart.Text(envelope.toString())) + remoteContent,

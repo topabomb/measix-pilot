@@ -272,7 +272,8 @@ create 只返回 `id`，edit/delete 返回 `success+id`；正文已在 input，�
 `mcp__<server>__<tool>` 的名称、description 和完整 JSON Schema 来自冻结的 `TurnMcpCapabilitySnapshot`；
 Settings 只保存选择及工具策略，不保存远端 Schema。完整 Schema 保留 `$schema/$defs/$ref` 和未知扩展。
 完整且匹配 definition 的 LKG Catalog 决定能否装配，当前连接健康不参与 Schema 注入。
-成功 TextContent、ImageContent、structuredContent 进入工具结果；图片先通过 Artifact 资源交接。
+成功结果保留原始 content，仅在完整 JSON 文本已等价表示 structuredContent 时省略结构化副本；图片先通过 Artifact 资源交接。
+结果投影、等价边界与历史语义见 [MCP 结果内容投影](mcp-architecture.md#结果内容投影)。
 连接、刷新和调用承诺边界由 [MCP 架构](mcp-architecture.md)维护，模型可见失败见下一节。
 
 ## 5. 工具错误返回协议
@@ -340,8 +341,9 @@ checkpoint、资源登记等 Runtime 基础设施异常继续向 Turn owner 传�
 | 已收到结果但本地投影/保存失败 | failed/result_processing_failed |
 | 调用承诺后无可确认结果 | unknown/outcome_unknown |
 
-remote_error 保留原文本及 structuredContent，只有没有正文时才补有界远端 message；错误图片等非文本内容仅标记省略，
-不写入 Artifact。result_processing_failed 说明本地异常并提示核实远端副作用，outcome_unknown 提醒先核实、勿盲重试。
+remote_error 保留原文本与独有结构化内容，等价副本按 MCP 结果内容投影省略；只有没有正文时才补有界远端 message。
+错误图片等非文本内容仅标记省略，不写入 Artifact。result_processing_failed 说明本地异常并提示核实远端副作用，
+outcome_unknown 提醒先核实、勿盲重试。
 SDK `McpException` 也可表示本地关闭或超时，不能只凭类型声称服务端错误。客户端 commitment 不等于字节已发送。
 server/tool、transport、generation、retryable、request_sent 不进入模型错误结果。
 

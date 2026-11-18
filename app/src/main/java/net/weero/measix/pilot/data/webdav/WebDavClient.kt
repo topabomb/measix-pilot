@@ -11,6 +11,8 @@ import java.time.Instant
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.*
+import net.weero.measix.pilot.data.enterprise.PlatformHttpException
+import net.weero.measix.pilot.data.files.MediaThumbnailProtocol
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -23,6 +25,7 @@ internal data class DavDirectory(val files: List<DavFile>, val self: DavFile?, v
 internal data class DavMediaMetadata(val length: Long, val etag: String)
 internal class DavHttpException(val status: Int, val method: String, val path: String) :
     IOException("webdav_http_error: $method $path (HTTP $status)")
+internal class DavFileVersionChanged : IOException("webdav_file_changed")
 internal class DavMultiStatusException(val failures: List<Pair<String, Int>>) :
     IOException("webdav_partial_result: " + failures.joinToString { "${it.first}: HTTP ${it.second}" })
 
@@ -53,6 +56,51 @@ internal class WebDavClient(
     } catch (failure: DavMultiStatusException) {
         if (failure.failures == listOf(path to 404)) null else throw failure
     }
+
+    suspend fun thumbnailCapability(root: String, authorization: String?, expectedSpace: String?): String? {
+        val endpoint = thumbnailEndpoint(root, expectedSpace) ?: return null
+        val request = thumbnailRequest(endpoint, authorization).method("OPTIONS", null).build()
+        val capability = execute(request) { response ->
+            if (response.code == 404 || response.code == 405) return@execute null
+            if (response.code != 200) {
+                val failure = failure(response, "previews")
+                if (expectedSpace != null && response.code == 403 && failure is PlatformHttpException &&
+                    failure.problem?.code == "dav_target_outside_workspace" && failure.problem.forwarded == false
+                ) return@execute null
+                throw MediaThumbnailProtocol.itemFailure(response, failure)
+            }
+            MediaThumbnailProtocol.capability(response, expectedSpace, allowUnsupported = false)
+        }
+        if (capability == null) list(root, authorization, depth = 0)
+        return capability
+    }
+
+    suspend fun thumbnail(root: String, authorization: String?, space: String, path: String, sourceVersion: String,
+        platformSpace: String? = null,
+    ): ByteArray {
+        WebDavPaths(root).logical(path)
+        require(path.isNotEmpty())
+        requireStrongEtag(sourceVersion)
+        val url = MediaThumbnailProtocol.request(requireNotNull(thumbnailEndpoint(root, platformSpace)), path, sourceVersion)
+        return execute(thumbnailRequest(url, authorization).get().build()) { response ->
+            if (response.code != 200) throw MediaThumbnailProtocol.itemFailure(response, failure(response, path))
+            MediaThumbnailProtocol.bytes(response, space, sourceVersion)
+        }
+    }
+
+    private fun thumbnailEndpoint(root: String, platformSpace: String?): HttpUrl? = WebDavPaths(root).root.let {
+        val path = it.encodedPath
+        val recognized = if (platformSpace != null) {
+            val segments = it.encodedPathSegments
+            segments.size == 8 && segments.take(3) == listOf("runtime", "v1", "resources") &&
+                segments[3].startsWith("dav_") && segments.drop(4) == listOf("spaces", platformSpace, "dav", "")
+        } else path == "/dav/" || RUNCOVE_DAV_ROOT.matches(path)
+        it.resolve("../previews").takeIf { recognized }
+    }
+
+    private fun thumbnailRequest(url: HttpUrl, authorization: String?) = Request.Builder().url(url)
+        .header("Accept", "application/json, image/webp").header("Accept-Encoding", "identity")
+        .apply { if (authorization != null) header("Authorization", authorization) }
 
     private suspend fun properties(root: String, authorization: String?, path: String, depth: Int, directory: Boolean): DavDirectory {
         require(depth == 0 || depth == 1)
@@ -99,7 +147,7 @@ internal class WebDavClient(
         return execute(builder.build(), cancelResources = { output.close() }) { response ->
             requireStatus(response, path, 200)
             requireIdentityEncoding(response)
-            if (etag != null && response.header("ETag") != etag) throw IOException("webdav_file_changed")
+            if (etag != null && response.header("ETag") != etag) throw DavFileVersionChanged()
             val length = response.body.contentLength().takeIf { it >= 0 }
             contentType(response.header("Content-Type"))
             response.body.byteStream().use { input -> copy(input, output, length, progress, maxBytes) }
@@ -265,9 +313,11 @@ internal class WebDavClient(
     }
 
     private fun requireStatus(response: Response, path: String, vararg codes: Int) {
-        if (response.code !in codes) throw (httpFailure?.invoke(response, path)
-            ?: DavHttpException(response.code, response.request.method, path))
+        if (response.code !in codes) throw failure(response, path)
     }
+
+    private fun failure(response: Response, path: String) = httpFailure?.invoke(response, path)
+        ?: DavHttpException(response.code, response.request.method, path)
 
     private fun requireIdentityEncoding(response: Response) {
         require(response.header("Content-Encoding").let { it == null || it.equals("identity", true) }) {
@@ -310,6 +360,7 @@ internal class WebDavClient(
     }
 
     companion object {
+        private val RUNCOVE_DAV_ROOT = Regex("/u/[a-z0-9][a-z0-9_.-]{0,63}/dav/")
         // Some DAV servers (including WsgiDAV) omit quotes in getetag XML while their HTTP
         // headers use entity-tag syntax. Quote only an unambiguous opaque value; retain weakness
         // and malformed values so they never acquire permission for conditional replacement.

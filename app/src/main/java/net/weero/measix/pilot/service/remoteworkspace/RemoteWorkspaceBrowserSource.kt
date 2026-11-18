@@ -1,6 +1,8 @@
 package net.weero.measix.pilot.service.remoteworkspace
 
 import net.weero.measix.pilot.service.files.*
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 import java.io.File
 import java.io.InputStream
@@ -22,6 +24,7 @@ internal class RemoteWorkspaceBrowserSource(
 
     private inner class Session(private val handle: RemoteWorkspaceHandle) : FileBrowserSession {
         private val cache = FileBrowserReadCache()
+        override val thumbnails = service.thumbnails(handle)
         private suspend fun checkAccess() { check(service.isValid(handle)) { "rendered_file_revoked" } }
         override suspend fun browse(path: String) = cache.directory(path, ::checkAccess) { list(path) }
         override suspend fun previewText(file: BrowserFile) = cache.text(file, ::checkAccess) { readText(file) }
@@ -32,8 +35,14 @@ internal class RemoteWorkspaceBrowserSource(
         override fun child(parent: String, name: String) = WorkspaceFileRules.child(parent, name)
         override suspend fun refresh() { cache.invalidate(); service.refresh(handle.selection) }
         override suspend fun isValid() = service.isValid(handle)
-        override suspend fun close() { cache.invalidate(); service.close(handle) }
-        override fun closeLater() { cache.invalidate(); service.closeLater(handle) }
+        override suspend fun close() {
+            cache.invalidate()
+            thumbnails.cancel()
+            withContext(NonCancellable) {
+                try { service.close(handle) } finally { thumbnails.close() }
+            }
+        }
+        override fun closeLater() { cache.invalidate(); thumbnails.cancel(); service.closeLater(handle) }
         override suspend fun list(path: String) = service.list(handle, path)
         override suspend fun stat(path: String) = service.list(handle, path.substringBeforeLast('/', "")).files.find { it.path == path }
         override suspend fun readText(file: BrowserFile) = service.readText(handle, file)
@@ -47,8 +56,10 @@ internal class RemoteWorkspaceBrowserSource(
         override fun outcomeAfterCancellation(path: String) = service.outcomeAfterCancellation(handle, path)
         override suspend fun verifyUnknown(path: String) = service.verifyUnknown(handle, path)
         override suspend fun acknowledgeVerified(path: String) = service.acknowledgeVerified(handle, path)
-        override fun imageSource(file: BrowserFile, maxBytes: Long) = service.imageSource(handle, file, maxBytes)
-        override suspend fun mediaSource(file: BrowserFile) = service.mediaSource(handle, file)
+        override fun imageSource(file: BrowserFile, maxBytes: Long) = service.imageSource(handle, file, maxBytes, thumbnails)
+        override suspend fun mediaSource(file: BrowserFile) = service.mediaSource(handle, file).also {
+            thumbnails.checkSourceVersion(file, it.representationEtag)
+        }
         override suspend fun previewCopy(file: BrowserFile, maxBytes: Long) = service.previewCopy(handle, file, maxBytes)
         override suspend fun releaseCopy(copy: File) = service.releaseCopy(copy)
         override suspend fun share(file: BrowserFile, deliver: (File) -> Unit) = service.share(handle, file, deliver)

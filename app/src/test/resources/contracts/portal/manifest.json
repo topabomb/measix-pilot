@@ -4,7 +4,7 @@
     2
   ],
   "coreBaselineVersion": "0.2.0-preview.23",
-  "baselineHash": "sha256:d47ee126f351c6ec30718150545f154217718e595488d3b1e9db341f7aeec86c",
+  "baselineHash": "sha256:e94dee1ccf96dbe0159cc789746bbfeb25250f06e57cdb3582b2fab1e2ba0381",
   "bridgeVersion": 3,
   "artifacts": {
     "portal-contract.openapi.json": {
@@ -13,7 +13,7 @@
     },
     "client-feed.schemas.json": {
       "source": "api/portal/client-feed.schemas.json",
-      "sha256": "013148ee64f7add48cd546d01af23d17e2270293a37f78aeb5ae951d145575d3"
+      "sha256": "a1e95b51a648f0adb6556acf7e0aae1f838c6ec097dd4ccea6c8c9766010bac1"
     },
     "native-vectors.json": {
       "source": "api/fixtures/portal/native-vectors.json",

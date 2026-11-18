@@ -46,6 +46,7 @@ internal data class FileBrowserState(
     val handle: FileBrowserSession? = null,
     val path: String = "",
     val directory: BrowserDirectory? = null,
+    val thumbnailDemandRevision: Long = 0,
     val loading: Boolean = false,
     val error: String? = null,
     val revoked: Boolean = false,
@@ -124,7 +125,7 @@ internal open class FileBrowserVM(
         val revision = ++readRevision
         readJob = viewModelScope.launch {
             var acquired: FileBrowserSession? = null
-            _state.update { it.copy(loading = true, error = null) }
+            pauseThumbnailDemand { it.copy(loading = true, error = null) }
             try {
                 if (resumeHandle != null) {
                     source.refresh()
@@ -137,7 +138,11 @@ internal open class FileBrowserVM(
                 _state.update { it.copy(handle = handle, revoked = false) }
                 acquired = null
                 val directory = if (refresh) handle.list(path) else handle.browse(path)
-                if (revision == readRevision && _state.value.handle === handle) _state.update { it.copy(directory = directory) }
+                if (revision == readRevision && _state.value.handle === handle) {
+                    handle.thumbnails?.directory(directory)
+                    if (refresh) handle.thumbnails?.retryFailures()
+                    _state.update { it.copy(directory = directory) }
+                }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { if (revision == readRevision) report(error) }
             finally {
@@ -154,14 +159,31 @@ internal open class FileBrowserVM(
         loadDirectory(force = false, refresh = false)
     }
 
+    private fun pauseThumbnailDemand(update: (FileBrowserState) -> FileBrowserState) {
+        val thumbnails = _state.value.handle?.thumbnails
+        thumbnails?.visible(emptyList())
+        _state.update { current ->
+            val next = update(current)
+            // A fast operation can finish before Compose observes the intermediate paused state.
+            if (thumbnails == null) next else next.copy(thumbnailDemandRevision = current.thumbnailDemandRevision + 1)
+        }
+    }
+
+    fun visibleMedia(handle: FileBrowserSession, directory: BrowserDirectory, revision: Long, files: List<BrowserFile>) {
+        val current = _state.value
+        if (current.handle === handle && current.directory === directory && current.thumbnailDemandRevision == revision &&
+            !current.loading && !current.running && current.preview == null && !leaving
+        ) handle.thumbnails?.visible(files)
+    }
+
     private val previewHistory = java.util.ArrayDeque<Pair<BrowserFile, FileBrowserEditorSession>>()
 
     fun openPreview(file: BrowserFile) {
         if (leaving) return
         val handle = _state.value.handle ?: return
         previewHistory.clear()
-        if (!_state.value.running) _state.update {
-            it.copy(preview = file, editorSession = FileBrowserEditorSession(handle, file.path), save = null)
+        if (!_state.value.running) {
+            pauseThumbnailDemand { it.copy(preview = file, editorSession = FileBrowserEditorSession(handle, file.path), save = null) }
         }
     }
 
@@ -219,7 +241,7 @@ internal open class FileBrowserVM(
         if (leaving || work?.isActive == true || original == null || _state.value.handle !== original) return
         val unverified = _state.value.results.filter { it.outcome == BrowserOutcome.UNKNOWN }.distinctBy { it.path }
         val results = paths.map { BrowserOperationResult(it, BrowserOutcome.NOT_STARTED) }
-        _state.update { it.copy(running = true, results = retainUnverified(results, unverified), error = null,
+        pauseThumbnailDemand { it.copy(running = true, results = retainUnverified(results, unverified), error = null,
             resultLabel = resultLabel, resultDirectory = resultDirectory,
             progress = 0, total = null, activeIndex = null, batchSize = paths.size) }
         work = viewModelScope.launch {
@@ -386,11 +408,11 @@ internal open class FileBrowserVM(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun downloadSingle(file: BrowserFile, original: FileBrowserSession, uri: Uri) {
-        val transfer = original.acceptExport(file, destination(uri), ::progress)
         val unverified = _state.value.results.filter { it.outcome == BrowserOutcome.UNKNOWN }.distinctBy { it.path }
-        _state.update { it.copy(running = true, results = retainUnverified(listOf(BrowserOperationResult(file.path, BrowserOutcome.NOT_STARTED)), unverified), error = null,
+        pauseThumbnailDemand { it.copy(running = true, results = retainUnverified(listOf(BrowserOperationResult(file.path, BrowserOutcome.NOT_STARTED)), unverified), error = null,
             progress = 0, total = null, activeIndex = 0, batchSize = 1,
             resultLabel = R.string.remote_workspace_download, resultDirectory = null) }
+        val transfer = original.acceptExport(file, destination(uri), ::progress)
         work = viewModelScope.launch(start = CoroutineStart.ATOMIC) {
             var result = BrowserOperationResult(file.path, BrowserOutcome.CANCELLED)
             try {

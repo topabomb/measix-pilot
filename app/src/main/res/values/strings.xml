@@ -2183,4 +2183,8 @@
   <string name="history_page_selected_count">Selected: %1$d</string>
   <string name="history_page_delete_selected_confirmation">Delete the selected conversations (%1$d)? This cannot be undone.</string>
   <string name="chat_page_export_save_gallery">Save to gallery</string>
+  <string name="file_browser_list_view">List</string>
+  <string name="file_browser_thumbnail_view">Thumbnails</string>
+  <string name="file_browser_loading_original">Loading original image</string>
+  <string name="file_browser_thumbnail_diagnostic">Thumbnail details</string>
 </resources>

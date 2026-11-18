@@ -413,7 +413,7 @@ HTML 返回先完成已知尺寸占位图的加载与布局，再恢复滚动并
 
 ## 11. WebDAV 文件访问
 
-`WebDavApplicationService` 负责原域目标、活动请求和未知写入状态；`WebDavClient` 只负责标准 DAV HTTP IO。
+`WebDavApplicationService` 负责原域目标、活动请求和未知写入状态；`WebDavClient` 负责标准 DAV 和可选媒体扩展的 HTTP IO。
 `WebDavBrowserService` 将已授权 handle 适配为 `FileBrowserSession`，管理预览、分享及系统文件交付的临时所有权，
 与原企业 Files 页面共用 `FileBrowserVM` / `FileBrowserPage`，不把两种传输协议互相回退。
 配置、唯一当前资源及企业身份归属见 [配置架构](android-configuration-architecture.md)，入口和切换交互见
@@ -472,6 +472,30 @@ DAV 音视频 HEAD 获取长度和强 ETag，Range 严格核对 206、版本、C
 每段使用定长数组读取，拒绝错误的 Content-Length；无该头的分块响应仍按有界长度和 EOF 完整核验。
 文本、图片与 PDF 沿原预览大小和格式限制。分享只交付只读 FileProvider 副本，不暴露带认证的 URL；
 未交付预览和已交付分享副本分别按浏览器现有生命周期及保留期限清理。
+
+### 远端媒体缩略图
+
+浏览会话按既有来源授权访问缩略图。WebDAV 只对 Runcove 的 `/dav/`、`/u/{username}/dav/` 和原平台绑定给出的 DAV 根解析
+同源 `../previews`。用原凭据执行无正文、无 query 的 OPTIONS。仅当预览 OPTIONS 返回 404/405 或精确识别到
+旧 Relay 的未转发路由拒绝，才用原 DAV 根的 Depth 0 成功读取确认扩展缺失。其他 DAV 根使用标准协议。
+Orchelm Files 对 `/api/client/v1/workspace/thumbnail` 发送带当前 `agentSpaceId` 的认证 OPTIONS，
+识别 v1 的明确不支持结果和旧 Core 的精确缺路由响应。鉴权、网络和合同错误保留诊断。
+
+`FileBrowserSession` 持有 `FileBrowserThumbnails`，按原授权会话共享在途能力查询和结果。普通翻目录、
+布局改变与令牌续期复用结果，显式刷新可重试发现失败。Hub 确认返回 `preview_not_supported` 时，原会话转入无扩展状态
+并清空小图。会话关闭或已观测绑定变更撤销旧请求与缓存。
+企业 Files 使用当前投影可见的绑定修订；未暴露的后台修订仍由服务端每次请求校验。可见的图片和视频列表版本
+必须带强源 ETag。两条网络路径共享 `MediaThumbnailProtocol`，固定最长边 256，校验空间、源版本、派生 SHA-256、
+WebP 单帧尺寸和至多 1 MiB 正文。能力和取图均独立于主目录，缩略图的解码与网络错误不将 Files 标为不可用。
+
+会话以内存 LRU 持有最多 128 项和 8 MiB 编码字节，路径与源版本共同定位条目。同版本列表、网格与预览复用
+同一表示。预算满时优先淘汰视口外的条目。每次交付仍检查原授权，刷新目录淘汰删除或版本变化的条目。
+会话失效时释放全部字节，Coil 不缓存这些缩略图的解码结果。仅调度视口内的条目，同连接一次 GET，退场取消后等待实际
+Call 收尾。目录导航、播放、原图与传输优先。当前视口保留已处理条目，避免缓存淘汰后循环请求。跨视口保留最多
+128 项明确失败结果和 429 重试记录，临时传输故障在条目重新进入视口时可恢复。显式刷新允许重新尝试失败条目。
+能力查询和取图的 429 都服从连接共享的 Retry-After，有可见需求时至多补试一次；源版本冲突等待目录更新。
+列表直接使用类型图标作为回退。Orchelm 原图只有在借到同版小图时才固定源版本。
+确认版本冲突后先撤下旧小图，再读取同一授权路径的当前原图，避免把新字节缓存到旧版本身份。
 
 分享、托管附件、备份恢复和 SAF 导出均通过 `publishDownload` 做最终交付检查；个人路径在原配置 owner 内核对连接，
 企业路径还做一次新鲜绑定查询，并在原 Session/配置边界提交。SAF 导出先写完并关闭本次目标，交付成功后解除其本地

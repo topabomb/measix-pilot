@@ -21,11 +21,14 @@ import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okio.BufferedSink
+import net.weero.measix.pilot.data.files.MediaThumbnailProtocol
+import net.weero.measix.pilot.data.files.MediaThumbnailUnavailableException
 import net.weero.measix.pilot.utils.StrictJsonValue
 
 internal data class WorkspaceContentMetadata(val etag: String?, val length: Long, val contentType: String?)
 internal class WorkspaceLocalIOException(cause: IOException) : IOException(cause.message, cause)
 internal class WorkspaceProtocolUnavailableException(reason: String) : IOException(reason)
+internal class WorkspaceImageVersionChanged : IOException("workspace_file_changed")
 
 internal inline fun <T> workspaceLocalIO(action: () -> T): T = try { action() }
 catch (error: IOException) { throw WorkspaceLocalIOException(error) }
@@ -116,14 +119,52 @@ internal class PlatformWorkspaceClient(client: OkHttpClient) {
         }
     }
 
+    suspend fun thumbnailCapability(connection: PlatformConnection, token: String, space: String): String? =
+        readClient.newCall(builder(url(connection, "thumbnail", space), token)
+            .header("Accept-Encoding", "identity").method("OPTIONS", null).build()).readResponse { response ->
+            if (response.code == 404 && response.header("Content-Type")?.substringBefore(';')?.trim() == "text/plain") {
+                val raw = MediaThumbnailProtocol.boundedCapabilityText(response)
+                if (raw == "404 page not found\n") return@readResponse null
+                requireStatus(response, raw)
+            }
+            requireThumbnailStatus(response)
+            MediaThumbnailProtocol.capability(response, space, allowUnsupported = true)
+        }
+
+    suspend fun thumbnail(connection: PlatformConnection, token: String, space: String, path: String,
+        sourceVersion: String): ByteArray {
+        WorkspaceFileRules.path(path)
+        WorkspaceFileRules.requireEtag(sourceVersion)
+        val endpoint = MediaThumbnailProtocol.request(url(connection, "thumbnail", space).toHttpUrl(), path, sourceVersion)
+        return readClient.newCall(builder(endpoint.toString(), token)
+            .header("Accept", "image/webp, application/problem+json").header("Accept-Encoding", "identity").get().build())
+            .readResponse { response ->
+                requireThumbnailStatus(response)
+                MediaThumbnailProtocol.bytes(response, space, sourceVersion)
+            }
+    }
+
+    private fun requireThumbnailStatus(response: Response) {
+        try { requireStatus(response) }
+        catch (failure: IOException) {
+            if (response.code == 501 && failure is PlatformHttpException && failure.problem?.code == "preview_not_supported") {
+                throw MediaThumbnailUnavailableException(failure)
+            }
+            throw MediaThumbnailProtocol.itemFailure(response, failure)
+        }
+    }
+
     suspend fun download(connection: PlatformConnection, token: String, space: String, path: String,
         output: OutputStream, maxBytes: Long = Long.MAX_VALUE, progress: (Long, Long?) -> Unit = { _, _ -> },
+        expectedEtag: String? = null,
     ): WorkspaceContentMetadata {
         WorkspaceFileRules.path(path)
         return withStreamCancellation { streams ->
         streams.register(output)
-        readClient.newCall(builder(url(connection, "content", space, path), token).get().build()).readResponse { response ->
+        readClient.newCall(builder(url(connection, "content", space, path), token)
+            .apply { expectedEtag?.let { header("If-Match", WorkspaceFileRules.requireEtag(it)) } }.get().build()).readResponse { response ->
             requireStatus(response)
+            if (expectedEtag != null && response.header("ETag") != expectedEtag) throw WorkspaceImageVersionChanged()
             val expected = response.body.contentLength().takeIf { it >= 0 }
             require(expected == null || expected <= maxBytes) { "workspace_preview_limit" }
             var total = 0L

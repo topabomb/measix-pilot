@@ -11,6 +11,7 @@ internal interface FileBrowserSession {
     val description: String
     val location: String
     val writable: Boolean
+    val thumbnails: FileBrowserThumbnails? get() = null
     fun path(value: String): String
     fun child(parent: String, name: String): String
     suspend fun refresh()

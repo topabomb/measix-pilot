@@ -1,7 +1,9 @@
 package net.weero.measix.pilot.ui.components.files
 
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,36 +26,65 @@ internal fun FileRow(
     thumbnail: (@Composable () -> Unit)? = null,
     compact: Boolean = false,
     metadata: (@Composable () -> Unit)? = null,
+    tile: Boolean = false,
     actions: @Composable ColumnScope.(dismiss: () -> Unit) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val actionMenu: @Composable (Modifier) -> Unit = { modifier ->
+        Box(modifier) {
+            IconButton({ expanded = true }) {
+                Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options),
+                    modifier = if (tile) Modifier.size(28.dp)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = .92f), CircleShape)
+                        .padding(4.dp) else Modifier)
+            }
+            DropdownMenu(expanded, { expanded = false }) { actions { expanded = false } }
+        }
+    }
+    val leading: @Composable () -> Unit = {
+        if (thumbnail != null) thumbnail()
+        else Icon(if (directory) HugeIcons.Folder01 else HugeIcons.File02, null, Modifier.size(if (tile) 36.dp else 22.dp),
+            tint = if (directory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     val verticalPadding = if (compact) { if (metadata != null) 0.dp else 4.dp } else 12.dp
     Card(Modifier.fillMaxWidth().combinedClickable(
         onClick = { if (selecting && onSelect != null) onSelect() else onOpen() }, onLongClick = onSelect,
-    ), shape = if (compact) androidx.compose.ui.graphics.RectangleShape else MaterialTheme.shapes.medium,
-        colors = if (compact) CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface)
+    ), shape = if (compact && !tile) androidx.compose.ui.graphics.RectangleShape else MaterialTheme.shapes.medium,
+        colors = if (compact || tile) CardDefaults.cardColors(containerColor = when {
+            selected -> MaterialTheme.colorScheme.secondaryContainer
+            tile -> MaterialTheme.colorScheme.surfaceContainer
+            else -> MaterialTheme.colorScheme.surface
+        })
         else CustomColors.cardColorsOnSurfaceContainer) {
-        Row(Modifier.fillMaxWidth().heightIn(min = if (compact) { if (metadata != null) 48.dp else 56.dp } else 0.dp)
-            .padding(start = if (compact) 12.dp else 16.dp,
-                top = verticalPadding, bottom = verticalPadding, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            if (selecting && onSelect != null) Checkbox(selected, { onSelect() })
-            else Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                if (thumbnail != null) thumbnail()
-                else Icon(if (directory) HugeIcons.Folder01 else HugeIcons.File02, null, Modifier.size(22.dp),
-                    tint = if (directory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        if (tile) {
+            Column {
+                Box(Modifier.fillMaxWidth().aspectRatio(1.2f), contentAlignment = Alignment.Center) {
+                    leading()
+                    if (selecting && onSelect != null) Box(Modifier.align(Alignment.TopStart)) {
+                        Checkbox(selected, { onSelect() })
+                    }
+                    else actionMenu(Modifier.align(Alignment.TopEnd))
+                }
+                Text(name, Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.titleSmall, minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp)) {
-                Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        } else {
+            Row(Modifier.fillMaxWidth().heightIn(min = if (compact) { if (metadata != null) 48.dp else 56.dp } else 0.dp)
+                .padding(start = if (compact) 12.dp else 16.dp,
+                    top = verticalPadding, bottom = verticalPadding, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                if (selecting && onSelect != null) Checkbox(selected, { onSelect() })
+                else Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) { leading() }
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp)) {
+                    Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                metadata?.invoke()
+                if (!selecting) actionMenu(Modifier)
+                else if (metadata != null) Spacer(Modifier.width(48.dp))
             }
-            metadata?.invoke()
-            if (!selecting) Box {
-                IconButton({ expanded = true }) { Icon(HugeIcons.MoreVertical, stringResource(R.string.more_options)) }
-                DropdownMenu(expanded, { expanded = false }) { actions { expanded = false } }
-            }
-            else if (metadata != null) Spacer(Modifier.width(48.dp))
         }
     }
 }

@@ -146,6 +146,7 @@ fun ImagePreviewDialog(
     overlay: (@Composable () -> Unit)? = null,
     onInfoRetry: suspend () -> Unit = {},
     showSaveAction: Boolean = true,
+    previewPlaceholder: ImageSource? = null,
     onEditImage: ((Int) -> Unit)? = null,
 ) {
     if (images.isEmpty()) {
@@ -205,6 +206,15 @@ fun ImagePreviewDialog(
     }
     val currentUrl = viewerImages.getOrNull(state.currentPage)
     var previewLoading by remember(currentUrl) { mutableStateOf(true) }
+    val interim = previewPlaceholder?.takeIf { viewerImages.size == 1 }
+    var showOriginalProgress by remember(currentUrl, interim) { mutableStateOf(false) }
+    LaunchedEffect(currentUrl, interim, previewLoading) {
+        showOriginalProgress = false
+        if (interim != null && previewLoading) {
+            kotlinx.coroutines.delay(160)
+            showOriginalProgress = true
+        }
+    }
     var previewFailure by remember(currentUrl) { mutableStateOf<Throwable?>(null) }
     var infoRevision by remember(currentUrl) { mutableStateOf(0) }
     var cachedImageInfo by remember(currentUrl, infoRevision) { mutableStateOf<ImageInfo?>(null) }
@@ -291,12 +301,14 @@ fun ImagePreviewDialog(
                                     previewFailure?.let { logDiagnosticFailure("ImagePreview", "Image preview load failed", it) }
                                 }
                             }
-                            return@ImagePager Pair(painter, painter.intrinsicSize)
+                            val loading = painterState is AsyncImagePainter.State.Empty || painterState is AsyncImagePainter.State.Loading
+                            val displayed = if (loading && interim != null) rememberAsyncImagePainter(interim) else painter
+                            return@ImagePager Pair(displayed, displayed.intrinsicSize)
                         },
                     )
                 }
 
-                if (previewLoading) {
+                if (previewLoading && interim == null) {
                     CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
                 }
                 previewFailure?.let { failure ->
@@ -479,6 +491,17 @@ fun ImagePreviewDialog(
                                 )
                             }
                         }
+                    }
+                    if (previewLoading && showOriginalProgress && !infoVisible) Row(
+                        Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 72.dp)
+                            .background(Color.Black.copy(alpha = .72f), MaterialTheme.shapes.small)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CircularProgressIndicator(Modifier.size(14.dp), color = Color.White, strokeWidth = 2.dp)
+                        Text(stringResource(R.string.file_browser_loading_original), color = Color.White,
+                            style = MaterialTheme.typography.labelMedium)
                     }
                 }
 

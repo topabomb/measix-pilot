@@ -34,7 +34,7 @@ ROOTS = ["ManagedSnapshotV4", "Discovery", "EnrollmentExchangeRequest", "Enrollm
          "RefreshRequest", "RefreshResponse", "ManagedState", "Bootstrap",
          "ManagedSnapshot", "ManagedAppliedReport", "PortalGrant", "UserBudgetView",
          "Problem", "EnterpriseUpdateFeed", "WorkspaceProjection",
-         "WorkspaceFileList", "WorkspaceFileMutation", "WorkspaceFileResult"]
+         "WorkspaceFileList", "WorkspaceFileMutation", "WorkspaceFileResult", "WorkspaceThumbnailCapabilities"]
 # These producer-only fields have no Android display, storage or execution consumer.
 # Keep them in the pinned Core contract, but outside the Android response projection.
 OMITTED_RESPONSE_FIELDS = {

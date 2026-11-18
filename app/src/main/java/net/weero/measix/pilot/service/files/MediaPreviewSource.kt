@@ -14,6 +14,7 @@ internal class MediaPreviewSource(
     verifyAccess: suspend () -> Unit,
     close: () -> Unit = {},
     maxBytes: Long = MAX_MEDIA_BYTES,
+    val representationEtag: String? = null,
     readRange: suspend (Long, Int) -> ByteArray,
 ) {
     private val closed = AtomicBoolean()

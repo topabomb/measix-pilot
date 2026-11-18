@@ -358,6 +358,25 @@ internal class RemoteWorkspaceService(
             it.size, it.modifiedAt, it.etag) }, result.usedBytes, result.availableBytes)
     }
 
+    fun thumbnails(handle: RemoteWorkspaceHandle) = FileBrowserThumbnails(
+        scope, { validate(handle) },
+        { operation(handle, retryRejectedToken = true, optionalThumbnail = true) { token ->
+            client.thumbnailCapability(handle.connection, token, handle.space)
+        } },
+        { space, key -> operation(handle, retryRejectedToken = true, optionalThumbnail = true) { token ->
+            check(space == handle.space) { "workspace_target_changed" }
+            client.thumbnail(handle.connection, token, space, key.path, key.sourceVersion)
+        } },
+        bindingChanges = state,
+        currentBinding = {
+            state.value?.takeIf { it.identity == Identity(handle.selection, handle.connection) }?.projection?.let {
+                FileBrowserThumbnails.Binding(
+                    it.agentSpaceId.takeIf { _ -> it.filesAvailable }, it.bindingRevision, it.webdav?.bindingRevision,
+                )
+            }
+        },
+    )
+
     suspend fun mediaSource(handle: RemoteWorkspaceHandle, file: BrowserFile): net.weero.measix.pilot.service.files.MediaPreviewSource {
         val metadata = operation(handle, retryRejectedToken = true) { token ->
             client.mediaMetadata(handle.connection, token, handle.space, file.path)
@@ -367,6 +386,7 @@ internal class RemoteWorkspaceService(
             readRange = { position, length -> operation(handle, retryRejectedToken = true) { token ->
                 client.mediaRange(handle.connection, token, handle.space, file.path, metadata, position, length)
             } },
+            representationEtag = metadata.etag,
         )
     }
 
@@ -564,11 +584,16 @@ internal class RemoteWorkspaceService(
         }
     }
 
-    fun imageSource(handle: RemoteWorkspaceHandle, file: BrowserFile, maxBytes: Long = net.weero.measix.pilot.service.workspace.MAX_WORKSPACE_IMAGE_BYTES.toLong()) =
-        net.weero.measix.pilot.service.ImageSource(
-            cacheIdentity = "remote:${handle.id}:${file.path}:${file.etag ?: Uuid.random()}",
+    fun imageSource(handle: RemoteWorkspaceHandle, file: BrowserFile, maxBytes: Long, thumbnails: FileBrowserThumbnails):
+        net.weero.measix.pilot.service.ImageSource {
+        val interim = thumbnails.cachedKey(file)
+        return net.weero.measix.pilot.service.ImageSource(
+            cacheIdentity = "remote:${handle.id}:${file.path}:${file.etag ?: Uuid.random()}:${interim != null}",
             origin = net.weero.measix.pilot.service.ImageOrigin.NETWORK, displayName = file.name,
             gallerySaveSupported = net.weero.measix.pilot.service.workspace.workspaceImageGallerySaveSupported(file.name),
+            // Files reads can return the path's current data, which may differ from the listing.
+            // Keep decoded originals out of a cache keyed by that listing version.
+            memoryCacheEnabled = false,
             mimeHint = if (file.name.endsWith(".svg", ignoreCase = true)) "image/svg+xml" else null,
             modifiedAtMillis = file.modifiedAt?.let { value ->
                 try { java.time.Instant.parse(value).toEpochMilli() } catch (_: java.time.DateTimeException) { null }
@@ -576,14 +601,26 @@ internal class RemoteWorkspaceService(
             verifyAccess = { validate(handle) },
             readPayload = {
                 operation(handle, retryRejectedToken = true) { token ->
-                    val buffer = ByteArrayOutputStream()
-                    client.download(handle.connection, token, handle.space, file.path, buffer, maxBytes)
-                    buffer.toByteArray().also { bytes ->
-                        net.weero.measix.pilot.service.workspace.validateWorkspaceImage(bytes, file.name)
+                    suspend fun read(expected: String?): ByteArray {
+                        val buffer = ByteArrayOutputStream()
+                        client.download(handle.connection, token, handle.space, file.path, buffer, maxBytes, expectedEtag = expected)
+                        return buffer.toByteArray()
                     }
+                    val bytes = try { read(interim?.sourceVersion) }
+                    catch (failure: IOException) {
+                        val changed = failure is WorkspaceImageVersionChanged ||
+                            failure is PlatformHttpException && (failure.status == 412 || failure.problem?.code == "file_version_conflict")
+                        if (interim == null || !changed) throw failure
+                        thumbnails.sourceChanged(interim)
+                        validate(handle)
+                        read(null)
+                    }
+                    net.weero.measix.pilot.service.workspace.validateWorkspaceImage(bytes, file.name)
+                    bytes
                 }
             },
         )
+    }
 
     private suspend fun <T> withOutput(open: () -> OutputStream, use: suspend (OutputStream) -> T): T {
         val output = workspaceLocalIO(open)
@@ -655,7 +692,8 @@ internal class RemoteWorkspaceService(
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun <T> operation(handle: RemoteWorkspaceHandle, writing: Boolean = false,
-        retryRejectedToken: Boolean = false, onFailure: suspend (Throwable) -> Unit = {}, action: suspend (String) -> T,
+        retryRejectedToken: Boolean = false, onFailure: suspend (Throwable) -> Unit = {},
+        optionalThumbnail: Boolean = false, action: suspend (String) -> T,
     ): T {
         val cleaned = AtomicBoolean(false)
         suspend fun cleanup(error: Throwable) {
@@ -702,8 +740,10 @@ internal class RemoteWorkspaceService(
                         cleanup(error)
                         if (error is PlatformHttpException) {
                             platform.workspaceFailure(access, error)
-                            markReadFailure(handle, error)
-                        } else if (!writing && error is IOException && error !is WorkspaceLocalIOException) markConnectionFailure(handle, error)
+                            if (!optionalThumbnail || error.problem?.code == "workspace_space_mismatch") markReadFailure(handle, error)
+                        } else if (!optionalThumbnail && !writing && error is IOException && error !is WorkspaceLocalIOException) {
+                            markConnectionFailure(handle, error)
+                        }
                         throw error
                     } finally { lease?.release() }
                 }.also { it.start() }

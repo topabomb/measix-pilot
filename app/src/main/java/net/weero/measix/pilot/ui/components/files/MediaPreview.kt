@@ -15,6 +15,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -22,6 +25,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.children
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -33,6 +37,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import coil3.compose.AsyncImage
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -44,6 +49,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.MoreVertical
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.service.ImageSource
 import net.weero.measix.pilot.service.files.MediaPreviewSource
 import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import net.weero.measix.pilot.ui.components.ui.ErrorDetails
@@ -53,7 +59,8 @@ import net.weero.measix.pilot.service.ChatError
 @Composable
 internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExternal: (() -> Unit)? = null,
     onDownload: (() -> Unit)? = null, actionsEnabled: Boolean = true,
-    speechPlayback: SpeechPlayback? = null, positionState: MutableLongState? = null, status: @Composable () -> Unit = {}) {
+    speechPlayback: SpeechPlayback? = null, positionState: MutableLongState? = null, poster: ImageSource? = null,
+    status: @Composable () -> Unit = {}) {
     val currentSpeech by rememberUpdatedState(speechPlayback)
     val context = LocalContext.current
     val orientation = LocalConfiguration.current.orientation
@@ -66,6 +73,8 @@ internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExt
     var menu by remember { mutableStateOf(false) }
     var playing by remember(source) { mutableStateOf(false) }
     var error by remember(source) { mutableStateOf<String?>(null) }
+    var posterPending by remember(source) { mutableStateOf(true) }
+    val activePoster by rememberUpdatedState(poster?.takeIf { posterPending })
     val player = remember(source, lifecycle) {
         ExoPlayer.Builder(context).setLoadControl(DefaultLoadControl.Builder()
             .setBufferDurationsMs(15_000, 30_000, 3_000, 5_000)
@@ -75,6 +84,7 @@ internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExt
         }
     }
     fun prepare() {
+        posterPending = true
         val restoredPosition = position
         player.setMediaSource(ProgressiveMediaSource.Factory(DataSource.Factory { MediaPreviewDataSource(source) })
             .createMediaSource(MediaItem.fromUri(Uri.parse("workspace-media:/content"))))
@@ -84,13 +94,17 @@ internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExt
     DisposableEffect(player, lifecycle) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
+            override fun onRenderedFirstFrame() { posterPending = false }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 if (playWhenReady) currentSpeech?.pause()
             }
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                 position = newPosition.positionMs.coerceAtLeast(0)
             }
-            override fun onPlayerError(failure: PlaybackException) { error = failure.userVisibleDiagnostic() }
+            override fun onPlayerError(failure: PlaybackException) {
+                posterPending = false
+                error = failure.userVisibleDiagnostic()
+            }
         }
         player.addListener(listener)
         prepare()
@@ -125,6 +139,7 @@ internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExt
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) {
                 player.stop(); player.clearMediaItems()
+                posterPending = false
                 error = failure.userVisibleDiagnostic()
                 return@collect
             }
@@ -173,7 +188,28 @@ internal fun MediaPreview(source: MediaPreviewSource, onClose: () -> Unit, onExt
                 setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { controlsVisible = it == android.view.View.VISIBLE })
                 controllerAutoShow = true
                 keepScreenOn = true
-            } }, update = { it.player = player; it.setFullscreenButtonState(fullscreen); it.keepScreenOn = playing },
+            } }, update = {
+                it.player = player
+                it.setFullscreenButtonState(fullscreen)
+                it.keepScreenOn = playing
+                // A matching poster can arrive after the player view. Host it beneath the controls.
+                if (activePoster != null) {
+                    val frame = it.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)
+                    if (frame != null && frame.children.none { child -> child is ComposeView }) {
+                        val view = ComposeView(it.context).apply {
+                            setContent {
+                                activePoster?.let { image ->
+                                    var loaded by remember(image) { mutableStateOf(false) }
+                                    AsyncImage(image, contentDescription = null,
+                                        modifier = Modifier.fillMaxSize().then(if (loaded) Modifier.testTag("video-poster") else Modifier),
+                                        contentScale = ContentScale.Fit, onSuccess = { loaded = true }, onError = { loaded = false })
+                                }
+                            }
+                        }
+                        frame.addView(view, android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+                    }
+                }
+            },
                 onRelease = { it.player = null; it.keepScreenOn = false }, modifier = Modifier.fillMaxSize())
             if (fullscreen && controlsVisible) TextButton(::rotate, Modifier.align(androidx.compose.ui.Alignment.TopEnd)) {
                 Text(stringResource(R.string.file_media_rotate), color = Color.White)

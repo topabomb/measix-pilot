@@ -2175,4 +2175,8 @@
   <string name="history_page_selected_count">已选 %1$d 项</string>
   <string name="history_page_delete_selected_confirmation">删除选中的 %1$d 个会话？此操作无法撤销。</string>
   <string name="chat_page_export_save_gallery">保存到相册</string>
+  <string name="file_browser_list_view">列表</string>
+  <string name="file_browser_thumbnail_view">缩略图</string>
+  <string name="file_browser_loading_original">正在加载原图</string>
+  <string name="file_browser_thumbnail_diagnostic">缩略图诊断</string>
 </resources>

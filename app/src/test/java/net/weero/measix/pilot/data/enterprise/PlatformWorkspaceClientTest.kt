@@ -7,6 +7,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
+import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -14,6 +15,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okio.ByteString.Companion.toByteString
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -32,6 +35,77 @@ class PlatformWorkspaceClientTest {
     }
     private fun HttpExchange.reply(status: Int, text: String) {
         val bytes = text.toByteArray(); sendResponseHeaders(status, bytes.size.toLong()); responseBody.write(bytes)
+    }
+
+    @Test fun `thumbnail uses the source tag and admits only bounded same space derived bytes`() = runBlocking {
+        // Core's workspace/thumbnail.webp contract fixture.
+        val body = Base64.getDecoder().decode(
+            "UklGRkAAAABXRUJQVlA4IDQAAADwAQCdASoDAAIAAQAcJaACdLoB+AAETAAA/vW4f/6aR40jxpHxcP/ugT90CfugT/3NoAAA")
+        val path = "media/中文 +#%.png"
+        val sourceEtag = "\"source-v1\""
+        val derivedEtag = "\"${body.toByteString().sha256().hex()}\""
+        var returnedSource = sourceEtag
+        var returnedDerived = derivedEtag
+        val requests = mutableListOf<String>()
+        val server = server {
+            val url = ("http://unused" + requestURI).toHttpUrl()
+            assertEquals("/api/client/v1/workspace/thumbnail", url.encodedPath)
+            assertEquals(space, url.queryParameter("agentSpaceId"))
+            assertEquals("Bearer token", requestHeaders.getFirst("Authorization"))
+            assertEquals("identity", requestHeaders.getFirst("Accept-Encoding"))
+            requests += requestMethod
+            responseHeaders.set("Agent-Space-Id", space)
+            if (requestMethod == "OPTIONS") {
+                assertEquals(setOf("agentSpaceId"), url.queryParameterNames)
+                responseHeaders.set("Content-Type", "application/json")
+                reply(200, """{"schemaVersion":1,"supported":true,"sizes":[128,256,512],"contentType":"image/webp","mediaKinds":["IMAGE","VIDEO"]}""")
+            } else {
+                assertEquals(path, url.queryParameter("path"))
+                assertEquals(sourceEtag, url.queryParameter("expectedEtag"))
+                assertEquals("256", url.queryParameter("size"))
+                responseHeaders.set("Content-Type", "image/webp")
+                responseHeaders.set("Preview-Source-ETag", returnedSource)
+                responseHeaders.set("ETag", returnedDerived)
+                sendResponseHeaders(200, body.size.toLong())
+                responseBody.write(body)
+            }
+        }
+        try {
+            val connection = connection(server)
+            assertEquals(space, client.thumbnailCapability(connection, "token", space))
+            assertArrayEquals(body, client.thumbnail(connection, "token", space, path, sourceEtag))
+            returnedDerived = "\"unexpected\""
+            assertTrue(runCatching { client.thumbnail(connection, "token", space, path, sourceEtag) }.exceptionOrNull() is IOException)
+            returnedDerived = derivedEtag
+            returnedSource = "\"stale\""
+            assertTrue(runCatching { client.thumbnail(connection, "token", space, path, sourceEtag) }.exceptionOrNull() is IOException)
+            assertEquals(listOf("OPTIONS", "GET", "GET", "GET"), requests)
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `only confirmed capability absence or the exact legacy route are downgraded`() = runBlocking {
+        var status = 200
+        var type = "application/json"
+        var body = """{"schemaVersion":1,"supported":false,"sizes":[],"contentType":"image/webp","mediaKinds":[]}"""
+        val server = server {
+            assertEquals("OPTIONS", requestMethod)
+            responseHeaders.set("Agent-Space-Id", space)
+            responseHeaders.set("Content-Type", type)
+            reply(status, body)
+        }
+        try {
+            val connection = connection(server)
+            assertNull(client.thumbnailCapability(connection, "token", space))
+            status = 404
+            type = "text/plain"
+            body = "404 page not found\n"
+            assertNull(client.thumbnailCapability(connection, "token", space))
+            type = "text/html"
+            body = "<html>404</html>"
+            assertTrue(runCatching { client.thumbnailCapability(connection, "token", space) }.isFailure)
+            status = 200
+            assertTrue(runCatching { client.thumbnailCapability(connection, "token", space) }.isFailure)
+        } finally { server.stop(0) }
     }
 
     @Test fun `media preserves standard conditional lock and range failures without replay`() = runBlocking {

@@ -2175,4 +2175,8 @@
   <string name="history_page_selected_count">%1$d개 선택됨</string>
   <string name="history_page_delete_selected_confirmation">선택한 대화 %1$d개를 삭제할까요? 이 작업은 되돌릴 수 없습니다.</string>
   <string name="chat_page_export_save_gallery">갤러리에 저장</string>
+  <string name="file_browser_list_view">목록</string>
+  <string name="file_browser_thumbnail_view">썸네일</string>
+  <string name="file_browser_loading_original">원본 이미지 불러오는 중</string>
+  <string name="file_browser_thumbnail_diagnostic">썸네일 진단</string>
 </resources>

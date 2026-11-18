@@ -222,7 +222,9 @@ class RemoteWorkspacePageAndroidTest {
             "/api/client/v1", "/api/runtime/v1", listOf(4, 5)))
         val handle = RemoteWorkspaceHandle(Uuid.random(), selection, connection,
             "spc_550e8400-e29b-41d4-a716-446655440000", 1)
-        val service = mockk<RemoteWorkspaceService>(relaxed = true)
+        val service = mockk<RemoteWorkspaceService>(relaxed = true) {
+            every { thumbnails(any()) } answers { unsupportedThumbnails() }
+        }
         val summary = MutableStateFlow<RemoteWorkspaceSummary?>(RemoteWorkspaceSummary(selection, RemoteWorkspaceStatus.AVAILABLE))
         lateinit var vm: RemoteWorkspaceVM
         init {
@@ -760,3 +762,9 @@ class RemoteWorkspacePageAndroidTest {
         } finally { bitmap.recycle() }
     }
 }
+
+internal fun unsupportedThumbnails(): net.weero.measix.pilot.service.files.FileBrowserThumbnails =
+    mockk(relaxed = true) {
+        every { images } returns MutableStateFlow(emptyMap())
+        every { failure } returns MutableStateFlow(null)
+    }

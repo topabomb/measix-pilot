@@ -193,6 +193,19 @@ internal class WebDavApplicationService(
         request(handle) { transport, auth -> transport.stat(handle.target.root, auth, path) }
     }
 
+    suspend fun thumbnailCapability(handle: WebDavHandle): String? = operation(handle) {
+        request(handle) { transport, auth ->
+            transport.thumbnailCapability(handle.target.root, auth, (handle.target as? WebDavTarget.Enterprise)?.space)
+        }
+    }
+
+    suspend fun thumbnail(handle: WebDavHandle, space: String, path: String, sourceVersion: String): ByteArray = operation(handle) {
+        request(handle) { transport, auth ->
+            transport.thumbnail(handle.target.root, auth, space, path, sourceVersion,
+                platformSpace = (handle.target as? WebDavTarget.Enterprise)?.space)
+        }
+    }
+
     suspend fun download(handle: WebDavHandle, path: String, output: OutputStream, etag: String? = null,
         progress: (Long, Long?) -> Unit = { _, _ -> }, maxBytes: Long = Long.MAX_VALUE,
         contentType: (String?) -> Unit = {}): Long = operation(handle) {

@@ -10,6 +10,7 @@ import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import net.weero.measix.pilot.data.enterprise.enterpriseDavHttpFailure
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -33,6 +34,58 @@ class WebDavClientTest {
     }
     private fun response(href: String, directory: Boolean = false, size: Long = 7): String =
         """<d:response><d:href>$href</d:href><d:propstat><d:prop><d:resourcetype>${if (directory) "<d:collection/>" else ""}</d:resourcetype><d:getcontentlength>$size</d:getcontentlength><d:getetag>"v1"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>"""
+
+    @Test fun `preview discovery verifies the authenticated DAV root before opting out`() = runBlocking {
+        val requests = mutableListOf<String>()
+        var rootStatus = 207
+        val server = server {
+            requests += "$requestMethod ${requestURI.path}"
+            assertEquals("Basic test", requestHeaders.getFirst("Authorization"))
+            when (requestMethod) {
+                "OPTIONS" -> reply(404, "old server")
+                else -> {
+                    assertEquals("0", requestHeaders.getFirst("Depth"))
+                    reply(rootStatus, """<d:multistatus xmlns:d="DAV:">${response("/dav/", true)}</d:multistatus>""")
+                }
+            }
+        }
+        try {
+            assertNull(client.thumbnailCapability(server.root().replace("/dav/", "/tenant/dav/"), "Basic test", null))
+            assertTrue(requests.isEmpty())
+            assertNull(client.thumbnailCapability(server.root(), "Basic test", null))
+            assertEquals(listOf("OPTIONS /previews", "PROPFIND /dav/"), requests)
+            requests.clear()
+            rootStatus = 401
+            val failure = runCatching { client.thumbnailCapability(server.root(), "Basic test", null) }.exceptionOrNull()
+            assertEquals(401, (failure as DavHttpException).status)
+            assertEquals(listOf("OPTIONS /previews", "PROPFIND /dav/"), requests)
+        } finally { server.stop(0) }
+    }
+
+    @Test fun `Relay sibling discovery preserves enterprise credentials space and exact old route handling`() = runBlocking {
+        val space = "spc_550e8400-e29b-41d4-a716-446655440000"
+        val parent = "/runtime/v1/resources/dav_test/spaces/$space/"
+        val calls = mutableListOf<String>()
+        var code = "dav_target_outside_workspace"
+        val enterpriseClient = WebDavClient(httpFailure = ::enterpriseDavHttpFailure)
+        val server = server {
+            calls += "$requestMethod ${requestURI.path}"
+            assertEquals("Bearer test", requestHeaders.getFirst("Authorization"))
+            if (requestMethod == "OPTIONS") {
+                responseHeaders.set("Content-Type", "application/problem+json")
+                reply(403, """{"type":"about:blank","title":"Denied","status":403,"code":"$code","forwarded":false}""")
+            } else reply(207, """<d:multistatus xmlns:d="DAV:">${response(parent + "dav/", true)}</d:multistatus>""")
+        }
+        try {
+            val root = "http://127.0.0.1:${server.address.port}${parent}dav/"
+            assertNull(enterpriseClient.thumbnailCapability(root, "Bearer test", space))
+            assertEquals(listOf("OPTIONS ${parent}previews", "PROPFIND ${parent}dav/"), calls)
+            calls.clear()
+            code = "resource_not_allowed"
+            assertTrue(runCatching { enterpriseClient.thumbnailCapability(root, "Bearer test", space) }.isFailure)
+            assertEquals(listOf("OPTIONS ${parent}previews"), calls)
+        } finally { server.stop(0) }
+    }
 
     @Test fun `logical names encode once and hrefs remain within the exact root`() {
         val paths = WebDavPaths("https://dav.example/root/")

@@ -219,6 +219,18 @@ cache 中的 `remote-workspace-live-evidence.json` 在 finally 写出，失败�
 图片查看器、静态 SVG 验证和 `EditorInputConnectionAndroidTest` 分别覆盖图片操作、解析边界与原生惯性/查找/跳行。
 `EditorDraftAndroidTest` 验证离页解除原生 watcher/filter、保留草稿监听与注解，以及新绑定先接管时的迟到释放隔离；
 `RemoteWorkspacePageAndroidTest` 验证目录缓存失效后，延迟返回的空加载列表不覆盖历史滚动位置。
+`FileBrowserThumbnailsTest` 验证 12 个可见项共享一次发现、版本化缓存零重复取图、LRU 预算、失败记录超出预算时的
+视口去重、临时传输故障恢复、连接级 429 退避及旧 Call 实际退出前不释放并发名额。
+`WebDavClientTest` 和 `PlatformWorkspaceClientTest` 使用回环 HTTP
+校验发现、标准 DAV 回退、源/派生标签和正文验证。`WebDavPageAndroidTest` 验证可见列表与网格实际解码、切换零重复读取，
+同内容刷新后视口恢复，以及原图延迟完成时的同版本小图和加载提示。`MediaPreviewAndroidTest` 用受控的首段 Range
+验证封面晚于播放器到达时仍能显示，
+首帧或 Range 失败时撤下，关闭错误弹窗后不恢复。受控服务响应与模拟器证据分别记录，不用于证明真实服务器或弱网吞吐。
+`WebDavThumbnailLiveAndroidTest` 以 `webdavThumbnailLive=true`、`webdavLiveRoot`、`webdavLiveUser`、
+`webdavLivePassword` 和 `webdavServerVersion` 启用。专用 Runcove 根预放 `pilot-preview-01.png` 至
+`pilot-preview-11.png` 及 `pilot-preview-video.mp4`。设备读十二张实际表示、校验解码尺寸、复用同一视口，
+并读取原视频的 1 KiB Range。`webdav-thumbnail-live-evidence.json` 记录方法调用数、编码字节和耗时。
+用例只读，夹具的准备和清理由隔离环境负责。
 编辑器的键盘缩放断言显式使用停靠键盘，并在 finally 恢复原手写模式；浮动手写 IME 可见但底部 inset 为零，不代表正文应缩短。
 这些设备证据不能代替真实 DAV 服务的 HEAD/206/If-Match、代理转发和中断响应验证；真实服务必须单独记录部署身份。
 

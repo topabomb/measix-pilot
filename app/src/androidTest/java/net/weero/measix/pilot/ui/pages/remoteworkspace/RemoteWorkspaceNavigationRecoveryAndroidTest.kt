@@ -86,7 +86,9 @@ class RemoteWorkspaceNavigationRecoveryAndroidTest {
             "/api/client/v1", "/api/runtime/v1", listOf(4, 5)))
         val handle = RemoteWorkspaceHandle(Uuid.random(), selection, connection,
             "spc_550e8400-e29b-41d4-a716-446655440000", 1)
-        val service = mockk<RemoteWorkspaceService>(relaxed = true)
+        val service = mockk<RemoteWorkspaceService>(relaxed = true) {
+            every { thumbnails(any()) } answers { unsupportedThumbnails() }
+        }
         val valid = AtomicBoolean(true)
         val refreshes = AtomicInteger()
         val summary = MutableStateFlow<RemoteWorkspaceSummary?>(RemoteWorkspaceSummary(selection, RemoteWorkspaceStatus.AVAILABLE))

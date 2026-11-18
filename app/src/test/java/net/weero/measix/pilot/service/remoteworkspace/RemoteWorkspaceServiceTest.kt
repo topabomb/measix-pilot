@@ -25,6 +25,7 @@ import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], shadows = [net.weero.measix.pilot.test.WindowsAtomicFileShadow::class])
@@ -56,6 +57,49 @@ class RemoteWorkspaceServiceTest {
         val selection = sessions.readPresentation().selection!!
         service.queryState.first { it?.refreshing == false }
         return Fixture(sessions, service, client, selection, control, invalidations)
+    }
+
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    @Test fun `stale original uses conditions only with an interim thumbnail and withdraws it before reading the current image`() = runTest {
+        val f = fixture()
+        val session = RemoteWorkspaceBrowserSource(f.service, f.selection).open()
+        val image = BrowserFile("image.png", false, null, null, "\"v1\"")
+        val thumbnails = requireNotNull(session.thumbnails)
+        val sourceBytes = java.util.Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aGioAAAAASUVORK5CYII=")
+        val requested = mutableListOf<String?>()
+        coEvery { f.client.thumbnailCapability(any(), any(), any()) } returns ready.agentSpaceId
+        coEvery { f.client.thumbnail(any(), any(), any(), image.path, image.etag!!) } returns byteArrayOf(1)
+        coEvery { f.client.download(any(), any(), any(), image.path, any(), any(), any(), any()) } coAnswers {
+            val expected = arg<String?>(7)
+            requested += expected
+            if (expected != null) throw PlatformHttpException(412, null, "source changed")
+            assertTrue(thumbnails.images.value.isEmpty())
+            arg<java.io.OutputStream>(4).write(sourceBytes)
+            WorkspaceContentMetadata("\"v2\"", sourceBytes.size.toLong(), "image/png")
+        }
+        try {
+            val direct = session.imageSource(image)
+            assertFalse(direct.memoryCacheEnabled)
+            assertArrayEquals(sourceBytes, direct.readBytes())
+            thumbnails.visible(listOf(image))
+            thumbnails.images.first { it.isNotEmpty() }
+            val source = session.imageSource(image)
+            assertFalse(source.memoryCacheEnabled)
+            assertArrayEquals(sourceBytes, source.readBytes())
+            assertEquals(listOf(null, "\"v1\"", null), requested)
+        } finally { session.close() }
+    }
+
+    @Test fun `a cancelled browser close still revokes its remote handle`() = runTest {
+        val f = fixture()
+        val session = RemoteWorkspaceBrowserSource(f.service, f.selection).open()
+        val closing = launch(start = CoroutineStart.UNDISPATCHED) {
+            currentCoroutineContext().cancel()
+            session.close()
+        }
+        closing.join()
+        assertFalse(session.isValid())
     }
 
     @Test fun `rendered resources read original enterprise handle without directory lookup`() = runTest {

@@ -730,6 +730,439 @@ paths:
             schema:
               $ref: '#/components/schemas/WorkspaceFileMutation'
       description: 'Paths are relative to the workspace root, encoded once as query values. Writes are never automatically retried. '
+  /api/client/v1/workspace/thumbnail:
+    options:
+      operationId: getClientWorkspaceThumbnailCapabilities
+      description: Query optional thumbnail protocol without reading a source file. Only agentSpaceId is accepted. Confirmed old services return supported=false; network, identity and protocol failures remain errors. No request body is accepted.
+      parameters:
+      - name: agentSpaceId
+        in: query
+        required: true
+        description: Expected current space from WorkspaceProjection; mismatch is 409. Never selects another user.
+        schema:
+          $ref: '#/components/schemas/AgentSpaceId'
+      responses:
+        '200':
+          description: Valid v1 capability; supported=false is a confirmed optional-extension absence.
+          headers:
+            Agent-Space-Id:
+              description: Current authenticated workspace identity.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceThumbnailCapabilities'
+        '400':
+          description: invalid_preview_request or existing protected-path validation; correct the request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Core authentication invalid; use the existing session lifecycle.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Core permission denied or file_forbidden; does not prove the DAV key invalid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: file_not_found; never infer unsupported capability from this status alone.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: workspace_space_mismatch; refresh the current workspace target.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: file_version_conflict for source or derived conditions; refresh metadata before a new request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '413':
+          description: preview_source_limit; keep the file icon.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
+          description: preview_unsupported_media for this file; retain the service capability.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: preview_decode_failed for this file; keep the file icon.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: preview_busy; honor Retry-After without blocking ordinary file requests.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                enum: ['1']
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '501':
+          description: preview_not_supported, only after independent capability and authenticated DAV-root confirmation.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: preview_unavailable, preview_timeout, preview_dependency_unavailable, preview_protocol_error, dav_credential_unavailable or workspace_unavailable. Preview failures do not otherwise withdraw Files.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+    get:
+      operationId: getClientWorkspaceThumbnail
+      description: Read a bounded fixed-source-version WebP thumbnail. Unknown or duplicate query parameters are rejected. Range is ignored. Responses are no-store and nosniff; ordinary content, download and video semantics stay unchanged. No request body is accepted.
+      parameters:
+      - name: agentSpaceId
+        in: query
+        required: true
+        description: Expected current space from WorkspaceProjection; mismatch is 409. Never selects another user.
+        schema:
+          $ref: '#/components/schemas/AgentSpaceId'
+      - name: path
+        in: query
+        required: true
+        description: Nonempty workspace-relative source path, encoded once.
+        schema:
+          type: string
+          minLength: 1
+      - name: size
+        in: query
+        required: false
+        description: Maximum thumbnail edge; no upscaling.
+        schema:
+          type: integer
+          enum: [128, 256, 512]
+          default: 256
+      - name: expectedEtag
+        in: query
+        required: true
+        description: Single quoted strong source ETag. This is independent of derived representation conditions in HTTP headers.
+        schema:
+          type: string
+          minLength: 2
+          maxLength: 1024
+      - name: If-Match
+        in: header
+        required: false
+        description: Standard condition on the derived thumbnail ETag, including standard lists and wildcard semantics.
+        schema:
+          type: string
+      - name: If-None-Match
+        in: header
+        required: false
+        description: Standard condition on the derived thumbnail ETag, including standard lists and wildcard semantics.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Complete derived thumbnail or HEAD metadata.
+          headers:
+            Agent-Space-Id:
+              description: Authenticated expected workspace identity.
+              schema:
+                type: string
+            Preview-Source-ETag:
+              description: Exact strong source version requested in expectedEtag.
+              schema:
+                type: string
+            ETag:
+              description: Quoted SHA-256 of the derived WebP bytes; never the source ETag.
+              schema:
+                type: string
+            Content-Length:
+              description: Full derived representation length when present, at most 1048576 bytes. HEAD and 304 carry no response body.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Fixed safe inline thumbnail.webp filename.
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-store]
+            X-Content-Type-Options:
+              schema:
+                type: string
+                enum: [nosniff]
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '304':
+          description: Not modified after current source version and authority checks; no body.
+          headers:
+            Agent-Space-Id:
+              description: Authenticated expected workspace identity.
+              schema:
+                type: string
+            Preview-Source-ETag:
+              description: Exact strong source version requested in expectedEtag.
+              schema:
+                type: string
+            ETag:
+              description: Quoted SHA-256 of the derived WebP bytes; never the source ETag.
+              schema:
+                type: string
+            Content-Length:
+              description: Full derived representation length when present, at most 1048576 bytes. HEAD and 304 carry no response body.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Fixed safe inline thumbnail.webp filename.
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-store]
+            X-Content-Type-Options:
+              schema:
+                type: string
+                enum: [nosniff]
+        '400':
+          description: invalid_preview_request or existing protected-path validation; correct the request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '401':
+          description: Core authentication invalid; use the existing session lifecycle.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '403':
+          description: Core permission denied or file_forbidden; does not prove the DAV key invalid.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '404':
+          description: file_not_found; never infer unsupported capability from this status alone.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: workspace_space_mismatch; refresh the current workspace target.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '412':
+          description: file_version_conflict for source or derived conditions; refresh metadata before a new request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '413':
+          description: preview_source_limit; keep the file icon.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '415':
+          description: preview_unsupported_media for this file; retain the service capability.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: preview_decode_failed for this file; keep the file icon.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: preview_busy; honor Retry-After without blocking ordinary file requests.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                enum: ['1']
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '501':
+          description: preview_not_supported, only after independent capability and authenticated DAV-root confirmation.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          description: preview_unavailable, preview_timeout, preview_dependency_unavailable, preview_protocol_error, dav_credential_unavailable or workspace_unavailable. Preview failures do not otherwise withdraw Files.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        default:
+          $ref: '#/components/responses/Problem'
+    head:
+      operationId: headClientWorkspaceThumbnail
+      description: Read a bounded fixed-source-version WebP thumbnail. Unknown or duplicate query parameters are rejected. Range is ignored. Responses are no-store and nosniff; ordinary content, download and video semantics stay unchanged. No request body is accepted. Every HEAD response is bodyless, including failures.
+      parameters:
+      - name: agentSpaceId
+        in: query
+        required: true
+        description: Expected current space from WorkspaceProjection; mismatch is 409. Never selects another user.
+        schema:
+          $ref: '#/components/schemas/AgentSpaceId'
+      - name: path
+        in: query
+        required: true
+        description: Nonempty workspace-relative source path, encoded once.
+        schema:
+          type: string
+          minLength: 1
+      - name: size
+        in: query
+        required: false
+        description: Maximum thumbnail edge; no upscaling.
+        schema:
+          type: integer
+          enum: [128, 256, 512]
+          default: 256
+      - name: expectedEtag
+        in: query
+        required: true
+        description: Single quoted strong source ETag. This is independent of derived representation conditions in HTTP headers.
+        schema:
+          type: string
+          minLength: 2
+          maxLength: 1024
+      - name: If-Match
+        in: header
+        required: false
+        description: Standard condition on the derived thumbnail ETag, including standard lists and wildcard semantics.
+        schema:
+          type: string
+      - name: If-None-Match
+        in: header
+        required: false
+        description: Standard condition on the derived thumbnail ETag, including standard lists and wildcard semantics.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Complete derived thumbnail or HEAD metadata.
+          headers:
+            Agent-Space-Id:
+              description: Authenticated expected workspace identity.
+              schema:
+                type: string
+            Preview-Source-ETag:
+              description: Exact strong source version requested in expectedEtag.
+              schema:
+                type: string
+            ETag:
+              description: Quoted SHA-256 of the derived WebP bytes; never the source ETag.
+              schema:
+                type: string
+            Content-Length:
+              description: Full derived representation length when present, at most 1048576 bytes. HEAD and 304 carry no response body.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Fixed safe inline thumbnail.webp filename.
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-store]
+            X-Content-Type-Options:
+              schema:
+                type: string
+                enum: [nosniff]
+        '304':
+          description: Not modified after current source version and authority checks; no body.
+          headers:
+            Agent-Space-Id:
+              description: Authenticated expected workspace identity.
+              schema:
+                type: string
+            Preview-Source-ETag:
+              description: Exact strong source version requested in expectedEtag.
+              schema:
+                type: string
+            ETag:
+              description: Quoted SHA-256 of the derived WebP bytes; never the source ETag.
+              schema:
+                type: string
+            Content-Length:
+              description: Full derived representation length when present, at most 1048576 bytes. HEAD and 304 carry no response body.
+              schema:
+                type: string
+            Content-Disposition:
+              description: Fixed safe inline thumbnail.webp filename.
+              schema:
+                type: string
+            Cache-Control:
+              schema:
+                type: string
+                enum: [no-store]
+            X-Content-Type-Options:
+              schema:
+                type: string
+                enum: [nosniff]
+        '400':
+          description: invalid_preview_request or existing protected-path validation; correct the request.
+        '401':
+          description: Core authentication invalid; use the existing session lifecycle.
+        '403':
+          description: Core permission denied or file_forbidden; does not prove the DAV key invalid.
+        '404':
+          description: file_not_found; never infer unsupported capability from this status alone.
+        '409':
+          description: workspace_space_mismatch; refresh the current workspace target.
+        '412':
+          description: file_version_conflict for source or derived conditions; refresh metadata before a new request.
+        '413':
+          description: preview_source_limit; keep the file icon.
+        '415':
+          description: preview_unsupported_media for this file; retain the service capability.
+        '422':
+          description: preview_decode_failed for this file; keep the file icon.
+        '429':
+          description: preview_busy; honor Retry-After without blocking ordinary file requests.
+          headers:
+            Retry-After:
+              schema:
+                type: string
+                enum: ['1']
+        '501':
+          description: preview_not_supported, only after independent capability and authenticated DAV-root confirmation.
+        '503':
+          description: preview_unavailable, preview_timeout, preview_dependency_unavailable, preview_protocol_error, dav_credential_unavailable or workspace_unavailable. Preview failures do not otherwise withdraw Files.
+        default:
+          description: HEAD failure metadata without a response body.
   /api/client/v1/workspace/content:
     get:
       operationId: downloadClientWorkspaceFile
@@ -1315,6 +1748,34 @@ components:
     WorkspaceOperationId:
       type: string
       pattern: ^wop_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$
+    WorkspaceThumbnailCapabilities:
+      type: object
+      additionalProperties: true
+      required: [schemaVersion, supported, sizes, contentType, mediaKinds]
+      description: Optional thumbnail protocol capability, independent of directory listing and filesAvailable. supported=true requires all v1 sizes and media kinds; supported=false requires empty arrays. Capability does not prove current decoder or VM health. Unknown response fields may be ignored.
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [1]
+        supported:
+          type: boolean
+        sizes:
+          type: array
+          maxItems: 3
+          uniqueItems: true
+          items:
+            type: integer
+            enum: [128, 256, 512]
+        contentType:
+          type: string
+          enum: [image/webp]
+        mediaKinds:
+          type: array
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum: [IMAGE, VIDEO]
     WorkspaceFileEntry:
       type: object
       required:

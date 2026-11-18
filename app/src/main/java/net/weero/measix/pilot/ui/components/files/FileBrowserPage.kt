@@ -9,11 +9,17 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardActions
@@ -22,6 +28,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -42,6 +49,9 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -51,10 +61,12 @@ import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavKey
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import coil3.compose.AsyncImage
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.Add01
@@ -73,7 +85,13 @@ import me.rerere.hugeicons.stroke.FloppyDisk
 import me.rerere.hugeicons.stroke.Download01
 import me.rerere.hugeicons.stroke.Image01
 import me.rerere.hugeicons.stroke.Pdf01
+import me.rerere.hugeicons.stroke.MusicNote03
+import me.rerere.hugeicons.stroke.Play
+import me.rerere.hugeicons.stroke.Video01
 import net.weero.measix.pilot.R
+import net.weero.measix.pilot.service.ImageSource
+import net.weero.measix.pilot.service.ChatError
+import net.weero.measix.pilot.ui.components.ui.ErrorDetails
 import net.weero.measix.pilot.Screen
 import net.weero.measix.pilot.data.enterprise.RealmSelection
 import net.weero.measix.pilot.service.files.FileBrowserSession
@@ -120,13 +138,14 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
     var filtering by remember { mutableStateOf(false) }
     var hidden by remember { mutableStateOf(false) }
     var sort by remember { mutableIntStateOf(0) }
-    val positions = remember(state.handle) { linkedMapOf<String, androidx.compose.foundation.lazy.LazyListState>() }
+    var grid by rememberSaveable { mutableStateOf(false) }
+    val positions = remember(state.handle) { linkedMapOf<String, LazyGridState>() }
     val fileListState = remember(state.handle, state.path) {
-        positions.getOrPut(state.path) { androidx.compose.foundation.lazy.LazyListState() }.also {
+        positions.getOrPut(state.path) { LazyGridState() }.also {
             while (positions.size > 32) positions.remove(positions.keys.first())
         }
     }
-    val loadingListState = rememberLazyListState()
+    val loadingListState = rememberLazyGridState()
     LaunchedEffect(filter, hidden, sort) { if (filter.isNotEmpty()) fileListState.scrollToItem(0) }
     LaunchedEffect(state.results, state.running) {
         if (!state.running && state.results.isNotEmpty()) fileListState.scrollToItem(0)
@@ -179,6 +198,10 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
         if (state.revoked) { detailFile = null; details = false; results = false }
     }
     val lifecycle = LocalLifecycleOwner.current
+    val thumbnailSession = state.handle?.thumbnails
+    val thumbnails = thumbnailSession?.images?.collectAsStateWithLifecycle()
+    val thumbnailFailure = thumbnailSession?.failure?.collectAsStateWithLifecycle()?.value
+    var showThumbnailFailure by remember(thumbnailSession) { mutableStateOf(false) }
     DisposableEffect(lifecycle, vm) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) scope.launch {
@@ -227,7 +250,8 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
     state.preview?.let { file ->
         val handle = state.handle
         if (handle != null && !state.revoked) {
-            RemoteFilePreview(file, handle, vm, onClose = vm::closePreview, onDownload = { export(listOf(file)) }, onShare = { share(file, it) })
+            RemoteFilePreview(file, handle, vm, thumbnails, onClose = vm::closePreview,
+                onDownload = { export(listOf(file)) }, onShare = { share(file, it) })
             return
         }
     }
@@ -283,6 +307,18 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                                 if (sort == index) Icon(HugeIcons.Tick02, null)
                             }, onClick = { sort = index; menu = false })
                         }
+                        HorizontalDivider()
+                        listOf(false to R.string.file_browser_list_view, true to R.string.file_browser_thumbnail_view)
+                            .forEach { (tiles, label) ->
+                                DropdownMenuItem(text = { Text(stringResource(label)) },
+                                    modifier = Modifier.semantics { this.selected = grid == tiles },
+                                    trailingIcon = { if (grid == tiles) Icon(HugeIcons.Tick02, null) },
+                                    onClick = { grid = tiles; menu = false })
+                            }
+                        if (thumbnailFailure != null) DropdownMenuItem(
+                            text = { Text(stringResource(R.string.file_browser_thumbnail_diagnostic)) },
+                            onClick = { menu = false; showThumbnailFailure = true },
+                        )
                         DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_hidden)) }, trailingIcon = { Checkbox(hidden, null) }, onClick = { hidden = !hidden; menu = false })
                         DropdownMenuItem(text = { Text(stringResource(R.string.remote_workspace_select_all)) }, enabled = state.directory != null && !state.loading && !state.running,
                             onClick = { selected = entries.map { it.path }.toSet(); menu = false })
@@ -295,6 +331,11 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
             // A short IME viewport cannot fit another touch target below the title-bar filter.
             if (filtering && maxHeight < 48.dp) return@BoxWithConstraints
             val wide = maxWidth >= 600.dp && LocalDensity.current.fontScale < 1.3f
+            val showSummary = state.results.isNotEmpty() && !state.running
+            val showColumns = !grid && wide && entries.isNotEmpty()
+            val showListHeader = showSummary || showColumns
+            TrackThumbnailDemand(vm, state, fileListState, entries,
+                firstFileIndex = if (showListHeader) 2 else 1, slotsVisible = grid || selected.isEmpty())
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (state.revoked) Text(stringResource(R.string.remote_workspace_revoked))
                 else if (state.handle == null) {
@@ -349,10 +390,13 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                     title = stringResource(R.string.remote_workspace_operation_failed), onRetry = { vm.retry() },
                     onDismiss = vm::dismissError) }
                 PullToRefreshBox(isRefreshing = state.loading, onRefresh = { if (!state.running) vm.retry() }, modifier = Modifier.weight(1f)) {
-                    LazyColumn(Modifier.fillMaxSize().testTag("remote-file-list"),
+                    LazyVerticalGrid(columns = if (grid) GridCells.Adaptive(120.dp) else GridCells.Fixed(1),
+                        modifier = Modifier.fillMaxSize().testTag("remote-file-list"),
                         state = if (state.directory == null) loadingListState else fileListState,
+                        horizontalArrangement = Arrangement.spacedBy(if (grid) 8.dp else 0.dp),
+                        verticalArrangement = Arrangement.spacedBy(if (grid) 8.dp else 0.dp),
                         contentPadding = PaddingValues(bottom = 8.dp)) {
-                        if (state.directory != null) item {
+                        if (state.directory != null) item(span = { GridItemSpan(maxLineSpan) }) {
                             state.directory?.let { directory ->
                                 FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(horizontal = 8.dp)) {
                                     Text(if (filter.isEmpty()) stringResource(R.string.remote_workspace_item_count, entries.size)
@@ -362,8 +406,8 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                                 }
                             }
                         }
-                        if ((state.results.isNotEmpty() && !state.running) || (wide && entries.isNotEmpty())) item {
-                            if (state.results.isNotEmpty() && !state.running) {
+                        if (showListHeader) item(span = { GridItemSpan(maxLineSpan) }) {
+                            if (showSummary) {
                                 val completed = state.results.count { it.outcome == BrowserOutcome.SUCCEEDED }
                                 val unknown = state.results.count { it.outcome == BrowserOutcome.UNKNOWN }
                                 val problems = state.results.count { it.outcome == BrowserOutcome.FAILED || it.outcome == BrowserOutcome.PARTIAL }
@@ -394,7 +438,7 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                                     }
                                 }
                             }
-                            if (wide && entries.isNotEmpty()) Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (showColumns) Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Spacer(Modifier.width(if (selected.isEmpty()) 40.dp else 48.dp))
                                 Text(stringResource(R.string.image_viewer_info_filename), Modifier.weight(1f).padding(horizontal = 12.dp),
                                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -402,7 +446,7 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                                 Spacer(Modifier.width(48.dp))
                             }
                         }
-                        if (!state.loading && state.directory != null && entries.isEmpty()) item {
+                        if (!state.loading && state.directory != null && entries.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
                             Text(stringResource(if (filter.isNotBlank()) R.string.search_page_no_results else R.string.remote_workspace_empty), Modifier.padding(vertical = 32.dp))
                         }
                         items(entries, key = { it.path }) { file ->
@@ -411,14 +455,10 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                                 onOpen = { if (!state.running) { if (file.directory) vm.browse(file.path) else vm.openPreview(file) } },
                                 onSelect = { if (!state.running) selected = if (file.path in selected) selected - file.path else selected + file.path },
                                 compact = true,
-                                metadata = if (wide) { { RemoteFileColumns(file) } } else null,
+                                tile = grid,
+                                metadata = if (wide && !grid) { { RemoteFileColumns(file) } } else null,
                                 thumbnail = if (file.directory) null else { {
-                                    Icon(when {
-                                        fileType(file.name) == FileType.IMAGE -> HugeIcons.Image01
-                                        file.name.endsWith(".pdf", ignoreCase = true) -> HugeIcons.Pdf01
-                                        fileTextFormat(file.name) != null -> HugeIcons.FileEdit
-                                        else -> HugeIcons.File02
-                                    }, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    FileThumbnail(file, thumbnails, grid)
                                 } },
                             ) { dismiss ->
                                 if (!file.directory) {
@@ -444,6 +484,10 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                 }
             }
         }
+    }
+    if (showThumbnailFailure && thumbnailFailure != null) {
+        ErrorDetails(remember(thumbnailFailure) { ChatError(detail = thumbnailFailure.userVisibleDiagnostic()) },
+            onDismiss = { showThumbnailFailure = false })
     }
     name?.let { prompt -> NameDialog(prompt, { name = null }, vm::report) }
     delete?.let { (handle, files) -> ConfirmDialog(stringResource(R.string.common_delete),
@@ -504,6 +548,71 @@ internal fun FileBrowserPage(vm: FileBrowserVM, title: String, diagnostic: Strin
                 }
             }
         })
+}
+
+@Composable
+private fun TrackThumbnailDemand(vm: FileBrowserVM, state: FileBrowserState, scroll: LazyGridState,
+    entries: List<BrowserFile>, firstFileIndex: Int, slotsVisible: Boolean,
+) {
+    val handle = state.handle ?: return
+    val owner = handle.thumbnails ?: return
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val viewportState by rememberUpdatedState(state)
+    val viewportScroll by rememberUpdatedState(scroll)
+    val viewportEntries by rememberUpdatedState(entries)
+    val fileOffset by rememberUpdatedState(firstFileIndex)
+    val enabled by rememberUpdatedState(slotsVisible)
+    LaunchedEffect(handle, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            try {
+                snapshotFlow {
+                    val current = viewportState
+                    val files = if (!enabled || current.loading || current.running || current.directory == null) emptyList()
+                    else viewportScroll.layoutInfo.visibleItemsInfo.mapNotNull { item ->
+                        // The lazy layout may still describe the preceding filter, sort, or directory.
+                        viewportEntries.getOrNull(item.index - fileOffset)?.takeIf { it.path == item.key }
+                    }
+                    Triple(current.thumbnailDemandRevision, current.directory, files)
+                }.collect { (revision, directory, files) ->
+                    if (directory != null) vm.visibleMedia(handle, directory, revision, files)
+                }
+            } finally { owner.visible(emptyList()) }
+        }
+    }
+}
+
+@Composable
+private fun thumbnailImage(images: State<Map<FileThumbnailKey, ImageSource>>?, key: FileThumbnailKey?): ImageSource? {
+    if (images == null || key == null) return null
+    return remember(images, key) { derivedStateOf(structuralEqualityPolicy()) { images.value[key] } }.value
+}
+
+@Composable
+private fun FileThumbnail(file: BrowserFile, thumbnails: State<Map<FileThumbnailKey, ImageSource>>?, grid: Boolean) {
+    val key = remember(file) { FileThumbnailKey.from(file) }
+    val source = thumbnailImage(thumbnails, key)
+    val type = remember(file.name) { fileType(file.name) }
+    var loaded by remember(source) { mutableStateOf(false) }
+    val shape = MaterialTheme.shapes.small
+    val previewSize = if (grid) Modifier.fillMaxSize() else Modifier.size(36.dp)
+    Box(previewSize.clip(shape), contentAlignment = Alignment.Center) {
+        if (!loaded) Icon(when {
+            type == FileType.VIDEO -> HugeIcons.Video01
+            type == FileType.IMAGE -> HugeIcons.Image01
+            type == FileType.AUDIO -> HugeIcons.MusicNote03
+            type == FileType.PDF -> HugeIcons.Pdf01
+            type in setOf(FileType.TEXT, FileType.MARKDOWN, FileType.SVG) -> HugeIcons.FileEdit
+            else -> HugeIcons.File02
+        }, null, Modifier.size(if (grid) 36.dp else 22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (source != null) AsyncImage(
+            model = source, contentDescription = null,
+            modifier = Modifier.fillMaxSize().then(if (loaded) Modifier.testTag("file-thumbnail") else Modifier),
+            contentScale = ContentScale.Fit, onSuccess = { loaded = true }, onError = { loaded = false },
+        )
+        if (loaded && grid && type == FileType.VIDEO) Icon(HugeIcons.Play, null,
+            Modifier.align(Alignment.BottomEnd).background(Color.Black.copy(alpha = .65f), shape)
+                .padding(2.dp).size(if (grid) 18.dp else 12.dp), tint = Color.White)
+    }
 }
 
 /** Fixed metadata widths keep both the header and selected rows aligned. Large text uses stacked rows. */
@@ -747,9 +856,12 @@ private fun TransferStatus(state: FileBrowserState, cancel: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm: FileBrowserVM,
+    thumbnails: State<Map<FileThumbnailKey, ImageSource>>?,
     onClose: () -> Unit, onDownload: () -> Unit, onShare: (Boolean) -> Unit,
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
+    val thumbnailKey = remember(file) { FileThumbnailKey.from(file) }
+    val thumbnail = thumbnailImage(thumbnails, thumbnailKey)
     val editorSession = state.editorSession?.takeIf { it.handle === handle && it.path == file.path } ?: return
     val submission = state.save?.takeIf { it.handle === handle && it.document.file.path == file.path }
     val saving = submission != null && submission.result == null
@@ -832,8 +944,9 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
         if (saving || state.running || loading) return
         vm.save(handle, original, editor.snapshot(), destination)
     }
-    media?.let {
-        MediaPreview(it, onClose, onExternal = { onShare(true) }, onDownload = onDownload,
+    media?.let { mediaSource ->
+        MediaPreview(mediaSource, onClose, onExternal = { onShare(true) }, onDownload = onDownload,
+            poster = thumbnail?.takeIf { type == FileType.VIDEO && mediaSource.representationEtag == thumbnailKey?.sourceVersion },
             positionState = previewState.mediaPosition,
             speechPlayback = org.koin.compose.koinInject<net.weero.measix.pilot.service.SpeechApplicationService>().playback,
             actionsEnabled = !state.running, status = {
@@ -849,6 +962,7 @@ private fun RemoteFilePreview(file: BrowserFile, handle: FileBrowserSession, vm:
     if (image) {
         val source = remember(file, handle) { handle.imageSource(file) }
         ImagePreviewDialog(listOf(source), onDismissRequest = onClose,
+            previewPlaceholder = thumbnail,
             showSaveAction = true,
             onInfoRetry = { handle.refresh() }, extraActions = listOf(
             net.weero.measix.pilot.ui.components.ui.ImagePreviewAction(HugeIcons.SquareArrowUpRight,

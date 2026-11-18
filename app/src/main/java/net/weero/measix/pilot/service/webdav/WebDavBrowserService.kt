@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.data.enterprise.PlatformHttpException
 import net.weero.measix.pilot.data.enterprise.WorkspaceText
 import net.weero.measix.pilot.data.webdav.*
 import net.weero.measix.pilot.service.ConfigurationQueryService
@@ -78,6 +79,9 @@ internal class WebDavBrowserService(
 
     private inner class Session(val handle: WebDavHandle, val changes: Flow<*>) : FileBrowserSession {
         private val cache = FileBrowserReadCache()
+        override val thumbnails = FileBrowserThumbnails(scope, ::checkAccess,
+            { dav.thumbnailCapability(handle) },
+            { space, key -> dav.thumbnail(handle, space, key.path, key.sourceVersion) })
         override suspend fun browse(path: String) = cache.directory(path, ::checkAccess) { list(path) }
         override suspend fun previewText(file: BrowserFile) = cache.text(file, ::checkAccess) { readText(file) }
         private val paths = WebDavPaths(handle.target.root)
@@ -114,16 +118,19 @@ internal class WebDavBrowserService(
         }
 
         override suspend fun close() {
+            thumbnails.cancel()
             cache.invalidate()
             val pending = synchronized(monitor) { closed.set(true); jobs.toList().also { it.forEach(Job::cancel) } }
             // Once closed, all owned jobs and copies must settle even if the leaving UI is cancelled.
             withContext(NonCancellable) {
+                thumbnails.close()
                 pending.joinAll()
                 dav.close(handle)
                 withContext(Dispatchers.IO) { synchronized(monitor) { copies.toList() }.forEach { releaseCopy(it) } }
             }
         }
         override fun closeLater() {
+            thumbnails.cancel()
             cache.invalidate()
             synchronized(monitor) { closed.set(true); jobs.forEach(Job::cancel) }
             scope.launch { close() }
@@ -188,15 +195,22 @@ internal class WebDavBrowserService(
             verifyAccess = { checkAccess() },
             readPayload = { operation {
                 val output = ByteArrayOutputStream()
-                dav.download(handle, file.path, output, file.etag.takeIf { file.versioned }, maxBytes = maxBytes)
+                try { dav.download(handle, file.path, output, file.etag.takeIf { file.versioned }, maxBytes = maxBytes) }
+                catch (failure: IOException) {
+                    if (failure is DavFileVersionChanged || failure is DavHttpException && failure.status == 412 ||
+                        failure is PlatformHttpException && failure.status == 412
+                    ) FileThumbnailKey.from(file)?.let(thumbnails::sourceChanged)
+                    throw failure
+                }
                 output.toByteArray().also { validateWorkspaceImage(it, file.name) }
             } },
         )
         override suspend fun mediaSource(file: BrowserFile) = operation {
             val metadata = dav.mediaMetadata(handle, file.path)
+            thumbnails.checkSourceVersion(file, metadata.etag)
             MediaPreviewSource(file.name, metadata.length, changes, verifyAccess = { checkAccess() },
                 readRange = { position, length -> operation { dav.mediaRange(handle, file.path, metadata, position, length) } },
-                maxBytes = Long.MAX_VALUE)
+                maxBytes = Long.MAX_VALUE, representationEtag = metadata.etag)
         }
         override suspend fun previewCopy(file: BrowserFile, maxBytes: Long): File = operation {
             ownedCopy(file, maxBytes) { it }

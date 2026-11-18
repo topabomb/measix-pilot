@@ -18,6 +18,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.performClick
 import androidx.lifecycle.Lifecycle
 import androidx.media3.common.Player
@@ -32,6 +35,9 @@ import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CompletableDeferred
+import net.weero.measix.pilot.service.ImageOrigin
+import net.weero.measix.pilot.service.ImageSource
 import net.weero.measix.pilot.service.files.MediaPreviewSource
 import net.weero.measix.pilot.ui.adaptive.LocalAdaptiveLayoutInfo
 import net.weero.measix.pilot.ui.adaptive.rememberAdaptiveLayoutInfo
@@ -108,19 +114,7 @@ class MediaPreviewAndroidTest {
     }
 
     private fun openSource(source: MediaPreviewSource, speech: net.weero.measix.pilot.service.SpeechPlayback? = null): PlayerView {
-        compose.runOnUiThread { visible = true; compose.activity.setContent {
-            MaterialTheme {
-                CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
-                    Box(Modifier.fillMaxSize()) {
-                        if (visible) {
-                            DisposableEffect(source) { onDispose { source.close() } }
-                            MediaPreview(source, onClose = { visible = false }, speechPlayback = speech, positionState = position)
-                        }
-                    }
-                }
-            }
-        }
-        }
+        mountSource(source, speech)
         var view: PlayerView? = null
         compose.waitUntil(10_000) {
             compose.runOnIdle {
@@ -129,6 +123,76 @@ class MediaPreviewAndroidTest {
             }
         }
         return requireNotNull(view)
+    }
+
+    private fun mountSource(source: MediaPreviewSource, speech: net.weero.measix.pilot.service.SpeechPlayback?,
+        poster: () -> ImageSource? = { null },
+    ) {
+        compose.runOnUiThread { visible = true; compose.activity.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(LocalAdaptiveLayoutInfo provides rememberAdaptiveLayoutInfo()) {
+                    Box(Modifier.fillMaxSize()) {
+                        if (visible) {
+                            DisposableEffect(source) { onDispose { source.close() } }
+                            MediaPreview(source, onClose = { visible = false }, speechPlayback = speech,
+                                positionState = position, poster = poster())
+                        }
+                    }
+                }
+            }
+        }
+        }
+    }
+
+    @Test fun cachedPosterRemainsVisibleUntilTheFirstFrame() = verifyPosterTransition(fail = false)
+
+    @Test fun dismissingPlaybackFailureDoesNotRestoreThePoster() = verifyPosterTransition(fail = true)
+
+    private fun verifyPosterTransition(fail: Boolean) {
+        val bytes = InstrumentationRegistry.getInstrumentation().context.assets
+            .open("media/preview-test.mp4").use { it.readBytes() }
+        val blocked = CompletableDeferred<Unit>()
+        val poster = ImageSource("media-poster-fixture", ImageOrigin.INLINE, verifyAccess = {},
+            memoryCacheEnabled = false, readPayload = {
+                android.util.Base64.decode(
+                    "UklGRkAAAABXRUJQVlA4IDQAAADwAQCdASoDAAIAAQAcJaACdLoB+AAETAAA/vW4f/6aR40jxpHxcP/ugT90CfugT/3NoAAA",
+                    android.util.Base64.DEFAULT,
+                )
+            })
+        val source = MediaPreviewSource("poster.mp4", bytes.size.toLong(), authorized, {},
+            readRange = { offset, count ->
+                blocked.await()
+                if (fail) throw java.io.IOException("fixture first Range failed")
+                bytes.copyOfRange(offset.toInt(), offset.toInt() + count)
+            })
+        var incomingPoster by mutableStateOf<ImageSource?>(poster.takeIf { fail })
+        try {
+            mountSource(source, speech = null, poster = { incomingPoster })
+            val posterNode = compose.onNodeWithTag("video-poster", useUnmergedTree = true)
+            if (!fail) {
+                compose.waitUntil(10_000) { compose.runOnIdle { findPlayer(compose.activity.window.decorView) != null } }
+                posterNode.assertDoesNotExist()
+                compose.runOnIdle { incomingPoster = poster }
+            }
+            compose.waitUntil(10_000) { posterNode.isDisplayed() }
+            blocked.complete(Unit)
+            if (fail) {
+                val close = compose.onNodeWithContentDescription(compose.activity.getString(
+                    net.weero.measix.pilot.R.string.update_card_close))
+                compose.waitUntil(10_000) { close.isDisplayed() }
+                posterNode.assertDoesNotExist()
+                close.performClick()
+            } else {
+                compose.waitUntil(10_000) {
+                    compose.runOnIdle {
+                        val player = findPlayer(compose.activity.window.decorView)?.player
+                        player?.playbackState == Player.STATE_READY && player.videoSize.width == 320
+                    }
+                }
+                compose.waitUntil(10_000) { !posterNode.isDisplayed() }
+            }
+            posterNode.assertDoesNotExist()
+        } finally { blocked.complete(Unit) }
     }
 
     @Test fun videoAndSpeechPauseEachOtherWithoutReactingToSpeechPositionUpdates() {

@@ -2175,4 +2175,8 @@
   <string name="history_page_selected_count">Выбрано: %1$d</string>
   <string name="history_page_delete_selected_confirmation">Удалить выбранные чаты (%1$d)? Это действие нельзя отменить.</string>
   <string name="chat_page_export_save_gallery">Сохранить в галерею</string>
+  <string name="file_browser_list_view">Список</string>
+  <string name="file_browser_thumbnail_view">Миниатюры</string>
+  <string name="file_browser_loading_original">Загрузка исходного изображения</string>
+  <string name="file_browser_thumbnail_diagnostic">Диагностика миниатюр</string>
 </resources>

@@ -16,6 +16,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import io.mockk.*
 import java.io.File
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
@@ -29,6 +33,7 @@ import net.weero.measix.pilot.data.configuration.WebDavBackupPreferences
 import net.weero.measix.pilot.data.datastore.Settings
 import net.weero.measix.pilot.data.enterprise.RealmAccess
 import net.weero.measix.pilot.data.enterprise.RealmSelection
+import net.weero.measix.pilot.data.files.MediaThumbnailReadException
 import net.weero.measix.pilot.data.webdav.DavDirectory
 import net.weero.measix.pilot.data.webdav.DavFile
 import net.weero.measix.pilot.service.*
@@ -275,6 +280,92 @@ class WebDavPageAndroidTest {
         compose.onNodeWithText(text(R.string.webdav_no_current)).assertDoesNotExist()
         compose.onNodeWithText(text(R.string.webdav_add_connection)).assertDoesNotExist()
         capture("webdav-enterprise-unprovisioned.png")
+    }
+
+    @Test fun browserReusesDecodedThumbnailsAcrossViewsAndShowsSameVersionWhileOriginalLoads() {
+        val selection = RealmSelection(RealmAccess.Personal, 1)
+        val connection = WebDavConnection(name = "Media", rootUrl = "https://example.test/dav/")
+        val configuration = WebDavConfigurationReadState.Available(selection, listOf(connection), connection.id)
+        val queries = mockk<ConfigurationQueryService> {
+            every { observeWebDavConfiguration() } returns flowOf(configuration)
+            every { observeSelectedRealmSelection() } returns flowOf(selection)
+        }
+        val space = "spc_550e8400-e29b-41d4-a716-446655440000"
+        val version = "\"v1\""
+        val fileNames = listOf("a.png", "b.png", "c.mp4", "sound.mp3")
+        val webp = android.util.Base64.decode(
+            "UklGRkAAAABXRUJQVlA4IDQAAADwAQCdASoDAAIAAQAcJaACdLoB+AAETAAA/vW4f/6aR40jxpHxcP/ugT90CfugT/3NoAAA",
+            android.util.Base64.DEFAULT,
+        )
+        val bitmap = Bitmap.createBitmap(12, 7, Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.BLUE) }
+        val png = ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it); bitmap.recycle() }
+            .toByteArray()
+        val discovery = AtomicInteger()
+        val reads = AtomicInteger()
+        val missingOnce = AtomicBoolean(true)
+        val originals = AtomicInteger()
+        val releaseOriginal = CompletableDeferred<Unit>()
+        val dav = mockk<WebDavApplicationService> {
+            coEvery { open(selection, any()) } answers { WebDavHandle(selection.access, selection, WebDavTarget.Personal(connection)) }
+            coEvery { validate(any(), any()) } returns Unit
+            coEvery { validateLocal(any()) } returns Unit
+            coEvery { isValidLocal(any()) } returns true
+            coEvery { close(any()) } returns Unit
+            coEvery { refresh(selection) } returns Unit
+            coEvery { list(any(), any(), any()) } returns
+                DavDirectory(fileNames.map { DavFile(it, false, 24, null, version) }, null, null, null)
+            coEvery { thumbnailCapability(any()) } coAnswers { discovery.incrementAndGet(); space }
+            coEvery { thumbnail(any(), space, any(), version) } coAnswers {
+                reads.incrementAndGet()
+                if (thirdArg<String>() == "b.png" && missingOnce.getAndSet(false)) {
+                    throw MediaThumbnailReadException(404, 0, java.io.IOException("fixture thumbnail not ready"))
+                }
+                webp
+            }
+            coEvery { download(any(), "a.png", any(), version, any(), any(), any()) } coAnswers {
+                originals.incrementAndGet()
+                releaseOriginal.await()
+                thirdArg<OutputStream>().write(png)
+                png.size.toLong()
+            }
+        }
+        val browser = WebDavBrowserService(dav, queries, ApplicationRecoveryGate().apply { ready() }, scope,
+            File(compose.activity.cacheDir, "webdav-ui-${connection.id}"))
+        lateinit var vm: WebDavFileVM
+        compose.runOnUiThread { vm = WebDavFileVM(selection, queries, browser, compose.activity).also { store.put("media", it) } }
+        try {
+            show { WebDavFilePage(selection, vm) }
+            compose.waitUntil(10_000) { vm.state.value.handle?.thumbnails?.images?.value?.size == 2 }
+            assertEquals(3, reads.get())
+            compose.runOnIdle { vm.retry() }
+            compose.waitUntil(10_000) { vm.state.value.handle?.thumbnails?.images?.value?.size == 3 }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("file-thumbnail", useUnmergedTree = true).fetchSemanticsNodes().size == 3
+            }
+            assertEquals(1, discovery.get())
+            assertEquals(4, reads.get())
+            assertEquals(0, originals.get())
+            compose.onNodeWithTag("remote-browser-menu").performClick()
+            compose.onNodeWithText(text(R.string.file_browser_thumbnail_view)).performClick()
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("file-thumbnail", useUnmergedTree = true).fetchSemanticsNodes().size == 3
+            }
+            capture("webdav-thumbnail-grid.png")
+            assertEquals(4, reads.get())
+            compose.onNodeWithText("a.png").performClick()
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithText(text(R.string.file_browser_loading_original)).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(text(R.string.file_browser_loading_original)).assertIsDisplayed()
+            assertEquals(1, originals.get())
+            assertEquals(4, reads.get())
+            capture("webdav-thumbnail-original-loading.png")
+            releaseOriginal.complete(Unit)
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithText(text(R.string.file_browser_loading_original)).fetchSemanticsNodes().isEmpty()
+            }
+            compose.onNodeWithText(text(R.string.image_viewer_load_failed)).assertDoesNotExist()
+        } finally { releaseOriginal.complete(Unit) }
     }
 
     @Test fun enterpriseBackupRequiresExplicitResourceAndKeepsDesignatedCurrent() {

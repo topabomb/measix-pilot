@@ -517,7 +517,7 @@
   <string name="permission_diaog_title">Permission Request</string>
   <string name="permission_go_to_settings">Go to Setting</string>
   <string name="permission_local_network">Local Network</string>
-  <string name="permission_local_network_desc">Connect to devices and services on your local network</string>
+  <string name="permission_local_network_desc">Connect to devices and services on your LAN</string>
   <string name="permission_microphone">Microphone</string>
   <string name="permission_microphone_desc">Microphone permission is required for speech recognition</string>
   <string name="permission_notification">Notification</string>
@@ -2177,7 +2177,6 @@
   <string name="chat_overview_matches">%1$d matches</string>
   <string name="chat_overview_reading_position">Reading position</string>
   <string name="chat_overview_message_without_text">Message without text</string>
-  <string name="permission_local_network_allow">Allow local network access</string>
   <string name="history_summary_retention_invalid">Enter a whole number from 0 to 2,147,483,647.</string>
   <string name="history_page_select">Select</string>
   <string name="history_page_selected_count">Selected: %1$d</string>

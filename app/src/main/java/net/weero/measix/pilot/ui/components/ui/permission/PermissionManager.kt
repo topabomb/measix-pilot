@@ -21,10 +21,10 @@ fun PermissionManager(
     permissionState: PermissionState,
     content: @Composable () -> Unit = {},
 ) {
-    // 显示权限请求说明对话框
-    if (permissionState.showRationaleDialog && permissionState.currentRationalePermissions.isNotEmpty()) {
+    val permissions = permissionState.currentRationalePermissions
+    if (permissions.isNotEmpty()) {
         PermissionRationaleDialog(
-            permissions = permissionState.currentRationalePermissions,
+            permissions = permissions,
             permanentlyDeniedPermissions = permissionState.permanentlyDeniedPermissions,
             onProceed = {
                 permissionState.proceedFromRationale()

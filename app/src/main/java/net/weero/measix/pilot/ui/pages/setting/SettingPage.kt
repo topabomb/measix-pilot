@@ -5,7 +5,6 @@ import android.content.Intent
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -16,7 +15,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.AiMagic
+import me.rerere.hugeicons.stroke.ArrowRight01
 import me.rerere.hugeicons.stroke.Book01
 import me.rerere.hugeicons.stroke.Book03
 import me.rerere.hugeicons.stroke.Bookshelf01
@@ -63,7 +62,6 @@ import net.weero.measix.pilot.ui.components.ui.CardGroup
 import net.weero.measix.pilot.ui.components.ui.ProviderConfigWarningCard
 import net.weero.measix.pilot.ui.components.ui.Select
 import net.weero.measix.pilot.ui.components.ui.permission.PermissionLocalNetwork
-import net.weero.measix.pilot.ui.components.ui.permission.PermissionManager
 import net.weero.measix.pilot.ui.components.ui.permission.rememberPermissionState
 import net.weero.measix.pilot.ui.context.LocalNavController
 import net.weero.measix.pilot.ui.hooks.AppLanguage
@@ -101,7 +99,6 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
     }
 
     val localNetwork = if (Build.VERSION.SDK_INT >= 37) rememberPermissionState(PermissionLocalNetwork) else null
-    if (localNetwork != null) PermissionManager(localNetwork)
 
     Scaffold(
         topBar = {
@@ -141,22 +138,13 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
 
             if (localNetwork != null && !localNetwork.allPermissionsGranted) {
                 item("localNetworkPermission") {
-                    CardGroup(
-                        modifier = Modifier.padding(horizontal = 8.dp),
-                        title = { Text(stringResource(R.string.permission_local_network)) },
-                    ) {
+                    CardGroup(modifier = Modifier.padding(horizontal = 8.dp)) {
                         item(
-                            headlineContent = {
-                                Column {
-                                    Text(stringResource(R.string.permission_local_network_desc))
-                                    TextButton(onClick = localNetwork::requestPermissions) {
-                                        Text(stringResource(R.string.permission_local_network_allow))
-                                    }
-                                    TextButton(onClick = localNetwork::openAppSettings) {
-                                        Text(stringResource(R.string.permission_go_to_settings))
-                                    }
-                                }
-                            },
+                            onClick = localNetwork::openAppSettings,
+                            leadingContent = { Icon(HugeIcons.ServerStack01, contentDescription = null) },
+                            headlineContent = { Text(stringResource(R.string.permission_local_network)) },
+                            supportingContent = { Text(stringResource(R.string.permission_local_network_desc)) },
+                            trailingContent = { Icon(HugeIcons.ArrowRight01, contentDescription = null) },
                         )
                     }
                 }

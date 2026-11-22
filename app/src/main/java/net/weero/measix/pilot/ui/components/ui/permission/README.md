@@ -21,14 +21,14 @@ PermissionManager(permissionState = cameraPermission) {
 
 ## 维护边界
 
-- `rememberPermissionState` 要求 `ComponentActivity`；注册 launcher，并在 ON_START、ON_RESUME 时重读系统权限。
-  状态由 `remember` 保存，不承诺跨 Activity 重建保存请求历史；重建后重新检查系统状态。
+- `rememberPermissionState` 要求 `ComponentActivity`。单项和多项请求共用一个 Activity Result launcher，
+  结果按系统返回的权限名处理，空回调保留当前状态。初始化和 ON_RESUME 均读取系统权限，请求历史只在当前状态对象内保留。
 - 自定义 `PermissionInfo` 必须提供 `displayName` 与 `usage`，文案使用字符串资源。`required` 默认 false；
   没有必需权限时 `allRequiredPermissionsGranted` 为 true，不能据此认定所有权限已授权。
 - `DeniedPermanently` 由当前系统 rationale 与本地旧状态推断，不是持久化的系统拒绝记录。
   说明对话框由 `PermissionManager` 承载，设置返回后的状态由生命周期刷新。
-- `requestPermission` 只处理已注册的权限，`requestPermissions` 处理未授权集合；不要并发重复发起请求。
-  API 级别条件沿现有权限定义及调用处检查，不把单一存储权限当作通用文件访问方案。
+- `requestPermissions` 处理当前未授权的权限。设置页的本地网络项直接打开应用的系统设置。
+  调用方负责在相应 Android API 级别使用权限入口。
 
 类型和具体方法以 [PermissionTypes.kt](PermissionTypes.kt)、[RememberPermissionState.kt](RememberPermissionState.kt)及
 [PermissionState.kt](PermissionState.kt)为准；页面状态和授权职责见

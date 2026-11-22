@@ -498,7 +498,7 @@
   <string name="permission_diaog_title">権限リクエスト</string>
   <string name="permission_go_to_settings">アプリ設定へ移動</string>
   <string name="permission_local_network">ローカルネットワーク</string>
-  <string name="permission_local_network_desc">ローカルネットワーク上のデバイスやサービスに接続します</string>
+  <string name="permission_local_network_desc">LAN 上の機器やサービスに接続</string>
   <string name="permission_microphone">マイク</string>
   <string name="permission_microphone_desc">音声認識にはマイクの権限が必要です</string>
   <string name="permission_notification">通知</string>
@@ -2169,7 +2169,6 @@
   <string name="chat_overview_matches">一致 %1$d 件</string>
   <string name="chat_overview_reading_position">現在の閲覧位置</string>
   <string name="chat_overview_message_without_text">本文のないメッセージ</string>
-  <string name="permission_local_network_allow">ローカルネットワークへのアクセスを許可</string>
   <string name="history_summary_retention_invalid">0 から 2,147,483,647 までの整数を入力してください。</string>
   <string name="history_page_select">選択</string>
   <string name="history_page_selected_count">選択済み %1$d 件</string>

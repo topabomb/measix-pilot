@@ -14,6 +14,7 @@ import net.weero.measix.pilot.data.ai.subassistant.buildToolCreatedAssistant
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
 import net.weero.measix.pilot.data.configuration.*
 import net.weero.measix.pilot.data.enterprise.*
+import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.utils.JsonInstant
 import org.junit.Assert.*
 import org.junit.Rule
@@ -31,6 +32,37 @@ class AssistantManagementPersistenceTest {
     private val caller = packet.identity.reference(packet.configuration.assistants.first().id)
     private val initial = UserSettingsDocument.empty().let { it.copy(preferences = it.preferences.withAssistantUsage(packet.identity.scope,
         AssistantUsagePreferences(caller, localTools = UsageValue(listOf(LocalToolOption.AssistantManagement)))) ) }
+
+    @Test fun `deleting default assistant is rejected before artifact or settings writes`() = runTest {
+        val manager = Assistant(
+            name = "Manager",
+            localTools = listOf(LocalToolOption.AssistantManagement),
+            allowedSubAssistantIds = setOf(DEFAULT_ASSISTANT_ID),
+        )
+        val source = UserSettingsDocument.empty().withPersonalSettings(Settings(
+            assistants = listOf(manager, DEFAULT_ASSISTANTS.single().copy(allowAsSubAssistant = true)),
+            assistantId = DEFAULT_ASSISTANT_ID,
+        ))
+        val appScope = AppScope(StandardTestDispatcher(testScheduler))
+        val data = ControlledData(source)
+        val settings = SettingsStore(context(), appScope, data, StandardTestDispatcher(testScheduler))
+        try {
+            runCurrent()
+            try {
+                settings.manageAssistant(
+                    ConfigurationScope.Personal, EnterpriseState.Loading, manager.id,
+                    AssistantManagementChange.Delete(DEFAULT_ASSISTANT_ID), {},
+                    beforeCommit = { fail("Default deletion reached beforeCommit") },
+                ) { _, _, _ -> fail("Default deletion acquired artifact ownership") }
+                fail("Default deletion reported success")
+            } catch (rejected: AssistantManagementRejection) {
+                assertEquals("default_assistant_not_deletable", rejected.reason)
+            }
+            assertFalse(data.accepted.isCompleted)
+            assertEquals(JsonInstant.encodeToString(source), JsonInstant.encodeToString(settings.snapshotUserDocument()))
+            assertEquals(DEFAULT_ASSISTANT_ID, settings.userSettings.value.assistantId)
+        } finally { appScope.cancel() }
+    }
 
     @Test fun `failed admission artifact validation or datastore acknowledgement cannot leave half a create`() = runTest {
         for (failure in listOf("admission", "artifact", "datastore")) {

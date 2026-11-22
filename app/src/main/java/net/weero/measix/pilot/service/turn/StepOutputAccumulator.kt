@@ -42,7 +42,7 @@ internal class StepOutputAccumulator {
             if (part is UIMessagePart.Tool) {
                 mergeTool(acc, acc.currentStepStart(), part, choice.toolCallSlots[toolOrdinal++])
             } else if (choice.contentBlockSlots.isNotEmpty()) {
-                mergeContentBlock(acc, part, choice.contentBlockSlots[index])
+                mergeContentBlock(acc, part, choice.contentBlockSlots[index], choice.contentBeforeTools)
             } else mergePart(acc, part)
         }
         if (delta.parts.none { it is UIMessagePart.Reasoning }) {
@@ -61,12 +61,20 @@ internal class StepOutputAccumulator {
         )
     }
 
-    private fun mergeContentBlock(acc: List<UIMessagePart>, delta: UIMessagePart, slot: ProviderContentBlockSlot): List<UIMessagePart> {
+    private fun mergeContentBlock(
+        acc: List<UIMessagePart>,
+        delta: UIMessagePart,
+        slot: ProviderContentBlockSlot,
+        contentBeforeTools: Boolean,
+    ): List<UIMessagePart> {
         val index = contentIndices[slot]
         if (index == null) {
             require(delta is UIMessagePart.Text || delta is UIMessagePart.Reasoning || delta is UIMessagePart.ServerTool || delta is UIMessagePart.Image) { "Unsupported slotted content type" }
-            contentIndices[slot] = acc.size
-            return acc + if (delta is UIMessagePart.Image) delta.copy(url = renderableImageUrl(delta.url)) else delta
+            val part = if (delta is UIMessagePart.Image) delta.copy(url = renderableImageUrl(delta.url)) else delta
+            val insertIndex = if (contentBeforeTools) acc.firstPendingToolIndex(acc.currentStepStart()) else acc.size
+            val updated = if (insertIndex == acc.size) acc + part else acc.insertAt(insertIndex, part)
+            contentIndices[slot] = insertIndex
+            return updated
         }
         val previous = acc[index]
         val merged = when {

@@ -6,7 +6,10 @@ import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -34,6 +37,46 @@ class ProviderSettingsVMTest {
 
     @After
     fun tearDown() = Dispatchers.resetMain()
+
+    @Test
+    fun `catalog coalesces refresh on the same settings and rejects results after credentials change`() = runTest(dispatcher) {
+        val original = ProviderSetting.Google(name = "Google")
+        val observed = MutableStateFlow<ProviderSetting?>(original)
+        val service = mockk<ProviderSettingsApplicationService>()
+        every { service.observeProvider(original.id) } returns observed
+        val pending = CompletableDeferred<List<Model>>()
+        var calls = 0
+        coEvery { service.listModels(any()) } coAnswers {
+            calls++
+            withContext(NonCancellable) { pending.await() }
+        }
+        val vm = ProviderSettingsVM(original.id, service)
+        runCurrent()
+        vm.loadModelCatalog()
+        runCurrent()
+        val withLocalModel = original.copy(models = listOf(Model(modelId = "local")))
+        observed.value = withLocalModel
+        runCurrent()
+        assertEquals(original.modelCatalogConfiguration(), withLocalModel.modelCatalogConfiguration())
+        vm.loadModelCatalog()
+        assertEquals(UiState.Loading, vm.state.value.modelCatalog)
+        assertEquals(1, calls)
+
+        observed.value = withLocalModel.copy(apiKey = "new-fixture")
+        runCurrent()
+        pending.complete(listOf(Model(modelId = "old-catalog")))
+        runCurrent()
+        assertEquals(UiState.Idle, vm.state.value.modelCatalog)
+
+        coEvery { service.listModels(any()) } throws IllegalStateException("catalog denied")
+        vm.loadModelCatalog()
+        runCurrent()
+        assertEquals("catalog denied", (vm.state.value.modelCatalog as UiState.Error).error.message)
+        coEvery { service.listModels(any()) } returns emptyList()
+        vm.loadModelCatalog()
+        runCurrent()
+        assertEquals(UiState.Success(emptyList<Model>()), vm.state.value.modelCatalog)
+    }
 
     @Test
     fun `save failure preserves diagnostic and retry clears it without reporting success early`() = runTest(dispatcher) {

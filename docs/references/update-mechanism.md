@@ -64,7 +64,7 @@ ChatDrawer 组合
 
 1. 创建 `DownloadManager.Request`；
 2. 保存到公共 `Downloads` 目录；
-3. 允许 Wi-Fi 与移动网络，设置 APK MIME 类型；
+3. 交给 DownloadManager 使用系统默认网络策略，设置 APK MIME 类型；
 4. 由系统通知展示下载进度和完成状态；
 5. enqueue 失败时显示本地化错误并用浏览器打开下载 URL。
 

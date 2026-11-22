@@ -122,7 +122,9 @@ class ChatScrollEntryAndroidTest {
 
         val overview = activityText(R.string.chat_page_chat_options)
         compose.onNodeWithContentDescription(overview).performClick()
-        compose.onNodeWithText(activityText(R.string.chat_overview_reading_position)).assertIsDisplayed()
+        val readingRow = hasText(activityText(R.string.chat_overview_reading_position))
+        compose.waitUntil(5_000) { compose.onAllNodes(readingRow).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(readingRow).assertIsDisplayed()
         compose.onNodeWithContentDescription(overview).performClick()
         assertHistory(first, 3)
         assertEquals(readingPosition, position(), 0.01f)
@@ -132,8 +134,9 @@ class ChatScrollEntryAndroidTest {
         compose.onNode(hasSetTextAction() and hasText(activityText(R.string.history_page_search)))
             .performTextReplacement(keyword)
         closeSoftKeyboard()
-        compose.onNode(hasText(keyword, substring = true) and hasClickAction() and hasAnyAncestor(historyMatcher()))
-            .assertIsDisplayed().performClick()
+        val match = hasText(keyword, substring = true) and hasClickAction() and hasAnyAncestor(historyMatcher())
+        compose.waitUntil(5_000) { compose.onAllNodes(match).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNode(match).assertIsDisplayed().performClick()
         compose.onNodeWithText(first.texts.first()).assertIsDisplayed()
         assertTrue(position() < readingPosition)
     }

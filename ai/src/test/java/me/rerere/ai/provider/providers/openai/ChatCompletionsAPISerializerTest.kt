@@ -57,6 +57,43 @@ import org.junit.Test
 class ChatCompletionsAPISerializerTest {
 
     @Test
+    fun `Mistral alone encodes ordered thinking chunks before the tool result`() = runBlocking {
+        val history = listOf(UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+                UIMessagePart.Reasoning("inspect"),
+                UIMessagePart.Text("checking"),
+                UIMessagePart.Reasoning("verify"),
+                executedTool("my_call", "lookup", "{}", "42"),
+            ),
+        )).toModelRequests()
+        val native = api.buildMessages(history, resolveChatReasoningReplayPolicy(
+            OpenAIEndpointVendor.MISTRAL, "magistral-medium-2509", true, true,
+        ))
+        val assistant = native.first().jsonObject
+        assertFalse("reasoning_content" in assistant)
+        assertEquals(Json.parseToJsonElement(
+            """[{"type":"thinking","thinking":[{"type":"text","text":"inspect"}]},
+                {"type":"text","text":"checking"},
+                {"type":"thinking","thinking":[{"type":"text","text":"verify"}]}]"""
+        ), assistant["content"])
+        assertEquals("my_call", assistant["tool_calls"]!!.jsonArray.single().jsonObject["id"]!!.jsonPrimitive.content)
+        assertEquals("my_call", native[1].jsonObject["tool_call_id"]!!.jsonPrimitive.content)
+
+        val compatible = api.buildMessages(history, resolveChatReasoningReplayPolicy(
+            OpenAIEndpointVendor.COMPATIBLE, "magistral-medium-2509", true, true,
+        )).first().jsonObject
+        assertEquals(JsonPrimitive("inspectverify"), compatible["reasoning_content"])
+        assertEquals(JsonPrimitive("checking"), compatible["content"])
+
+        val disabled = api.buildMessages(history, resolveChatReasoningReplayPolicy(
+            OpenAIEndpointVendor.MISTRAL, "magistral-medium-2509", true, false,
+        )).first().jsonObject
+        assertFalse("reasoning_content" in disabled)
+        assertEquals(JsonPrimitive("checking"), disabled["content"])
+    }
+
+    @Test
     fun `glm53 mandatory thinking uses supported effort for JSON and SSE without changing model settings`() {
         val model = Model(modelId = "glm-5.3", abilities = emptyList())
         for (host in listOf("open.bigmodel.cn", "proxy.example.com")) {

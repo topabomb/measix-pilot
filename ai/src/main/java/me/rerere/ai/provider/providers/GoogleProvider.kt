@@ -171,32 +171,27 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     .build()
             )
             val body = client.newCall(request).readResponse { response ->
-                if (response.isSuccessful) response.body?.string() ?: error("empty body") else null
+                if (!response.isSuccessful) throw formatProviderHttpError(response.code, response.body?.string())
+                response.body?.string() ?: error("empty body")
             }
-            if (body != null) {
-                Log.d(TAG, "listModels: $body")
-                val bodyObject = json.parseToJsonElement(body).jsonObject
-                val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
-
-                models.mapNotNull {
-                    val modelObject = it.jsonObject
-
-                    // 忽略非chat/embedding模型
-                    val supportedGenerationMethods =
-                        modelObject["supportedGenerationMethods"]!!.jsonArray
-                            .map { method -> method.jsonPrimitive.content }
-                    if ("generateContent" !in supportedGenerationMethods && "embedContent" !in supportedGenerationMethods) {
-                        return@mapNotNull null
-                    }
-
-                    Model(
-                        modelId = modelObject["name"]!!.jsonPrimitive.content.substringAfter("/"),
-                        displayName = modelObject["displayName"]!!.jsonPrimitive.content,
-                        type = if ("generateContent" in supportedGenerationMethods) ModelType.CHAT else ModelType.EMBEDDING,
-                    )
+            val bodyObject = json.parseToJsonElement(body).jsonObject
+            val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
+            models.mapNotNull {
+                val modelObject = it.jsonObject
+                val methods = modelObject.getValue("supportedGenerationMethods").jsonArray
+                    .map { method -> method.jsonPrimitive.content }
+                val type = when {
+                    "generateContent" in methods -> ModelType.CHAT
+                    "embedContent" in methods -> ModelType.EMBEDDING
+                    else -> return@mapNotNull null
                 }
-            } else {
-                emptyList()
+
+                val modelId = (modelObject["name"] as? JsonPrimitive)?.takeIf { it.isString }
+                    ?.content?.substringAfter("/")?.takeIf { it.isNotBlank() }
+                    ?: error("Gemini model name must contain a non-blank model ID")
+                val displayName = (modelObject["displayName"] as? JsonPrimitive)?.takeIf { it.isString }
+                    ?.content?.takeIf { it.isNotBlank() } ?: modelId
+                Model(modelId = modelId, displayName = displayName, type = type)
             }
         }
 
@@ -473,7 +468,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     add(JsonPrimitive("IMAGE"))
                 })
             }
-            if (ModelRegistry.GEMINI_4_ARGON.match(params.model.modelId)) {
+            if (ModelRegistry.GEMINI_4_GENERATE_CONTENT.match(params.model.modelId)) {
                 require(params.reasoningLevel in setOf(ReasoningLevel.AUTO, ReasoningLevel.LOW, ReasoningLevel.MEDIUM, ReasoningLevel.HIGH)) {
                     "gemini_argon_reasoning_unsupported: ${params.model.modelId} supports AUTO, LOW, MEDIUM or HIGH; selected ${params.reasoningLevel}"
                 }
@@ -610,7 +605,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 "gemini_mixed_tool_mode_invalid: AUTO is unsupported with server tool circulation; omit mode for VALIDATED default"
             }
         }
-        if (ModelRegistry.GEMINI_4_ARGON.match(params.model.modelId)) {
+        if (ModelRegistry.GEMINI_4_GENERATE_CONTENT.match(params.model.modelId)) {
             val config = body["generationConfig"] as? JsonObject
             require(config != null) { "gemini_argon_config_invalid: generationConfig must be an object for ${params.model.modelId}" }
             val thinking = config["thinkingConfig"] as? JsonObject
@@ -791,6 +786,20 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 )
             }
 
+            jsonObject.size == 1 && "thoughtSignature" in jsonObject -> {
+                val signature = (jsonObject["thoughtSignature"] as? JsonPrimitive)
+                    ?.takeIf { it.isString && it.content.isNotBlank() }?.content
+                    ?: error("Gemini thoughtSignature must be a non-blank string")
+                UIMessagePart.Text(
+                    text = "",
+                    metadata = GoogleThoughtMetadata(
+                        thoughtSignature = signature,
+                        sourceModelId = sourceModelId.takeIf { it.isNotBlank() },
+                        sourceProfile = sourceProfile.takeIf { it.isNotBlank() },
+                    ).toMetadata(),
+                )
+            }
+
             else -> error("Unknown Gemini message part fields: ${jsonObject.keys.sorted()}")
         }
     }
@@ -948,11 +957,16 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 metadataAs<GoogleThoughtMetadata>()?.sourceModelId == modelId
         }
 
-        is UIMessagePart.Text -> buildJsonObject {
-            put("text", text)
-            metadataAs<GoogleThoughtMetadata>()
-                ?.replayableThoughtSignature(modelId, sourceProfile)?.let {
-                put("thoughtSignature", it)
+        is UIMessagePart.Text -> {
+            val metadata = metadataAs<GoogleThoughtMetadata>()
+            val signature = metadata?.replayableThoughtSignature(modelId, sourceProfile)
+            if (text.isEmpty() && metadata?.thoughtSignature != null && signature == null) {
+                null
+            } else {
+                buildJsonObject {
+                    put("text", text)
+                    signature?.let { put("thoughtSignature", it) }
+                }
             }
         }
 

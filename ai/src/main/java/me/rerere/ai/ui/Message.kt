@@ -618,4 +618,6 @@ data class UIMessageChoice(
     /** Optional exact block identity for every part; deltas reuse their original slot. Never persisted. */
     val contentBlockSlots: List<ProviderContentBlockSlot> = emptyList(),
     val continuation: ProviderContinuation? = null,
+    /** The provider's content and tool deltas belong to separate fields of one assistant envelope. */
+    val contentBeforeTools: Boolean = false,
 )

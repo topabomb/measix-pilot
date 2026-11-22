@@ -153,7 +153,7 @@ Markdown 全文预览只提取消息顶层 Text，经 `buildMarkdownPreviewHtml`
 捕获完成或取消均拆除组合树，未交付 Bitmap 回收，不由独立 Handler 或第二协程作用域延续导出。
 
 会话导出在点击时固定标题、选中消息和推理选项。PNG 渲染完成后立即在服务内编码为私有临时文件，原协程回收位图。
-Markdown 和 PNG 分别提供系统文件保存和分享，PNG 另有相册动作。一次性输出句柄沿原 lease 复验来源，
+Markdown 在角色旁输出该消息保存的本地创建时间，含秒。Markdown 和 PNG 分别提供系统文件保存和分享，PNG 另有相册动作。一次性输出句柄沿原 lease 复验来源，
 页面轮转只保留准备完成的请求，离屏渲染仍随原窗口取消。输出与临时文件责任见 [界面架构](ui-architecture.md)。
 
 单附件的预期缺失或 `ArtifactProjectionException` 关闭其访问能力，不中止整段聊天。

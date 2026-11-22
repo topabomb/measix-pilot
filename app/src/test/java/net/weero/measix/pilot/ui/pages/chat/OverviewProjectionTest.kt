@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import kotlinx.coroutines.test.runTest
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -14,7 +15,7 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class OverviewProjectionTest {
-    @Test fun `answers retain their own navigation ids and only selected variants match`() {
+    @Test fun `answers retain their own navigation ids and only selected variants match`() = runTest {
         val opening = node(MessageRole.ASSISTANT, "Opening")
         val first = node(MessageRole.USER, "Question")
         val reply = node(MessageRole.ASSISTANT, "unrelated text ".repeat(8) + "nearby **code**")
@@ -35,6 +36,16 @@ class OverviewProjectionTest {
         assertEquals(reply.id, hit.nodeId)
         assertTrue(hit.favorite)
         assertTrue(hit.snippet.contains("nearby **code**"))
+    }
+
+    @Test fun `search finds long matches beyond the preview while bounding their layout text`() = runTest {
+        val term = "important".repeat(60)
+        val message = node(MessageRole.USER, "unrelated ".repeat(400) + term)
+
+        val hit = projectChatOverview(listOf(message), emptySet(), term).single().messages.single()
+        assertEquals(message.id, hit.nodeId)
+        assertTrue(hit.snippet.contains("important"))
+        assertTrue(hit.snippet.length <= 174)
     }
 
     @Test fun `a dynamic prefix shifts navigation without changing the target identity`() {

@@ -370,6 +370,11 @@ internal enum class VisibleReasoningReplay {
     ALL_ASSISTANT_ENVELOPES,
 }
 
+internal enum class VisibleReasoningFormat {
+    REASONING_CONTENT,
+    THINKING_CHUNK,
+}
+
 /**
  * Scope of source-isolated opaque reasoning details replayed in Chat Completions history.
  *
@@ -397,7 +402,8 @@ internal enum class TerminalAssistantReplay {
 /**
  * Chat-line reasoning replay policy resolved from the final request shape.
  *
- * The three dimensions are independent: a DeepSeek V4 request with tools mandates all visible
+ * Replay scope, wire format, opaque state and terminal handling are independent. A DeepSeek V4
+ * request with tools mandates all visible
  * reasoning envelopes but no opaque details; an OpenRouter request always checks source-matched
  * details but only sends visible text when the user opted in. This separation prevents leaking
  * one provider's continuation state through another's serializer.
@@ -406,6 +412,7 @@ internal data class ChatReasoningReplayPolicy(
     val visible: VisibleReasoningReplay,
     val opaque: OpaqueReasoningReplay,
     val terminalAssistant: TerminalAssistantReplay,
+    val visibleFormat: VisibleReasoningFormat,
 )
 
 /**
@@ -468,6 +475,11 @@ internal fun resolveChatReasoningReplayPolicy(
         visible = visible,
         opaque = opaque,
         terminalAssistant = terminalAssistant,
+        visibleFormat = if (endpointVendor == OpenAIEndpointVendor.MISTRAL) {
+            VisibleReasoningFormat.THINKING_CHUNK
+        } else {
+            VisibleReasoningFormat.REASONING_CONTENT
+        },
     )
 }
 

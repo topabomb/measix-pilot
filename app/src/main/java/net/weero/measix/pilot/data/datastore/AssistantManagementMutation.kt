@@ -90,7 +90,7 @@ internal fun UserSettingsDocument.manageAssistant(
         is AssistantManagementChange.Delete -> {
             requireManagement(change.id != callerId, "target_is_caller")
             val removed = target(change.id)
-            requireManagement(definitions.size > 1, "last_assistant")
+            requireManagement(removed.id != DEFAULT_ASSISTANT_ID, "default_assistant_not_deletable")
             val remainingDefinitions = definitions.filterNot { it.id == removed.id }
                 .map { it.copy(allowedSubAssistantIds = it.allowedSubAssistantIds - removed.id) }
             val remaining = remainingDefinitions.firstOrNull { !it.allowAsSubAssistant } ?: remainingDefinitions.first()

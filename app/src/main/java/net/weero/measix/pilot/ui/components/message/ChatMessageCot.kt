@@ -54,6 +54,7 @@ fun List<UIMessagePart>.groupMessageParts(
     }
 
     this.fastForEachIndexed { index, part ->
+        if (part is UIMessagePart.Text && part.text.isEmpty()) return@fastForEachIndexed
         when (part) {
             is UIMessagePart.Reasoning -> {
                 currentThinkingSteps.add(ThinkingStep.ReasoningStep(part))

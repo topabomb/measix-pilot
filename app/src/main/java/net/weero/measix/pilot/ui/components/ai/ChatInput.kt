@@ -834,11 +834,16 @@ internal fun PromptPresetButton(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var presetFailure by remember(state) { mutableStateOf<Throwable?>(null) }
-    fun append(content: String, separate: Boolean) {
+    fun appendQuickMessage(content: String) {
         try {
             requireInputOwner()
-            val spacer = if (separate && state.textContent.text.isNotEmpty()) "\n\n" else ""
-            state.appendText(spacer + content)
+            val draft = state.textContent.text
+            if (draft.isBlank()) {
+                state.setMessageText(content)
+            } else {
+                val separator = if (draft.endsWith('\n')) "" else "\n"
+                state.appendText(separator + content)
+            }
             expanded = false
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (error: Exception) {
@@ -876,7 +881,7 @@ internal fun PromptPresetButton(
             if (quickMessages.isNotEmpty()) {
                 Text(stringResource(R.string.assistant_page_quick_messages), Modifier.padding(8.dp), style = MaterialTheme.typography.labelMedium)
                 quickMessages.forEach { message ->
-                    PromptPresetItem(message.title, message.content) { append(message.content, separate = false) }
+                    PromptPresetItem(message.title, message.content) { appendQuickMessage(message.content) }
                 }
             }
         }

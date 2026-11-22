@@ -184,6 +184,9 @@ code point 限制长度。关闭 `allowAsSubAssistant` 时，`normalizeForPersis
 
 删除同次移除各域该助手 usage 及额外授权，保留企业已选引用的失效状态，不静默替换；个人当前选择按原规则修正。该配置提交不删除企业聊天或运行记忆。
 
+内置默认助手可编辑，删除预览和工具删除共用 Settings 校验并返回 `default_assistant_not_deletable`。
+拒绝发生在 Artifact 交接、持久写入及创建清理 tombstone 之前。
+
 删除 Assistant 由 `AssistantManagementService` 协调：先写 tombstone，再取消相关生成和子助手运行，
 清理记忆与会话，最后提交 Settings 清理。中断后由 tombstone 恢复流程继续完成，不能把列表移除视为删除完成。
 

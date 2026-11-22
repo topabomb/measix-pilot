@@ -2179,4 +2179,6 @@
   <string name="file_browser_thumbnail_view">썸네일</string>
   <string name="file_browser_loading_original">원본 이미지 불러오는 중</string>
   <string name="file_browser_thumbnail_diagnostic">썸네일 진단</string>
+  <string name="permission_notification_allow">알림 허용</string>
+  <string name="setting_provider_page_refresh_models">모델 목록 새로고침</string>
 </resources>

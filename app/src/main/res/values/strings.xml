@@ -2187,4 +2187,6 @@
   <string name="file_browser_thumbnail_view">Thumbnails</string>
   <string name="file_browser_loading_original">Loading original image</string>
   <string name="file_browser_thumbnail_diagnostic">Thumbnail details</string>
+  <string name="permission_notification_allow">Allow notifications</string>
+  <string name="setting_provider_page_refresh_models">Refresh models</string>
 </resources>

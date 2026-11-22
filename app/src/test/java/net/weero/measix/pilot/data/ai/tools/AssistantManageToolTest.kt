@@ -21,6 +21,8 @@ import me.rerere.ai.core.ToolExecutionFailure
 import me.rerere.ai.core.ToolInteractionRequirement
 import me.rerere.ai.ui.UIMessagePart
 import net.weero.measix.pilot.data.ai.tools.local.LocalToolOption
+import net.weero.measix.pilot.data.datastore.AssistantManagementRejection
+import net.weero.measix.pilot.data.datastore.DEFAULT_ASSISTANT_ID
 import net.weero.measix.pilot.data.model.Assistant
 import net.weero.measix.pilot.service.AssistantDeletionResult
 import net.weero.measix.pilot.service.AssistantManagementService
@@ -245,6 +247,20 @@ class AssistantManageToolTest {
         } catch (actual: CancellationException) {
             assertTrue(actual === cancellation)
         }
+    }
+
+    @Test fun `default assistant deletion returns a readable tool rejection`() = runTest {
+        val service = mockk<AssistantManagementService>()
+        coEvery { service.deleteAssistant(any(), any()) } returns Result.failure(
+            AssistantManagementRejection("default_assistant_not_deletable")
+        )
+        val tool = manageTool(AssistantToolFactory(service, json, mockk(), mockk(), mockk(), mockk()), caller())
+        val failure = failureResult(tool, buildJsonObject {
+            put("action", "DELETE")
+            put("assistant_id", DEFAULT_ASSISTANT_ID.toString())
+        })
+        assertEquals("default_assistant_not_deletable", failure["reason"]!!.jsonPrimitive.content)
+        assertTrue(failure["detail"]!!.jsonPrimitive.content.contains("built-in default assistant", ignoreCase = true))
     }
 
     @Test fun `management execution passes the original enterprise caller to its sole command owner`() = runTest {

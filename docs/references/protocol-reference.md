@@ -229,7 +229,11 @@ DeepSeek 的 XHIGH 映射为 `high`，只有独立 MAX 才发送 `max`。OpenAI 
 
 兼容网关可能把 `choices`、`delta`、`message` 或 `tool_calls` 显式写成 JSON `null`。Chat Completions 流式解析必须用 `jsonArrayOrNull` / `jsonObjectOrNull`，不能对 `JsonNull` 强制取数组或对象，否则会中断整轮生成。`tool_calls` 数组里的空槽、`function: null`，以及 Mistral thinking 的非对象首元素，同样按空值跳过，不能强制 `jsonObject`。
 
-OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details`，会保存在 Reasoning part 的 source-isolated metadata 中，并只在同一 host 的后续请求回传该数组。流式分片按到达顺序累积：相同 `id` 或相同 `index` 的条目合并 `text`/`summary`，新条目追加。其他 Chat Completions host 只回放可见 `reasoning_content`。
+OpenRouter 直连 host（`openrouter.ai`）若返回结构化 `reasoning_details`，会保存在 Reasoning part 的 source-isolated metadata 中，并只在同一 host 的后续请求回传该数组。流式分片按到达顺序累积：相同 `id` 或相同 `index` 的条目合并 `text`/`summary`，新条目追加。通用 Chat Completions host 按现有策略回放可见 `reasoning_content`。
+
+原生 `api.mistral.ai` 的可见思考随 `content` 数组中的 `thinking` 块回放，保留思考、正文和工具边界的原序。
+流式和非流式共用数组解析，读取 `thinking` 内的文本，也处理思考与正文同帧及随后的字符串正文。
+历史回放继续遵守 `includeHistoryReasoning`。第三方兼容端点沿其既有格式，同型号不触发 Mistral 直连方言。
 
 ### Chat reasoning 回放策略
 
@@ -238,7 +242,8 @@ Chat 的 `role=tool` 结果只写 `tool_call_id` 和内容，不写 `name`；ass
 DashScope 直连仅对 `usesDashScopeQwen38Effort` 精确登记的型号使用 `reasoning_effort`：AUTO 省略，OFF 为 `none`，LOW/MEDIUM 为 `low`/`medium`，HIGH/XHIGH/MAX 为 `xhigh`。自动字段仍由模型 `REASONING` 能力控制。其他 DashScope 型号保留 `enable_thinking` / `thinking_budget`（AUTO 只写前者）。custom body 仍最后合并；上述精确分支最终同时含 `reasoning_effort` 与 `thinking_budget` 时报告 `dashscope_reasoning_parameter_conflict`，不静默删改用户字段。其他 host、企业平台 origin 和未知网关不因 Qwen 模型名继承该协议；兼容端点 OFF 仍使用既有 `low` 映射。
 
 Chat Completions 的 `ChatReasoningReplayPolicy` 由 `resolveChatReasoningReplayPolicy()` 统一解析。
-策略有三个正交维度：`VisibleReasoningReplay` 控制可见 `reasoning_content`，`OpaqueReasoningReplay` 控制
+策略分别确定可见思考的范围和 wire 形状。 `VisibleReasoningReplay` 控制范围，`VisibleReasoningFormat` 在 Mistral 直连采用
+`thinking` 块，其他 endpoint 沿用 `reasoning_content`。 `OpaqueReasoningReplay` 控制
 source-isolated 不透明状态，`TerminalAssistantReplay` 控制非成功 Assistant 使用兼容 partial text 还是只使用完整
 step 前缀。`includeHistoryReasoning` 只控制可选的可见历史思考，不控制 Provider mandatory state。
 
@@ -262,7 +267,7 @@ step 前缀。`includeHistoryReasoning` 只控制可选的可见历史思考，�
 同时控制是否写入顶层 `tools` 和 DeepSeek/MiMo mandatory replay policy。`tool_choice = none` 不改变 `requestHasTools`。
 
 `ALL_ASSISTANT_ENVELOPES` 的范围是：经过上下文裁剪、输入 Transformer 和最后的 `replaySafeProjection()` 后，最终进入本次
-Chat `messages` 数组的每个完整 assistant envelope，只要保存了非空 Reasoning，就写出 `reasoning_content`，
+Chat `messages` 数组的每个完整 assistant envelope，只要保存了非空 Reasoning，就按对应 endpoint 格式回放，
 不论该 envelope 是否包含 `tool_calls`。B.AI 和其他兼容网关上的 DeepSeek V4 只由 `ModelRegistry.DEEPSEEK_V4`
 明确登记的模型契约识别，不在 serializer 中新增 `contains("deepseek-v4")`，也不新增 B.AI vendor。
 
@@ -494,22 +499,26 @@ Claude 的 `BuiltInTools.Search` 编码为 `web_search_20250305`，与客户端�
 - `ModelRegistry.GEMINI_3_SERIES` 使用 `thinkingLevel`，项目 XHIGH / MAX 收敛为 HIGH。
 - `GEMINI_3_NO_MINIMAL_THINKING` 组的 OFF 映射为 `low`，其他已登记 Gemini 3 型号映射为 `minimal`。
   分组和相邻版本匹配由 `ModelRegistry` 维护，不在 serializer 复制型号名单。
-- `GEMINI_4_ARGON` 只匹配 `gemini-4-argon`，登记图片输入、文本输出、工具与推理能力；不推断未知后缀或其他 Gemini 4 型号。
+- `GEMINI_4_GENERATE_CONTENT` 只包含 `gemini-4-argon` 和 `gemini-4-carbon` 的精确条目，登记图片输入、文本输出、工具与推理能力；不推断未知后缀或其他 Gemini 4 型号。
   Google 请求仅接受 AUTO/LOW/MEDIUM/HIGH，AUTO 省略 level，使用模型 medium 默认；OFF/XHIGH/MAX 明确拒绝，不沿用旧版静默降档。
-  这一型号使用 `thinkingLevel`，不发送 `thinkingBudget`；普通 GenerateContent 的 `maxOutputTokens` 可省略或为 1..65536 的整数。
+  两个型号使用 `thinkingLevel`，不发送 `thinkingBudget`；普通 GenerateContent 的 `maxOutputTokens` 可省略或为 1..65536 的整数。
   自定义 body 合并后再次校验思考配置及输出上限，不能绕过约束。不新增 Interactions、background 或长输出自动续写。
   型号约束不改写用户或企业已存能力配置；能力勾选也不能关闭模型本身强制的思考行为。
-  依据：[Argon 型号](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon)、[默认值与迁移](https://ai.google.dev/gemini-api/docs/latest-model)。
+  依据见 [Argon 型号](https://ai.google.dev/gemini-api/docs/models/gemini-4-argon)、[Carbon 型号](https://ai.google.dev/gemini-api/docs/models/gemini-4-carbon)和[默认值与迁移](https://ai.google.dev/gemini-api/docs/latest-model)。
 - `GoogleThoughtMetadata` 在 Text、Reasoning、Image 和 FunctionCall 等 Part 上保留 `thoughtSignature`，并绑定
   产生它的 model ID 与 transport + 实际请求 endpoint host source profile；Vertex 使用
   实际固定的 `aiplatform.googleapis.com`。旧的无来源 opaque state
   不进入新的有来源请求。
-- 带签名 Part 不能与相邻 Part 合并；空文本 Part 上的签名也必须保留。
+- 带签名 Part 保持独立。 `GoogleProvider.parseMessagePart` 把只含有效 `thoughtSignature` 的片段读为既有空文本 Part，
+  在原位置用同源签名和 `text: ""` 编码回放。空文本的签名在来源不符时连同空 Part 一并省略，保持原持久字段和采样边界。
 - function call 的 API ID 保存并回填到对应 `functionResponse.id`。
 - RequestAssembler 移除 durable Step 标记时，将每个 Step 的 Part 数保存在请求专用 `samplingPartCounts`。
   Gemini 按该边界先回放完整 model Parts，再附本批客户端 functionResponse；服务端 Part 穿插在 functionCall 后也不提前拆开。
   无 Step 的既有请求继续按 `Tool.stepId` 分批。Adapter 不读取 `providerStepId` 或推测历史批次，不新增持久化格式。
 - thought image 的原始 `inlineData` 保存在 metadata 中，UI 可以显示占位而续轮仍能原样回放。
+
+`GoogleProvider.listModels` 用 `name` 提取模型 ID。缺失、空白或非字符串的 `displayName` 显示模型 ID，
+HTTP 失败由 Provider 诊断返回。Chat／Embedding 的方法过滤和成功空目录语义保持。
 
 所有 SYSTEM 文本按消息和 Part 顺序用换行合入一个 text-only `systemInstruction`，包括图片输出模型。
 函数声明与模型内置工具合并到同一个 `tools` 数组。Schema 清理只移除当前适配明确不使用的兼容字段，保留

@@ -1,5 +1,6 @@
 package net.weero.measix.pilot.ui.pages.chat
 
+import kotlinx.datetime.LocalDateTime
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -10,6 +11,19 @@ import org.junit.Test
 import kotlin.uuid.Uuid
 
 class ChatExportTest {
+    @Test
+    fun `markdown prints the saved local creation time for each message`() {
+        val user = UIMessage.user("question").copy(createdAt = LocalDateTime.parse("2026-10-08T09:15:23"))
+        val reply = UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(UIMessagePart.Text("answer")),
+            createdAt = LocalDateTime.parse("2026-10-08T09:16:00"),
+        )
+        val markdown = renderMarkdownExport("Title", listOf(user, reply), { null })
+        assertTrue(markdown.contains("**User** · 2026-10-08T09:15:23:\n\nquestion"))
+        assertTrue(markdown.contains("**Assistant** · 2026-10-08T09:16:00:\n\nanswer"))
+    }
+
     @Test
     fun `reasoning option preserves tools and attachments without mutating history`() {
         val tool = UIMessagePart.Tool(

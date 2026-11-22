@@ -2179,4 +2179,6 @@
   <string name="file_browser_thumbnail_view">Миниатюры</string>
   <string name="file_browser_loading_original">Загрузка исходного изображения</string>
   <string name="file_browser_thumbnail_diagnostic">Диагностика миниатюр</string>
+  <string name="permission_notification_allow">Разрешить уведомления</string>
+  <string name="setting_provider_page_refresh_models">Обновить список моделей</string>
 </resources>

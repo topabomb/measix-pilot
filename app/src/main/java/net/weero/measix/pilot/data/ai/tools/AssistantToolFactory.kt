@@ -649,7 +649,7 @@ private fun assistantErrorDetail(reason: String): String? = when (reason) {
         "Assistant management is not permitted in the current scope."
     "target_is_caller" -> "An assistant cannot manage or call itself."
     "enterprise_assistant_read_only" -> "Managed assistant definitions cannot be edited or deleted."
-    "last_assistant" -> "The final assistant definition cannot be deleted."
+    "default_assistant_not_deletable" -> "The built-in default assistant cannot be deleted."
     "assistant_pending_inputs_confirmation_required", "assistant_pending_inputs_changed" ->
         "Unsent inputs require confirmation. Ask the user to review and confirm deletion in the assistant management page."
     "invalid_attachments" -> "One or more attachment references are invalid."

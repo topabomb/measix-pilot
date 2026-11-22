@@ -18,6 +18,8 @@ import me.rerere.ai.util.HttpException
 import net.weero.measix.pilot.data.ai.request.RequestAssembler
 import net.weero.measix.pilot.service.runtime.TurnTransition
 import net.weero.measix.pilot.service.turn.StepOutputAccumulator
+import net.weero.measix.pilot.ui.components.message.MessagePartBlock
+import net.weero.measix.pilot.ui.components.message.groupMessageParts
 import okhttp3.OkHttpClient
 import org.junit.Assert.*
 import org.junit.Test
@@ -31,16 +33,31 @@ class GoogleToolReplayIntegrationTest {
 
     @Test fun `SSE and JSON preserve mixed response order through real accumulator persistence assembler and replay`() = runBlocking {
         val parts = listOf(call, function("first"), """{"text":"between"}""", result, function("second"), call, result)
-        for (stream in listOf(true, false)) withServer(parts.map { event(listOf(it)) } + event(emptyList(), "STOP"), event(parts, "STOP")) { provider, setting, bodies ->
+        val tail = listOf("""{"thoughtSignature":"bare-signature"}""", """{"text":"","thoughtSignature":"empty-signature"}""")
+        val expectedParts = parts + listOf("""{"text":"","thoughtSignature":"bare-signature"}""", tail.last())
+        fun terminal(parts: List<String>) = event(parts, "STOP").dropLast(1) +
+            ""","usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":3,"totalTokenCount":5}}"""
+        val streamEvents = parts.map { event(listOf(it)) } + terminal(tail)
+        for (stream in listOf(true, false)) withServer(streamEvents, terminal(parts + tail)) { provider, setting, bodies ->
             val params = TextGenerationParams(Model(modelId = "gemini-test"))
             val accumulator = StepOutputAccumulator()
             var active = UIMessage(role = MessageRole.ASSISTANT, parts = listOf(TurnTransition.openStep(0)))
+            var totalTokens: Long? = null
+            fun accept(chunk: MessageChunk) {
+                active = accumulator.accumulate(active, chunk, null)
+                chunk.usage?.totalTokens?.let { totalTokens = it }
+            }
             withTimeout(10_000) {
                 if (stream) provider.streamText(setting, listOf(ModelRequestMessage.user("go")), params).collect {
-                    active = accumulator.accumulate(active, it, null)
-                } else active = accumulator.accumulate(active, provider.generateText(setting, listOf(ModelRequestMessage.user("go")), params), null)
+                    accept(it)
+                } else accept(provider.generateText(setting, listOf(ModelRequestMessage.user("go")), params))
             }
-            assertEquals(listOf("ServerTool", "Tool", "Text", "ServerTool", "Tool", "ServerTool", "ServerTool"), active.parts.drop(1).map { it.javaClass.simpleName })
+            assertEquals(5L, totalTokens)
+            assertEquals(listOf("ServerTool", "Tool", "Text", "ServerTool", "Tool", "ServerTool", "ServerTool", "Text", "Text"),
+                active.parts.drop(1).map { it.javaClass.simpleName })
+            val visibleText = active.parts.groupMessageParts().filterIsInstance<MessagePartBlock.ContentBlock>()
+                .mapNotNull { (it.part as? UIMessagePart.Text)?.text }
+            assertEquals(listOf("between"), visibleText)
             assertEquals(2, active.getTools().map { it.localCallId }.distinct().size)
             assertEquals(listOf("same", "same"), active.getTools().map { it.providerCallId })
             assertTrue(active.parts.filterIsInstance<UIMessagePart.ServerTool>().all { it.complete })
@@ -49,11 +66,11 @@ class GoogleToolReplayIntegrationTest {
             })
             val restored = net.weero.measix.pilot.utils.JsonInstant.decodeFromString<UIMessage>(net.weero.measix.pilot.utils.JsonInstant.encodeToString(completed))
             val requests = RequestAssembler().assemble(listOf(restored)).providerMessages
-            assertEquals(listOf(7), requests.single().samplingPartCounts)
+            assertEquals(listOf(expectedParts.size), requests.single().samplingPartCounts)
             withTimeout(10_000) { provider.generateText(setting, requests, params) }
             val contents = Json.parseToJsonElement(bodies.last()).jsonObject["contents"]!!.jsonArray
             assertEquals(listOf("model", "user"), contents.map { it.jsonObject["role"]!!.jsonPrimitive.content })
-            assertEquals(JsonArray(parts.map { Json.parseToJsonElement(it) }), contents[0].jsonObject["parts"])
+            assertEquals(JsonArray(expectedParts.map { Json.parseToJsonElement(it) }), contents[0].jsonObject["parts"])
             val responses = contents[1].jsonObject["parts"]!!.jsonArray.map { it.jsonObject["functionResponse"]!!.jsonObject }
             assertEquals(listOf("first", "second"), responses.map { it["name"]!!.jsonPrimitive.content })
             assertEquals(listOf("same", "same"), responses.map { it["id"]!!.jsonPrimitive.content })
@@ -70,7 +87,7 @@ class GoogleToolReplayIntegrationTest {
             val persisted = net.weero.measix.pilot.utils.JsonInstant.decodeFromString<UIMessage>(net.weero.measix.pilot.utils.JsonInstant.encodeToString(history))
             val projected = requireNotNull(persisted.replaySafeProjection())
             val retry = RequestAssembler().assemble(listOf(projected)).providerMessages
-            assertEquals(listOf(7, 0), retry.single().samplingPartCounts.take(2))
+            assertEquals(listOf(expectedParts.size, 0), retry.single().samplingPartCounts.take(2))
             assertEquals(3, retry.single().samplingPartCounts.size)
             withTimeout(10_000) { provider.generateText(setting, retry, params) }
             val retryContents = Json.parseToJsonElement(bodies.last()).jsonObject["contents"]!!.jsonArray

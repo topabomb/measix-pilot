@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -23,6 +24,8 @@ import me.rerere.ai.core.freeze
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.RequestImageSupport
 import me.rerere.ai.provider.RequestMediaCapabilities
 import me.rerere.ai.provider.TextGenerationParams
@@ -33,7 +36,11 @@ import me.rerere.ai.ui.ToolResultStatus
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.ProviderTerminalStatus
+import me.rerere.ai.util.HttpException
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -52,6 +59,42 @@ import org.junit.Test
  * - thought: true for reasoning parts
  */
 class GoogleProviderMessageTest {
+
+    @Test
+    fun `model catalog distinguishes absent names, empty success and HTTP failure`() = runBlocking {
+        var status = 200
+        var payload = """{"models":[
+            {"name":"models/named","displayName":"Named model","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/missing","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/blank","displayName":"  ","supportedGenerationMethods":["embedContent"]},
+            {"name":"models/null","displayName":null,"supportedGenerationMethods":["generateContent"]},
+            {"name":"models/number","displayName":123,"supportedGenerationMethods":["generateContent"]},
+            {"name":"models/other","supportedGenerationMethods":["unsupported"]}
+        ]}"""
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(status).message("fixture").body(payload.toResponseBody()).build()
+        }.build()
+        val google = GoogleProvider(client)
+        val settings = ProviderSetting.Google(apiKey = "fixture")
+        try {
+            val models = google.listModels(settings)
+            assertEquals(listOf("named", "missing", "blank", "null", "number"), models.map(Model::modelId))
+            assertEquals(listOf("Named model", "missing", "blank", "null", "number"), models.map(Model::displayName))
+            assertEquals(ModelType.EMBEDDING, models[2].type)
+            payload = """{"models":[]}"""
+            assertTrue(google.listModels(settings).isEmpty())
+            val message = "Catalog unavailable"
+            payload = """{"error":{"message":"$message"}}"""
+            status = 503
+            val failure = assertThrows(HttpException::class.java) { runBlocking { google.listModels(settings) } }
+            assertEquals(status, failure.statusCode)
+            assertTrue(failure.message.orEmpty().contains(message))
+        } finally {
+            client.dispatcher.executorService.shutdownNow()
+            client.connectionPool.evictAll()
+        }
+    }
 
     @Test
     fun `search follows each request model without persisting previous request tools`() {
@@ -680,7 +723,7 @@ class GoogleProviderMessageTest {
     }
 
     @Test
-    fun `gemini signature replay requires exact model and endpoint source`() {
+    fun `gemini signature replay requires exact model and endpoint source even with empty text`() {
         val metadata = GoogleThoughtMetadata(
             thoughtSignature = "opaque-signature",
             sourceModelId = "gemini-3-flash",
@@ -688,7 +731,7 @@ class GoogleProviderMessageTest {
         ).toMetadata()
         val message = UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = listOf(UIMessagePart.Text("answer", metadata)),
+            parts = listOf(UIMessagePart.Text("answer", metadata), UIMessagePart.Text("", metadata)),
         )
         val params = TextGenerationParams(
             model = Model(modelId = "gemini-3-flash", displayName = "Gemini 3 Flash"),
@@ -697,15 +740,35 @@ class GoogleProviderMessageTest {
         val matched = invokeBuildRequestWithSource(
             listOf(message), params, "google:developer:generativelanguage.googleapis.com"
         )
-        val switched = invokeBuildRequestWithSource(
-            listOf(message), params, "google:vertex:aiplatform.googleapis.com"
+        fun parts(body: JsonObject) = body["contents"]!!.jsonArray.single().jsonObject["parts"]!!.jsonArray
+        assertEquals(listOf("answer", ""), parts(matched).map { it.jsonObject["text"]!!.jsonPrimitive.content })
+        assertTrue(parts(matched).all { it.jsonObject["thoughtSignature"]?.jsonPrimitive?.content == "opaque-signature" })
+        val switchedEndpoint = invokeBuildRequestWithSource(listOf(message), params, "google:vertex:aiplatform.googleapis.com")
+        val switchedModel = invokeBuildRequestWithSource(
+            listOf(message), params.copy(model = params.model.copy(modelId = "gemini-3-pro")),
+            "google:developer:generativelanguage.googleapis.com",
         )
-        val matchedPart = matched["contents"]!!.jsonArray.single().jsonObject["parts"]!!
-            .jsonArray.single().jsonObject
-        val switchedPart = switched["contents"]!!.jsonArray.single().jsonObject["parts"]!!
-            .jsonArray.single().jsonObject
-        assertEquals("opaque-signature", matchedPart["thoughtSignature"]?.jsonPrimitive?.content)
-        assertFalse(switchedPart.containsKey("thoughtSignature"))
+        for (switched in listOf(switchedEndpoint, switchedModel)) {
+            val ordinaryText = parts(switched).single().jsonObject
+            assertEquals("answer", ordinaryText["text"]!!.jsonPrimitive.content)
+            assertFalse(ordinaryText.containsKey("thoughtSignature"))
+        }
+    }
+
+    @Test
+    fun `carbon uses the Gemini 4 GenerateContent reasoning and output constraints`() {
+        val model = Model(modelId = "gemini-4-carbon")
+        val params = TextGenerationParams(model = model, reasoningLevel = ReasoningLevel.HIGH, maxTokens = 65_536)
+        val messages = listOf(UIMessage.user("hello"))
+        val config = invokeBuildRequest(messages, params)["generationConfig"]!!.jsonObject
+        assertEquals("high", config["thinkingConfig"]!!.jsonObject["thinkingLevel"]!!.jsonPrimitive.content)
+        assertEquals(65_536, config["maxOutputTokens"]!!.jsonPrimitive.int)
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            invokeBuildRequest(messages, params.copy(reasoningLevel = ReasoningLevel.OFF))
+        }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            invokeBuildRequest(messages, params.copy(maxTokens = 65_537))
+        }
     }
 
     @Test

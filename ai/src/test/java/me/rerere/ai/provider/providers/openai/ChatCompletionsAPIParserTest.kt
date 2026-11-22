@@ -25,6 +25,29 @@ import org.junit.Test
  */
 class ChatCompletionsAPIParserTest {
 
+    @Test
+    fun `native Mistral retains ordered thinking and text from the same response or SSE frame`() {
+        val message = Json.parseToJsonElement(
+            """{"content":[{"type":"thinking","thinking":[{"type":"text","text":"one "},{"type":"text","text":"two"}]},
+                {"type":"text","text":"answer"},
+                {"type":"thinking","thinking":[{"type":"text","text":"more"}]},
+                {"type":"refusal","refusal":"partial refusal"}]}"""
+        ).jsonObject
+        val full = api.parseMessage(message, endpointVendor = OpenAIEndpointVendor.MISTRAL)
+        val stream = api.parseStreamPayload(buildJsonObject {
+            put("choices", buildJsonArray {
+                add(buildJsonObject { put("delta", message) })
+            })
+        }, endpointVendor = OpenAIEndpointVendor.MISTRAL).choices.single().delta!!
+
+        for (parsed in listOf(full, stream)) {
+            assertEquals("one two", (parsed.parts[0] as UIMessagePart.Reasoning).reasoning)
+            assertEquals(UIMessagePart.Text("answer"), parsed.parts[1])
+            assertEquals("more", (parsed.parts[2] as UIMessagePart.Reasoning).reasoning)
+            assertEquals(UIMessagePart.Text("partial refusal"), parsed.parts[3])
+        }
+    }
+
     private lateinit var api: ChatCompletionsAPI
 
     @Before

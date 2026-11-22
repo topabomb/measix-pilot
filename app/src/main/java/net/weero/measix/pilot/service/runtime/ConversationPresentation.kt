@@ -29,6 +29,9 @@ data class ConversationPresentationSnapshot(
     /** Read-only elapsed execution facts; absent for unmeasured or recovered calls. */
     val toolDurationsMillis: Map<ToolCallLocator, Long> = emptyMap(),
 ) {
+    /** The rendered branch without its live tail overlay. Stream deltas retain this list's identity. */
+    internal val committedNodes: List<MessageNode> get() = (nodes as? TailNodeOverlay)?.base ?: nodes
+
     /**
      * 与 aggregate 的 internal currentMessages() 逐项等价：末节点在 [nodes] 里已被
      * [stream] 覆盖，因此这里只需要线性投影，不存在第二份合并规则。
@@ -81,7 +84,7 @@ internal class ConversationPresentationProjector {
 
 /** A read-only overlay shares the durable history without enumerating it for each chunk. */
 private class TailNodeOverlay(
-    private val base: List<MessageNode>,
+    val base: List<MessageNode>,
     private val tail: MessageNode,
 ) : AbstractList<MessageNode>() {
     override val size: Int get() = base.size

@@ -107,6 +107,7 @@ import net.weero.measix.pilot.ui.components.ai.matchesSearchTerms
 import net.weero.measix.pilot.ui.components.ai.modelSearchTerms
 import net.weero.measix.pilot.ui.components.nav.BackButton
 import net.weero.measix.pilot.ui.components.ui.AutoAIIcon
+import net.weero.measix.pilot.ui.components.ui.DiagnosticDisclosure
 import net.weero.measix.pilot.ui.components.ui.ShareSheet
 import net.weero.measix.pilot.ui.components.ui.SiliconFlowPowerByIcon
 import net.weero.measix.pilot.ui.components.ui.Tag
@@ -127,6 +128,7 @@ import net.weero.measix.pilot.ui.theme.CustomColors
 import net.weero.measix.pilot.ui.theme.extendColors
 import net.weero.measix.pilot.utils.UiState
 import net.weero.measix.pilot.utils.plus
+import net.weero.measix.pilot.utils.userVisibleDiagnostic
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -408,12 +410,13 @@ private fun SettingProviderModelPage(
     onRemoveModelsByModelIds: (Set<String>) -> Unit,
     onMoveModel: (ConfigurationReference, ConfigurationReference) -> Unit,
 ) {
-    LaunchedEffect(provider) {
+    LaunchedEffect(provider.modelCatalogConfiguration()) {
         onLoadModelCatalog()
     }
     ModelList(
         providerSetting = provider,
         modelCatalog = modelCatalog,
+        onLoadModelCatalog = onLoadModelCatalog,
         applyRegistryCapabilities = applyRegistryCapabilities,
         onAddModel = onAddModel,
         onRemoveModel = onRemoveModel,
@@ -428,6 +431,7 @@ private fun SettingProviderModelPage(
 private fun ModelList(
     providerSetting: ProviderSetting,
     modelCatalog: UiState<List<Model>>,
+    onLoadModelCatalog: () -> Unit,
     applyRegistryCapabilities: (Model) -> Model,
     onAddModel: (Model) -> Unit,
     onRemoveModel: (ConfigurationReference) -> Unit,
@@ -436,7 +440,6 @@ private fun ModelList(
     onRemoveModelsByModelIds: (Set<String>) -> Unit,
     onMoveModel: (ConfigurationReference, ConfigurationReference) -> Unit,
 ) {
-    val modelList = (modelCatalog as? UiState.Success)?.data.orEmpty()
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
@@ -512,7 +515,8 @@ private fun ModelList(
                 .offset(y = -ScreenOffset),
         ) {
             AddModelButton(
-                models = modelList,
+                modelCatalog = modelCatalog,
+                onLoadModelCatalog = onLoadModelCatalog,
                 selectedModels = providerSetting.models,
                 onAddModel = { model ->
                     onAddModel(model)
@@ -721,7 +725,8 @@ private fun ModelSettingsForm(
 
 @Composable
 private fun AddModelButton(
-    models: List<Model>,
+    modelCatalog: UiState<List<Model>>,
+    onLoadModelCatalog: () -> Unit,
     selectedModels: List<Model>,
     expanded: Boolean,
     onAddModel: (Model) -> Unit,
@@ -739,7 +744,8 @@ private fun AddModelButton(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ModelPicker(
-            models = models,
+            modelCatalog = modelCatalog,
+            onLoadModelCatalog = onLoadModelCatalog,
             selectedModels = selectedModels,
             onModelSelected = { model ->
                 onAddModel(applyRegistryCapabilities(model))
@@ -861,13 +867,15 @@ private fun AddModelButton(
 
 @Composable
 private fun ModelPicker(
-    models: List<Model>,
+    modelCatalog: UiState<List<Model>>,
+    onLoadModelCatalog: () -> Unit,
     selectedModels: List<Model>,
     onModelSelected: (Model) -> Unit,
     onModelDeselected: (Model) -> Unit,
     onAllModelSelected: (List<Model>) -> Unit,
     onAllModelDeselected: (List<Model>) -> Unit
 ) {
+    val models = (modelCatalog as? UiState.Success)?.data.orEmpty()
     var showModal by remember { mutableStateOf(false) }
     if (showModal) {
         AdaptiveModal(
@@ -885,7 +893,6 @@ private fun ModelPicker(
                     .imePadding(),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                // 标题栏和添加所有按钮
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -895,14 +902,25 @@ private fun ModelPicker(
                 ) {
                     Text(
                         text = stringResource(R.string.setting_provider_page_avaliable_models),
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f),
                     )
 
+                    IconButton(
+                        onClick = onLoadModelCatalog,
+                        enabled = modelCatalog != UiState.Loading,
+                    ) {
+                        Icon(HugeIcons.Refresh03, stringResource(R.string.setting_provider_page_refresh_models))
+                    }
+                }
+
+                if (filteredModels.isNotEmpty()) {
                     val unselectedCount = filteredModels.count { model ->
                         selectedModels.none { it.modelId == model.modelId }
                     }
 
                     TextButton(
+                        modifier = Modifier.align(Alignment.End),
                         onClick = {
                             if (unselectedCount > 0) {
                                 onAllModelSelected(filteredModels)
@@ -918,6 +936,21 @@ private fun ModelPicker(
                             ) else stringResource(R.string.setting_provider_page_deselect_models)
                         )
                     }
+                }
+
+                when (modelCatalog) {
+                    UiState.Loading -> LinearWavyProgressIndicator(Modifier.fillMaxWidth())
+                    is UiState.Error -> DiagnosticDisclosure(
+                        detail = modelCatalog.error.userVisibleDiagnostic(),
+                        title = stringResource(R.string.error_title_operation),
+                    )
+                    is UiState.Success -> if (models.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.setting_provider_page_no_models),
+                            modifier = Modifier.padding(horizontal = 8.dp),
+                        )
+                    }
+                    UiState.Idle -> Unit
                 }
 
                 LazyColumn(

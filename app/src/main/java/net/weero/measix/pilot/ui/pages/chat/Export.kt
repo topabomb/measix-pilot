@@ -296,7 +296,8 @@ internal fun renderMarkdownExport(
 
     messages.forEach { message ->
         val role = if (message.role == MessageRole.USER) "**User**" else "**Assistant**"
-        append("$role:\n\n")
+        val createdAt = kotlinx.datetime.LocalDateTime.Formats.ISO.format(message.createdAt)
+        append("$role · $createdAt:\n\n")
         exportParts(message.parts, options).forEach { part ->
             when (part) {
                 is UIMessagePart.Text -> {

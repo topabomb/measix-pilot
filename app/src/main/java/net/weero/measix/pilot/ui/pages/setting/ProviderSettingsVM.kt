@@ -35,16 +35,24 @@ class ProviderSettingsVM(
     init {
         viewModelScope.launch {
             service.observeProvider(providerId).collectLatest { provider ->
-                mutableState.value = mutableState.value.copy(provider = provider)
+                val current = mutableState.value
+                if (current.provider?.modelCatalogConfiguration() != provider?.modelCatalogConfiguration()) {
+                    catalogRun++
+                    catalogJob?.cancel()
+                    mutableState.value = current.copy(provider = provider, modelCatalog = UiState.Idle)
+                } else {
+                    mutableState.value = current.copy(provider = provider)
+                }
             }
         }
     }
 
     fun loadModelCatalog() {
-        val provider = mutableState.value.provider ?: return
-        catalogJob?.cancel()
+        val current = mutableState.value
+        val provider = current.provider ?: return
+        if (current.modelCatalog == UiState.Loading) return
         val run = ++catalogRun
-        mutableState.value = mutableState.value.copy(modelCatalog = UiState.Loading)
+        mutableState.value = current.copy(modelCatalog = UiState.Loading)
         catalogJob = viewModelScope.launch {
             try {
                 val models = service.listModels(provider)
@@ -55,6 +63,7 @@ class ProviderSettingsVM(
                 throw error
             } catch (error: Exception) {
                 if (run == catalogRun) {
+                    logDiagnosticFailure("ProviderSettingsVM", "Provider model catalog failed", error)
                     mutableState.value = mutableState.value.copy(modelCatalog = UiState.Error(error))
                 }
             }
@@ -197,6 +206,8 @@ class ProviderSettingsVM(
         mutableState.value = mutableState.value.copy(connectionTest = updated)
     }
 }
+
+internal fun ProviderSetting.modelCatalogConfiguration(): ProviderSetting = copyProvider(models = emptyList())
 
 data class ProviderSettingsUiState(
     val provider: ProviderSetting? = null,

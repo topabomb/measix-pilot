@@ -2179,4 +2179,6 @@
   <string name="file_browser_thumbnail_view">缩略图</string>
   <string name="file_browser_loading_original">正在加载原图</string>
   <string name="file_browser_thumbnail_diagnostic">缩略图诊断</string>
+  <string name="permission_notification_allow">允许通知</string>
+  <string name="setting_provider_page_refresh_models">刷新模型</string>
 </resources>

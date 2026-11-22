@@ -123,7 +123,16 @@ fun SettingPreferencesNotificationPage(vm: SettingVM = koinViewModel()) {
                     )
                     item(
                         headlineContent = { Text(stringResource(R.string.setting_display_page_notification_message_generated)) },
-                        supportingContent = { Text(stringResource(R.string.setting_display_page_notification_message_generated_desc)) },
+                        supportingContent = {
+                            Column {
+                                Text(stringResource(R.string.setting_display_page_notification_message_generated_desc))
+                                if (displaySetting.enableNotificationOnMessageGeneration && !permissionState.allPermissionsGranted) {
+                                    TextButton(onClick = permissionState::requestPermissions) {
+                                        Text(stringResource(R.string.permission_notification_allow))
+                                    }
+                                }
+                            }
+                        },
                         trailingContent = {
                             Switch(
                                 checked = displaySetting.enableNotificationOnMessageGeneration,

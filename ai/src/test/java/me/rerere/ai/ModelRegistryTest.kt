@@ -31,13 +31,16 @@ class ModelRegistryTest {
     }
 
     @Test
-    fun geminiArgonRegistrationIsExactAndDoesNotInventOutputModalities() {
-        assertTrue(ModelRegistry.GEMINI_4_ARGON.match("gemini-4-argon"))
-        assertEquals(listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData("gemini-4-argon"))
-        assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_OUTPUT_MODALITIES.getData("gemini-4-argon"))
-        assertEquals(listOf(ModelAbility.TOOL, ModelAbility.REASONING), ModelRegistry.MODEL_ABILITIES.getData("gemini-4-argon"))
-        for (id in listOf("gemini-4", "gemini-4-argon-preview", "gemini-4-argon-image", "gemini-4.1-argon", "vendor/gemini-4-argon")) {
-            assertFalse(id, ModelRegistry.GEMINI_4_ARGON.match(id))
+    fun gemini4RegistrationsAreExactAndDoNotInventOutputModalities() {
+        for (id in listOf("gemini-4-argon", "gemini-4-carbon")) {
+            assertTrue(id, ModelRegistry.GEMINI_4_GENERATE_CONTENT.match(id))
+            assertEquals(listOf(Modality.TEXT, Modality.IMAGE), ModelRegistry.MODEL_INPUT_MODALITIES.getData(id))
+            assertEquals(listOf(Modality.TEXT), ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(id))
+            assertEquals(listOf(ModelAbility.TOOL, ModelAbility.REASONING), ModelRegistry.MODEL_ABILITIES.getData(id))
+        }
+        for (id in listOf("gemini-4", "gemini-4-argon-preview", "gemini-4-argon-image", "gemini-4.1-argon",
+            "vendor/gemini-4-argon", "gemini-4-carbon-preview", "vendor/gemini-4-carbon")) {
+            assertFalse(id, ModelRegistry.GEMINI_4_GENERATE_CONTENT.match(id))
         }
     }
 

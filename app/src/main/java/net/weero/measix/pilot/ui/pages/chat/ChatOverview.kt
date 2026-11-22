@@ -23,8 +23,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
@@ -33,6 +36,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.withContext
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
@@ -55,8 +63,10 @@ internal data class OverviewMessage(
 
 internal data class OverviewCard(val id: Uuid, val messages: List<OverviewMessage>)
 
+private class OverviewInput(val snapshot: ConversationPresentationSnapshot, val favorites: Set<Uuid>)
+
 /** Groups the current display branch without changing its individual navigation targets. */
-internal fun projectChatOverview(
+internal suspend fun projectChatOverview(
     nodes: List<MessageNode>,
     favorites: Set<Uuid>,
     query: String,
@@ -64,7 +74,9 @@ internal fun projectChatOverview(
     val groups = linkedMapOf<Uuid, MutableList<OverviewMessage>>()
     var groupId: Uuid? = null
     val term = query.trim()
+    val projectionContext = currentCoroutineContext()
     for (node in nodes) {
+        projectionContext.ensureActive()
         val message = node.currentMessage
         val user = message.role == MessageRole.USER
         if (groupId == null || user) groupId = node.id
@@ -72,7 +84,7 @@ internal fun projectChatOverview(
         val match = if (term.isEmpty()) 0 else text.indexOf(term, ignoreCase = true)
         if (match < 0) continue
         val start = (match - 12).coerceAtLeast(0)
-        val end = (match + maxOf(term.length, 160)).coerceAtMost(text.length)
+        val end = match + minOf(160, text.length - match)
         val snippet = buildString {
             if (start > 0) append("…")
             append(text.substring(start, end).replace('\n', ' ').replace('\r', ' '))
@@ -100,13 +112,34 @@ internal fun ChatOverview(
     onJumpToMessage: (Uuid) -> Unit,
 ) {
     var query by remember(snapshot.conversationId) { mutableStateOf("") }
-    val cards = remember(snapshot.nodes, favoriteNodeIds, query) { projectChatOverview(snapshot.nodes, favoriteNodeIds, query) }
+    val term = query.trim()
+    val currentSnapshot = remember { mutableStateOf(snapshot, referentialEqualityPolicy()) }
+    currentSnapshot.value = snapshot
+    val currentFavorites by rememberUpdatedState(favoriteNodeIds)
+    var projection by remember(snapshot.conversationId, term) {
+        mutableStateOf<Pair<List<MessageNode>, List<OverviewCard>>?>(null, referentialEqualityPolicy())
+    }
+    val projectedCards = projection?.takeIf { it.first === snapshot.committedNodes }?.second
+    val cards = projectedCards.orEmpty()
     val listState = rememberLazyListState()
-    LaunchedEffect(currentNodeId, query) {
-        val index = if (query.isBlank()) cards.indexOfFirst { card ->
-            card.messages.any { it.nodeId == currentNodeId }
-        } else 0
-        if (index in cards.indices) listState.requestScrollToItem(index)
+    LaunchedEffect(snapshot.conversationId, term, currentNodeId) {
+        var positionPending = true
+        snapshotFlow { OverviewInput(currentSnapshot.value, currentFavorites) }.conflate().collect { input ->
+            val next = withContext(Dispatchers.Default) {
+                projectChatOverview(input.snapshot.nodes, input.favorites, term)
+            }
+            val latest = currentSnapshot.value
+            val branch = input.snapshot.committedNodes
+            if (input.snapshot.conversationId != latest.conversationId || branch !== latest.committedNodes) return@collect
+            projection = branch to next
+            if (positionPending && next.isNotEmpty()) {
+                val index = if (term.isEmpty()) next.indexOfFirst { card ->
+                    card.messages.any { it.nodeId == currentNodeId }
+                } else 0
+                listState.requestScrollToItem(index.coerceAtLeast(0))
+                positionPending = false
+            }
+        }
     }
 
     Column(
@@ -128,7 +161,7 @@ internal fun ChatOverview(
             },
             singleLine = true,
         )
-        if (query.isNotBlank()) {
+        if (term.isNotEmpty() && projectedCards != null) {
             Text(
                 stringResource(R.string.chat_overview_matches, cards.sumOf { it.messages.size }),
                 modifier = Modifier.padding(horizontal = 16.dp),
@@ -152,7 +185,7 @@ internal fun ChatOverview(
                     Column {
                         card.messages.forEachIndexed { index, message ->
                             if (index > 0) HorizontalDivider()
-                            OverviewMessageRow(message, query.trim(), message.nodeId == currentNodeId) { onJumpToMessage(message.nodeId) }
+                            OverviewMessageRow(message, term, message.nodeId == currentNodeId) { onJumpToMessage(message.nodeId) }
                         }
                     }
                 }
